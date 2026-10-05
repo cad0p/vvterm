@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Fixture (item-8 boundary): the eval-carried env-file write whose
+# spelling splits `GITHUB_ENV` with `$'\105'` (octal E). The ANSI-C
+# lexer is lexing-only and does not decode escapes, so this item-8
+# class stays outside the fold: base ACCEPT -> head ACCEPT, runtime
+# FLIP.
+name: accept-runid-github-env-write-ansic-octal-name-concat-target
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          eval echo SOURCE_RUN_ID=${{ github.run_id }} '>>' \$GITHUB_$'\105'NV
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

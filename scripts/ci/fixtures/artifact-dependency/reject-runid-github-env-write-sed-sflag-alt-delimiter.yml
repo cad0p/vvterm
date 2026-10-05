@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): the array-element argv-write target
-# sits on a backslash continuation inside a command substitution, so the
-# substitution body the pre-pass sees stops at the first physical line and
-# the target never joins the relevance set. Extending the pre-pass into
-# substitution bodies is a new mechanism deferred as a residual (issue
-# #350, item 1 boundary class; fold round 1 MAJOR-2(a): base ACCEPT,
-# shipped ACCEPT, runtime FLIP).
+# Fixture: the alternate-delimiter `s|||w` flag (w9e). base ACCEPT ->
+# head REFUSE, runtime FLIP on both tested seds.
+name: reject-runid-github-env-write-sed-sflag-alt-delimiter
+on: [workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,8 +22,7 @@ jobs:
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
           printf '%s\n' "$(printenv "${x}${y}")" > pf
           read -a arr < pf
-          w=$(cp payload \
-          "${arr[0]}")
+          sed -n "s|.*|&|w${arr[0]}" payload
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the non-matching regex address `/x/s/…` (w9j): the `w` flag
+# truncates the env file at parse time even though the address never
+# matches. base ACCEPT -> head REFUSE, runtime CLOBBER on both tested
+# seds (the documented clobber predicate).
+name: reject-runid-github-env-write-sed-sflag-address-regex
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          sed -n "/x/s/.*/&/w${arr[0]}" payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

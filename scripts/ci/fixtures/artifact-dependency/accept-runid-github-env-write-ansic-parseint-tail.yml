@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Fixture (boundary accept): the parseInt-literal policy accept. The
+# base refusal was the swallow's spurious env reference; the fixed
+# lexer accepts the fixed integer through `_is_parseint_literal` ->
+# `cross-run`. base REFUSE -> head ACCEPT, runtime writes the literal
+# 99999 (a policy accept, recorded).
+name: accept-runid-github-env-write-ansic-parseint-tail
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo $'a\'' ; printf 'SOURCE_RUN_ID=99999\n' >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

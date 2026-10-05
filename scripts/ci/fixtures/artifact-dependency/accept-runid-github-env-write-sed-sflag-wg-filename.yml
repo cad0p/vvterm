@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Fixture (boundary accept): `s///wg` writes a file named `g…` on both
+# tested seds, so the extracted target is `g${arr[0]}` (not a pure env
+# reference) and the gate accepts; the runtime opens a path under a
+# non-existent `g` directory and fails without touching the env file.
+# base ACCEPT -> head ACCEPT, runtime BASHERR/NOFLIP.
+name: accept-runid-github-env-write-sed-sflag-wg-filename
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          sed -n "s/.*/&/wg${arr[0]}" payload
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

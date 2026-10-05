@@ -5089,16 +5089,10 @@ CASES = [
         "excluded": 1,
         "diagnostics": []
     },
-    {
-        "id": "accept-runid-github-env-write-array-element-cmdsub-continuation",
-        "files": [
-            "accept-runid-github-env-write-array-element-cmdsub-continuation.yml"
-        ],
-        "exit": 0,
-        "base_exit": 0,
-        "excluded": 1,
-        "diagnostics": []
-    },
+    # #350d moved the former
+    # `accept-runid-github-env-write-array-element-cmdsub-continuation`
+    # boundary pin to the reject set (the substitution-body descent closes
+    # it); see `reject-runid-github-env-write-array-element-cmdsub-assign-continuation`.
     {
         "id": "accept-runid-github-env-write-array-element-slice-target",
         "files": [
@@ -6837,6 +6831,336 @@ CASES = [
     {
         "id": "accept-operand-mask-sed-read-write-benign",
         "files": ["accept-operand-mask-sed-read-write-benign.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    # ------------------------------------------------------------------
+    # #350d: ANSI-C escaped-quote lexer (#350 item 17), the substitution
+    # sub-family (#350 item 14 w3-w8), `;;` segmentation (w7) and the sed
+    # `s///w file` flag (#350 item 13 residual). Every case segments their
+    # measured base verdict as `base_exit`.
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-runid-github-env-write-ansic-escaped-quote-tail",
+        "files": ["reject-runid-github-env-write-ansic-escaped-quote-tail.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-ansic-escaped-quote-tail.yml:33: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-ansic-escaped-quote-body",
+        "files": ["reject-runid-github-env-write-ansic-escaped-quote-body.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-ansic-escaped-quote-body.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-ansic-concat-after-close",
+        "files": ["reject-runid-github-env-write-ansic-concat-after-close.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-ansic-concat-after-close.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-ansic-cross-model-continuation",
+        "files": ["reject-runid-github-env-write-ansic-cross-model-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-ansic-cross-model-continuation.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-cmdsub-assign",
+        "files": ["reject-runid-github-env-write-subst-cmdsub-assign.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-cmdsub-assign.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-cmdsub-spaced",
+        "files": ["reject-runid-github-env-write-subst-cmdsub-spaced.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-cmdsub-spaced.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-cmdsub-attached",
+        "files": ["reject-runid-github-env-write-subst-cmdsub-attached.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-cmdsub-attached.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-backtick",
+        "files": ["reject-runid-github-env-write-subst-backtick.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-backtick.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-eval-double",
+        "files": ["reject-runid-github-env-write-subst-eval-double.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-eval-double.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-eval-single",
+        "files": ["reject-runid-github-env-write-subst-eval-single.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-eval-single.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-case",
+        "files": ["reject-runid-github-env-write-subst-case.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-case.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-case-paren",
+        "files": ["reject-runid-github-env-write-subst-case-paren.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-case-paren.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-nested-parens",
+        "files": ["reject-runid-github-env-write-subst-nested-parens.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-nested-parens.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-subst-cmdsub-continuation",
+        "files": ["reject-runid-github-env-write-subst-cmdsub-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-subst-cmdsub-continuation.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-array-element-cmdsub-assign-continuation",
+        "files": ["reject-runid-github-env-write-array-element-cmdsub-assign-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-array-element-cmdsub-assign-continuation.yml:32: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-attached",
+        "files": ["reject-runid-github-env-write-sed-sflag-attached.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-attached.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-spaced",
+        "files": ["reject-runid-github-env-write-sed-sflag-spaced.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-spaced.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-alt-delimiter",
+        "files": ["reject-runid-github-env-write-sed-sflag-alt-delimiter.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-alt-delimiter.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-gw",
+        "files": ["reject-runid-github-env-write-sed-sflag-gw.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-gw.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-attached-e",
+        "files": ["reject-runid-github-env-write-sed-sflag-attached-e.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-attached-e.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-address-line",
+        "files": ["reject-runid-github-env-write-sed-sflag-address-line.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-address-line.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-address-range",
+        "files": ["reject-runid-github-env-write-sed-sflag-address-range.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-address-range.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-address-regex",
+        "files": ["reject-runid-github-env-write-sed-sflag-address-regex.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-address-regex.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-expression-eq",
+        "files": ["reject-runid-github-env-write-sed-sflag-expression-eq.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-expression-eq.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-ex-abbrev",
+        "files": ["reject-runid-github-env-write-sed-sflag-ex-abbrev.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-ex-abbrev.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-runid-github-env-write-sed-sflag-address-alt-delimiter",
+        "files": ["reject-runid-github-env-write-sed-sflag-address-alt-delimiter.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-sed-sflag-address-alt-delimiter.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-subst-pure-target",
+        "files": ["reject-overrefusal-runid-github-env-write-subst-pure-target.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-subst-pure-target.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job mentions `OUT`, an occurrence the extractor cannot account for (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-eval-pure-name",
+        "files": ["reject-overrefusal-runid-github-env-write-eval-pure-name.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-eval-pure-name.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `eval` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "accept-runid-github-env-write-ansic-benign-env-tail",
+        "files": ["accept-runid-github-env-write-ansic-benign-env-tail.yml"],
+        "exit": 0,
+        "base_exit": 1,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-ansic-parseint-tail",
+        "files": ["accept-runid-github-env-write-ansic-parseint-tail.yml"],
+        "exit": 0,
+        "base_exit": 1,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-ansic-multiline-trailing-backslash",
+        "files": ["accept-runid-github-env-write-ansic-multiline-trailing-backslash.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-sflag-benign-literal",
+        "files": ["accept-runid-github-env-write-sed-sflag-benign-literal.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-sflag-no-w",
+        "files": ["accept-runid-github-env-write-sed-sflag-no-w.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-sflag-w-in-replacement",
+        "files": ["accept-runid-github-env-write-sed-sflag-w-in-replacement.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-sflag-wg-filename",
+        "files": ["accept-runid-github-env-write-sed-sflag-wg-filename.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-sed-sflag-block-opener",
+        "files": ["accept-runid-github-env-write-sed-sflag-block-opener.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-runid-github-env-write-ansic-octal-name-concat-target",
+        "files": ["accept-runid-github-env-write-ansic-octal-name-concat-target.yml"],
         "exit": 0,
         "base_exit": 0,
         "excluded": 1,

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Fixture (documented over-refusal): an eval-carried text whose write
+# destination is a pure reference to an unassigned name (`$OUT`). The
+# carried-text expansion seeds `OUT` and the eval carrier check
+# refuses; the shape is benign. issue #350d plan section 6.
+name: reject-overrefusal-runid-github-env-write-eval-pure-name
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          eval "cp payload \"$OUT\""
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

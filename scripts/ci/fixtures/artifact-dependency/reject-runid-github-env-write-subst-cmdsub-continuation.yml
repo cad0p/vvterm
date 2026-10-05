@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the cross-line substitution body (issue #350 item 14, w8):
+# the body only closes on the continuation line, so the joined segment's
+# inner write target joins the relevance set. base ACCEPT -> head
+# REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-subst-cmdsub-continuation
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          $( cp payload \
+            "${arr[0]}" )
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
