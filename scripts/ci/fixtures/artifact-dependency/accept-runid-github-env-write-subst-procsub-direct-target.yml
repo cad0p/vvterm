@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Fixture (boundary accept): the direct process-substitution body write.
+# `_shell_tokens` splits the `<( … )`/`>( … )` opener into a `<`/`>`
+# operator plus a `(`-word, so no word carries the opener and the body
+# is never descended into for relevance or for unproven writes; the
+# fold-round-1 guard-widening candidate is measured to leave the witness
+# ACCEPT (the tokenizer never yields a `<(…` word), so the header claims
+# only the `$(…)`/backtick descent. base ACCEPT -> head ACCEPT, runtime
+# FLIP (bash 5.2.26; a named #350 residual, never implied closed).
+name: accept-runid-github-env-write-subst-procsub-direct-target
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          : <(cp payload "${arr[0]}")
+          : >(cp payload "${arr[0]}")
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

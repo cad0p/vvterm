@@ -575,8 +575,9 @@ non-empty abbreviation of the option name (`--i`, `--in`, `--in=.bak`;
 GNU getopt_long accepts any unambiguous prefix, and `in-place` is sed's
 only long option starting with `i`), `-i`/`-iSUFFIX`, an attached `-e`
 script (`-eSCRIPT`, `-nEeSCRIPT`) or a short-option cluster containing
-`i` (`-ni`, `-Ei`), and the BSD `-i ''` extension word (sed's `s///w
-file` flag and `-f` script bodies stay residual).
+`i` (`-ni`, `-Ei`), and the BSD `-i ''` extension word (the
+`s///w file` substitution flag is closed by A17 below; `-f` script bodies
+stay residual).
 (vii-b) the carrier-substitution test (`trap`/`eval`/`sh -c`/`bash -c`/
 `$SHELL -c`, and an interpreter inline-program operand) refuses an
 operand containing any command substitution — including arithmetic
@@ -628,7 +629,7 @@ lens-3 new-verb witnesses (`cp`/`mv`/`install`/`touch`/`truncate`/`sed
 containing a `$(`; `eval` arithmetic `$((`; the ANSI-C quoted form in a
 double-quoted operand; and a bare `$GITHUB` name the elided walk keeps.
 The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
-fold does not close: sed's `s///w file` flag and `-f` bodies, interpreters outside the inline-program table
+fold does not close: `-f` script bodies, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
 / process-substitution script operands, the xargs wrapper/assignment/
 continuation spellings (`env xargs`, `FOO=1 xargs`, `nice xargs`,
@@ -747,9 +748,10 @@ the same per-line context gap); a continuation that runs to the end of
 the run body keeps the partial join (fold round 3 MAJOR-1; the kept join
 is not bash's join — bash removes the \\-newline pair while the join keeps
 the raw \\ and the inserted newline), while a continuation
-longer than 8 physical lines and a continuation inside a command
-substitution (`w=$(cp payload \\` + newline + `"${arr[0]}")`) stay open
-(named residuals; the fold round 2 direction claim in `f68192a6` — "no
+longer than 8 physical lines stays open (a named residual; the
+continuation inside a command substitution — `w=$(cp payload \\` +
+newline + `"${arr[0]}")` — is closed by A17 below; the fold round 2
+direction claim in `f68192a6` — "no
 widening is possible" — was wrong about the join construction: the
 continuation *predicate* is monotone, but the end-of-body join discard
 was not, so this class is closed rather than pinned, and the
@@ -810,21 +812,15 @@ the eight benign shapes become measured over-refusals (the price of
 fail-closed joining, listed by class with the corpus counts). Boundary
 (stays open, never implied closed): the `>8` chain bound
 (`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
-closed, `n9+` open) and the outside-class fail-opens — #350 item 17 (the
-same-line `$'…\'…'` tokenizer gap: `_shell_tokens` reads `\'` as a close
-and swallows the rest of the line, so `echo $'a\'' ; cp payload \\` +
-`"${arr[0]}"` leaves `_argv_write_targets` empty — base/prev/fold ACCEPT +
-runtime FLIP, its continuation-free control also FLIPs, and no join fix
-closes it; fold round 2 lens-1 MAJOR-1, named not folded), #350 item 14's
-substitution sub-family (a target masked by a substitution spelling:
-`$( … )`, backtick, `eval "…"`, `case x in x) … ;; esac` and `w=$(cp …)`
-hide the verb inside a substitution the argv extractor does not descend;
-each has a continuation-free control that also runtime-FLIPs, so it is an
-extractor gap, not a join gap), and #350 item 15 (a `>`/plain break YAML
-folds to a space, joining verb and target with no backslash at all; closing
-it needs the YAML fold model the review rounds rejected as unsound) — a
-target masked by a substitution spelling, or folded across a break,
-therefore stays outside this closure. #350 item 14's operator-token
+closed, `n9+` open), the multi-line ANSI-C trailing-backslash shape (the
+`$'…'` region stays open across the physical line — a different tokenizer
+state from item 17's same-line escaped quote; runtime FLIP, pinned by
+`accept-runid-github-env-write-ansic-multiline-trailing-backslash`) and
+#350 item 15 (a `>`/plain break YAML folds to a space, joining verb and
+target with no backslash at all; closing it needs the YAML fold model the
+review rounds rejected as unsound). #350 item 17 and #350 item 14's
+substitution sub-family are closed by A17 (below); before A17, a target
+masked by a substitution spelling stayed outside this closure. #350 item 14's operator-token
 sub-family and item 16's redirect-operand masks are closed at this fold:
 the argv operand walk drops redirect operators, their target words and
 fd-prefix words, and pure `(`/`)` group tokens; the write-verb table gains
@@ -850,9 +846,10 @@ head — 271 against the pre-fix head (55 sole-operand + 60 attached-subshell
 mixed-verb + 156 `ln`/`rsync` mixed-verb) — with every ACCEPT→REFUSE in one of the
 three named diagnostic classes or a pinned over-refusal. The generator and
 its pinned output are preserved with the #350c evidence. The boundary pins
-for item 17, item 14's substitution sub-family, item 15 and items
+for item 15 and items
 3–6/8/10/11 are pre-existing
-corpus entries, not added by this fold; their
+corpus entries, not added by this fold; the item-17 and item-14
+substitution boundary pins are replaced by the A17 closure (below). Their
 spellings are pinned by
 `reject-runid-github-env-write-array-element-comment-continuation-target`,
 `reject-runid-github-env-write-array-element-escaped-whitespace-comment-target` and
@@ -924,6 +921,122 @@ The detection-completeness walk therefore closes the naming family the
 mechanism tables enumerate, at the cost of refusing benign occurrences the
 model does not place (see the accepted-costs paragraph); a construct whose
 name text is absent or assembled at runtime stays outside it.
+A17 (the #350d fold) closes #350 item 17, item 14's substitution
+sub-family (w3/w4/w4b/w5/w6/w6b/w7/w8) and item 13's residual sed
+`s///w file` flag, with five measured mechanisms: (ix-a) an escape-aware
+ANSI-C branch in `_shell_tokens` (a backslash escapes the next character;
+the close is the first unescaped `'`) — lexing only, no escape decoding,
+so the item-8 `$'\\105'` boundary does not move. The affected lexer states
+are the escaped-quote body + same-line tail (w1/w2), concatenation after
+the close (`pre$'a\''post`), the assignment RHS (`v=$'a\''`), the
+unterminated `$'…` at EOL (extent unchanged, text differs), and `$'…'`
+reached through `_substitution_bodies` inner tokenization; the unchanged
+contexts are inside double quotes, after an escaped `\\$`, and a `'` not
+immediately after `$`. The fold is not refusal-monotone: over the defined
+corpus union (F ∪ G ∪ H ∪ the reconstructed 108-root comparator — the
+plan's original 106-root generator was not preserved, so this is the
+restored equivalent — ∪ the preserved 672-cell ANSI-C fuzz generator ∪
+the 794-case fixture corpus ∪ the preserved #350c 7848-cell battery)
+every base-REFUSE→head-ACCEPT cell is enumerated; the pinned generator
+body-classifies each cell and asserts its class's runtime verdict
+(per-cell rows in the preserved `battery350d-head.out` and
+`ansic-fuzz-at-350d.out` evidence): 45 cell instances — the 42 generator
+cells (family F 12, the reconstructed comparator 24, the preserved fuzz
+6) plus the three boundary fixtures — collapsing to 31 distinct removal
+bodies (the 12 family-F removals are byte-identical to 12 of the
+comparator's, and the two ANSI-C boundary fixtures duplicate further
+F/FC cells): 12 benign modelled env writes (runtime NOFLIP), 18
+`_is_parseint_literal` policy accepts (12 runtime-FLIP, 6 NOFLIP because
+the `SOURCE_RUN_ID=0` literal leaves the seeded line in place) and the one
+malformed `;;` shape (bash parse error, nothing executes; runtime NOFLIP);
+0 removals of an unproven-value write. The three boundary fixtures
+(`accept-runid-github-env-write-ansic-benign-env-tail`,
+`accept-runid-github-env-write-ansic-parseint-tail`,
+`accept-runid-github-env-write-subst-case-separator-outside-case`) carry
+`base_exit: 1` and are the only ids in `A17_BASE_REFUSAL_REMOVALS`.
+(ix-b) inner-target relevance propagation: `_substitution_body_relevant_names`
+descends into every `$(…)`/backtick body (bounded by the
+substitution depth limit) and re-adds each inner argv write target's base
+name to the relevance set, on the physical line and on both joined
+continuation pre-passes, so the read-populated `arr` in
+`w=$(cp payload "${arr[0]}")`, `$( cp … )`, `$(cp …)`, `` `cp …` `` and
+the cross-line `$( cp … \\` + newline + `"${arr[0]}" )` refuses at the
+`read -a arr` line. (ix-c) eval-carried-text relevance:
+`_carrier_operand_relevant_names` re-adds the expansion names inside an
+unmodelled mechanism's carrier operands, so the eval carrier check refuses
+the double- and single-quoted `eval "cp payload …"` shapes once their
+target is relevant (the eval mechanism itself is unchanged; the seed is
+what was missing). (ix-d) `;;` is a segment separator in BOTH
+`_shell_segments` and `_segment_conditional_flags` (the flag array is 1:1
+with the segment array, so a one-sided change would desync it), so a
+single-line `case x in x) cp … ;; esac` no longer reads `esac` as the
+last operand. The split's one non-additive cell is a malformed `;;`
+outside `case` (`cp payload ;; "${arr[0]}"`): the base gate ran `cp`'s
+operand walk past the separator, seeded `arr` and refused at the `read`
+line; the head gate ends `cp`'s segment at `payload`, so `arr` stays
+unseeded and the gate ACCEPTs — bash rejects `;;` outside `case` at parse
+time (exit 2; nothing executes), so the removal is safe; pinned by
+`accept-runid-github-env-write-subst-case-separator-outside-case` and
+enumerated in the removals accounting below. (ix-e) the sed `s///w file`
+flag: `_SED_SUBST_W_FLAG_RE` mirrors `_SED_WRITE_COMMAND_RE`'s command
+position (start/`;`/script line
+start, the reused `_SED_ADDRESS` before the `s`, an optional `!` and `{`)
+and extracts the first `w`'s filename tail from the flags region; the
+target stops at newline/`;` (an env path suffixed with `;…` is a
+different file, the deliberate under-extraction lens 1 recorded), `s///wg`
+writes the file `g…` on both tested seds (so the whole tail is the
+target), and the extraction composes with `--expression=`/`--e=`/`--ex=`/
+attached `-e`, the attached `w<target>` command and the multi-line
+`_joined_sed_segments`. The address-prefixed `1s/…`, `1,1s/…`, `1 s/…`
+and `/x/s/…` spellings are closed through the reused address grammar; the
+`/x/` and `\\,x,` spellings are runtime clobbers (the flag truncates the
+env file at parse time even though the address never matches). Both seds
+write via the `w`-flag spellings available to them — the attached, spaced,
+`gw`, alt-delimiter and address-prefixed forms all write on macOS FreeBSD
+sed and GNU sed 4.10; `--expression=`/`--e=` are GNU-only at runtime
+(FreeBSD sed rejects the option with exit 1), which is recorded, not
+claimed. Measured at A17: the fixture corpus is 794/794 cases (363 declare
+`base_exit`); the fold adds
+38 fixtures (27 rejects including 2 documented over-refusals and 11
+boundary accepts) and moves the former
+`accept-runid-github-env-write-array-element-cmdsub-continuation` pin to
+the reject set (a 39th corpus change); the generated families F (50 cells)
++ G (43) + H (141) + FC (108 reconstructed comparator) report 342 cells, 0
+family-expected mismatches, 171 base-ACCEPT→head-REFUSE additions and the
+36 family removals above (F 12 + FC 24); the preserved 672-cell ANSI-C
+fuzz reports 6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts;
+the preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
+ACCEPT→REFUSE against `cf1b75af`; the mutant matrix re-runs the 12 #350c
+mutants with patch-application assertions (12/12 applied; the red sets are
+byte-identical except `reject-runid-github-env-write-subst-nested-parens`
+joining `operand-walk-off` and `paren-strip-off`, and the fold's
+`accept-runid-github-env-write-subst-procsub-direct-target` boundary pin
+joining `redirect-drop-off`) plus one mechanism-off
+mutant per new mechanism (5/5 applied, each red set pinned to its own
+fixtures — `case-separator-off` also reds the fold's `;;` boundary pin). Every closed witness has a reject fixture carrying its measured
+`base_exit`; the c3 escaped-backslash and c1/c2 controls stay REFUSE. The
+boundary (stays open, never implied closed): the multi-line ANSI-C
+trailing-backslash shape is a distinct tokenizer state and stays ACCEPT
+(pinned by `accept-runid-github-env-write-ansic-multiline-trailing-backslash`,
+runtime FLIP); item 8's `$'\\105'` name-concat stays ACCEPT (pinned by
+`accept-runid-github-env-write-ansic-octal-name-concat-target`, runtime
+FLIP) because the lexer does not decode escapes; the direct
+process-substitution body write (`: <(cp payload "${arr[0]}")`,
+`: >(cp payload "${arr[0]}")`) is a named residual: `_shell_tokens` splits
+the `<( … )`/`>( … )` opener into a `<`/`>` operator plus a `(`-word, so no
+word carries the opener and neither the relevance descent nor the body
+scan ever sees it (the fold-round-1 guard-widening candidate is measured
+to leave the witness ACCEPT — the tokenizer never yields a `<(…` word),
+pinned by `accept-runid-github-env-write-subst-procsub-direct-target`
+(runtime FLIP, the over-claim the fold removed); the pin covers the two
+`:` spellings, and the bare/`echo`/`cat <(…)` spellings of the same class
+are also measured ACCEPT + runtime FLIP and stay open under this class
+sentence (not limited to the pinned spellings); the `>8` continuation
+bound, sed `-f` script bodies and the remaining #350 classes (items 3–6,
+8, 10, 11, 15) stay open. Two over-refusals are shipped as
+`reject-overrefusal-*` pins (a substitution/eval inner target that is a
+pure reference to an unassigned name).
+
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
 (`dist/workflows/yaml-object-reader.js` `getLiteralToken` +
@@ -969,7 +1082,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 756
+EXPECTED_MANIFEST_CASES = 794
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -978,15 +1091,39 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold + 15 at
 # the round-3 fold + 15 at the round-4 fold) each declare the measured
 # exit of the pre-fold gate
-# (150a56a3) as `base_exit`; `--selftest` refuses an accept-widening (base
-# REFUSE -> folded ACCEPT) and any base-REFUSE reject fixture that is not
-# one of the documented pre-existing pins, so a double-caused fixture
-# cannot hide behind a verdict the new mechanism did not cause. Limit:
-# `--selftest` cannot re-run the historical gate, so an honestly recorded
-# double cause reds but a *false* `base_exit: 0` still passes; the field
-# is reviewable data backed by the measured counterfactual evidence, not a
-# re-measurement (fold round 3 lens-2 MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 325
+# (150a56a3) as `base_exit`; `--selftest` refuses an undocumented
+# accept-widening (base REFUSE -> folded ACCEPT) and any base-REFUSE reject
+# fixture that is not one of the documented pre-existing pins, so a
+# double-caused fixture cannot hide behind a verdict the new mechanism did
+# not cause. Limit: `--selftest` cannot re-run the historical gate, so an
+# honestly recorded double cause reds but a *false* `base_exit: 0` still
+# passes; the field is reviewable data backed by the measured
+# counterfactual evidence, not a re-measurement (fold round 3 lens-2
+# MINOR-3, documented not overclaimed).
+EXPECTED_BASE_VERDICT_CASES = 363
+# #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
+# a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
+# "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
+# write (runtime NOFLIP) or the parseInt literal (a deliberate
+# `_is_parseint_literal` policy accept). The `;;` separator split likewise
+# drops one spurious base refusal — a malformed `;;` outside `case`, which
+# bash rejects at parse time so nothing executes (runtime NOFLIP, exit 2).
+# The three accept fixtures in this set name those classes; the #350d
+# evidence enumerates every base-REFUSE -> head-ACCEPT cell over the
+# defined corpus union: 45 cell instances — the 42 generator cells (family
+# F 12, reconstructed 108-root comparator 24, preserved 672-cell fuzz 6)
+# plus the three boundary fixtures — collapsing to 31 distinct bodies (the
+# 12 family-F removals are byte-identical to comparator cells): 12 benign
+# modelled writes (runtime NOFLIP), 18 `_is_parseint_literal` policy
+# accepts (12 runtime-FLIP, 6 NOFLIP for the `SOURCE_RUN_ID=0` literal) and
+# the one malformed `;;` shape.
+A17_BASE_REFUSAL_REMOVALS = frozenset(
+    {
+        "accept-runid-github-env-write-ansic-benign-env-tail",
+        "accept-runid-github-env-write-ansic-parseint-tail",
+        "accept-runid-github-env-write-subst-case-separator-outside-case",
+    }
+)
 A12_BASE_REFUSAL_PINS = frozenset(
     {
         "reject-runid-github-env-write-mention-window-split-spelling",
@@ -3843,6 +3980,25 @@ def _shell_tokens(text: str) -> list[tuple[str, str, int, int]]:
                 out.append(text[i : (j + 1 if j != -1 else n)])
                 i = j + 1 if j != -1 else n
                 continue
+            if ch == "$" and i + 1 < n and text[i + 1] == "'":
+                # ANSI-C quoting: a backslash escapes the next character,
+                # so `\'` does not close the string and `\\` is a literal
+                # backslash; the close is the first unescaped `'` (issue
+                # #350 item 17). Lexing only -- no escape decoding, so the
+                # item-8 `$'\\105'` boundary does not move.
+                j = i + 2
+                while j < n:
+                    cj = text[j]
+                    if cj == "\\" and j + 1 < n:
+                        j += 2
+                        continue
+                    if cj == "'":
+                        j += 1
+                        break
+                    j += 1
+                out.append(text[i:j])
+                i = j
+                continue
             if ch == "$" and i + 1 < n and text[i + 1] == "(":
                 j = _consume_command_substitution(text, i)
                 out.append(text[i:j])
@@ -3873,7 +4029,20 @@ def _shell_segments(
     current: list[tuple[str, str, int, int]] = []
     previous: tuple[str, str, int, int] | None = None
     for token in tokens:
-        is_separator = token[0] == "op" and token[1] in (";", "&&", "||", "|", "&")
+        # `;;` closes a `case` branch and is a command separator: the
+        # tokenizer emits it as one op token, so without it here the case
+        # body stays one segment and a write verb's last operand becomes
+        # `esac` (issue #350 item 14, w7). The flag array in
+        # `_segment_conditional_flags` is aligned 1:1 with this split, so
+        # both predicates must treat `;;` the same way.
+        is_separator = token[0] == "op" and token[1] in (
+            ";",
+            ";;",
+            "&&",
+            "||",
+            "|",
+            "&",
+        )
         if token[0] == "op" and token[1] == "&" and previous is not None:
             previous_is_redirect = previous[0] == "op" and previous[1] in (
                 ">",
@@ -3916,7 +4085,17 @@ def _segment_conditional_flags(
     ends_with_separator = False
     previous: tuple[str, str, int, int] | None = None
     for token in tokens:
-        is_separator = token[0] == "op" and token[1] in (";", "&&", "||", "|", "&")
+        # Mirrors `_shell_segments`: `;;` is a separator, and the flags
+        # array stays 1:1 with the segment array only if both predicates
+        # split on it (issue #350 item 14, w7).
+        is_separator = token[0] == "op" and token[1] in (
+            ";",
+            ";;",
+            "&&",
+            "||",
+            "|",
+            "&",
+        )
         if token[0] == "op" and token[1] == "&" and previous is not None:
             previous_is_redirect = previous[0] == "op" and previous[1] in (
                 ">",
@@ -4601,9 +4780,10 @@ def _env_file_target_kind(
 # runtime (fold lens-1 MAJOR-2, round 3 MAJOR-4). The tokenizer keeps an
 # escaped `\$` from a double-quoted operand, so the address may carry that
 # backslash (`"\$w file"` passes `$w file` to sed). The `s///w file`
-# substitution flag is left as a named residual: the prefix is anchored at
-# a command position (start/`;`/line start), so it cannot start inside a
-# substitution. The extracted target is tested with the same narrow
+# substitution flag — the pre-A17 residual for this command-position anchor
+# (it cannot start inside a substitution) — is closed by the sibling
+# `_SED_SUBST_W_FLAG_RE` below (A17, #350 item 13 residual). The extracted
+# target is tested with the same narrow
 # predicate as the file operands, and a broader match can only add targets,
 # so the direction is fail-closed. The alternate-delimiter address term is
 # the general GNU `\cREc` form; it accepts both the raw single-backslash
@@ -4642,16 +4822,61 @@ _SED_WRITE_COMMAND_RE = re.compile(
     re.MULTILINE,
 )
 
+# The `s<delim>…<delim>…<delim>flags` substitution whose `flags` region
+# carries a `w <file>`/`w<file>` write flag (issue #350 item 13's residual,
+# closed by #350d). The command position mirrors `_SED_WRITE_COMMAND_RE`:
+# start of the script, a `;` separator, or the start of a script line,
+# optionally preceded by the reused `_SED_ADDRESS` (so the address-prefixed
+# `1s/…`, `1,1s/…`, `1 s/…` and `/x/s/…` spellings are covered), a `!`
+# negation and a `{` block opener. An optional leading backslash keeps the
+# double-quoted-source spelling (`"\$w file"` passes `$w file`). The flags
+# region runs to the end of the script statement: `w` consumes the rest of
+# the region as the filename on both tested seds (GNU 4.10 and FreeBSD),
+# so the first `w` in the flags starts the target and the target stops at
+# newline/`;` — a deliberately narrower filename grammar, because an env
+# path suffixed with `;…` is a different file. `s///wg` writes a file named
+# `g…` on both seds, so the whole tail after the first `w` is the target
+# (re-lens N9).
+_SED_SUBST_W_FLAG_RE = re.compile(
+    r"(?:^|;)[ \t]*(?:\\)?(?:" + _SED_ADDRESS + r")?[ \t]*!?[ \t]*\{?[ \t]*"
+    r"s(?P<delim>[^\\\n])"
+    r"(?:[^\\\n]|\\.)*?(?P=delim)"
+    r"(?:[^\\\n]|\\.)*?(?P=delim)"
+    r"(?P<flags>[^\n;]*)",
+    re.MULTILINE,
+)
+
+
+def _sed_substitution_flag_write_targets(script: str) -> list[str]:
+    """The `w`-flag filename of every `s///w file` substitution in one sed
+    script operand (issue #350 item 13's residual). A flags region with no
+    `w` has no write target; a `w` with an empty tail (`…w`, `…w `) is
+    dropped — sed would write only an explicitly emptied filename there,
+    which no shell word can spell as the env path."""
+    targets: list[str] = []
+    for match in _SED_SUBST_W_FLAG_RE.finditer(script):
+        flags = match.group("flags")
+        index = flags.find("w")
+        if index == -1:
+            continue
+        target = flags[index + 1 :].strip()
+        if target:
+            targets.append(target)
+    return targets
+
 
 def _sed_write_targets(script: str) -> list[str]:
-    """The target of every `w`/`W` script command in one sed script
-    operand: sed's second write channel, whose filename is the rest of the
-    script line (issue #346, fold lens-1 MAJOR-1)."""
+    """The target of every `w`/`W` script command and every `s///w file`
+    substitution flag in one sed script operand: sed's two write channels,
+    whose filenames are the rest of the script line/statement (issue #346,
+    fold lens-1 MAJOR-1; the substitution flag is #350 item 13's residual,
+    closed by #350d)."""
     targets: list[str] = []
     for match in _SED_WRITE_COMMAND_RE.finditer(script):
         target = match.group("target").strip()
         if target:
             targets.append(target)
+    targets.extend(_sed_substitution_flag_write_targets(script))
     return targets
 
 
@@ -4832,9 +5057,9 @@ def _scan_continuation_quote_state(
     `$'a\\` + newline + `b'` keeps the backslash and the newline), so it is
     not a continuation; inside double quotes bash still removes the
     `\\`+newline pair. This is a fail-closed subset, not a shell: it does
-    not model command substitutions, heredocs, or the same-line
-    `$'…\'…'` tokenizer gap in `_shell_tokens` (named residual — #350
-    item 17, fold round 2 lens-1 MAJOR-1)."""
+    not model command substitutions or heredocs; the same-line
+    `$'…\'…'` tokenizer gap is modelled by `_shell_tokens` since A17
+    (#350 item 17, fold round 1)."""
     index = 0
     end = len(line)
     escaped_until = -1
@@ -6503,6 +6728,71 @@ def _expansion_names(text: str) -> set[str]:
     return names
 
 
+def _substitution_body_relevant_names(
+    segment: list[tuple[str, str, int, int]], depth: int = 0
+) -> set[str]:
+    """The base names of every write target inside the substitution bodies
+    (and nested bodies) of one segment's words, so a write hidden inside a
+    `$( … )`/backtick spelling joins the relevance set and the unmodelled
+    write of its target name is refused (issue #350 item 14's substitution
+    sub-family: `$( … )` spaced/attached, backtick and `w=$( … )`). The
+    descent is fail-closed — it only ever adds names — and bounded by the
+    same depth limit the substitution-body scanner uses."""
+    if depth > _SUBSTITUTION_SCAN_DEPTH_LIMIT:
+        return set()
+    names: set[str] = set()
+    for token in segment:
+        if token[0] != "word":
+            continue
+        if "$(" not in token[1] and "`" not in token[1]:
+            continue
+        for body in _substitution_bodies(token[1]):
+            for inner_segment in _shell_segments(_shell_tokens(body)):
+                for _verb, target in _argv_all_write_targets(inner_segment):
+                    if _local_reference_name(target) is not None:
+                        names.update(_expansion_names(target))
+                names.update(
+                    _substitution_body_relevant_names(inner_segment, depth + 1)
+                )
+    return names
+
+
+def _carrier_operand_relevant_names(
+    segment: list[tuple[str, str, int, int]],
+) -> set[str]:
+    """The variable names expanded inside the carried text of an
+    unmodelled-write mechanism (`eval "cp payload \\"${arr[0]}\\""`,
+    `sh -c '… ${arr[0]}'`). The mechanism's own carrier check refuses once
+    one of those names is relevant, so seeding them closes the
+    eval-carried-text spelling (issue #350 item 14, w6/w6b). Fail-closed:
+    it only ever adds names."""
+    names: set[str] = set()
+    index = 0
+    while index < len(segment):
+        kind, text, _start, _end = segment[index]
+        if kind != "word":
+            index += 1
+            continue
+        verb = text.rsplit("/", 1)[-1] if "/" in text else text
+        interpreter = _interpreter_core(verb)
+        if (
+            verb not in _UNMODELLED_WRITE_VERBS
+            and interpreter not in _INLINE_PROGRAM_VERBS
+        ):
+            index += 1
+            continue
+        resolved = interpreter if interpreter in _INLINE_PROGRAM_VERBS else verb
+        index += 1
+        argv: list[str] = []
+        while index < len(segment) and segment[index][0] == "word":
+            argv.append(segment[index][1])
+            index += 1
+        for operand, carrier in _mechanism_operands(resolved, argv):
+            if carrier and operand is not None:
+                names.update(_expansion_names(operand))
+    return names
+
+
 def _relevant_shell_names(
     flip_targets: set[str],
     aliases: set[str],
@@ -6552,6 +6842,15 @@ def _relevant_shell_names(
             for _verb, target in _argv_all_write_targets(segment):
                 if _local_reference_name(target) is not None:
                     names.update(_expansion_names(target))
+            # A write hidden inside a substitution body (or a nested body)
+            # is classified by `_substitution_body_relevant_names`, so its
+            # target's base name joins the relevance set and the unmodelled
+            # write of that name refuses (issue #350 item 14's substitution
+            # sub-family). An eval/carrier operand's expansions join for the
+            # same reason (w6/w6b): the carrier check already refuses once a
+            # carried name is relevant.
+            names.update(_substitution_body_relevant_names(segment))
+            names.update(_carrier_operand_relevant_names(segment))
     return names
 
 
@@ -6805,6 +7104,14 @@ def _refuse_github_env_run_id_write(
                 for _verb, _target in _argv_all_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
+                # A substitution body that only closes on the continuation
+                # line (`$( cp payload \` + newline + `"${arr[0]}" )`) is
+                # visible only in the joined segment, so its inner write
+                # target's base name is seeded here (issue #350 item 14,
+                # w8).
+                relevant_names.update(
+                    _substitution_body_relevant_names(_joined_segment)
+                )
                 for _target_index, _target, _read_write in _argv_dropped_input_targets(
                     _joined_segment
                 ):
@@ -6825,6 +7132,9 @@ def _refuse_github_env_run_id_write(
                 for _verb, _target in _argv_all_write_targets(_joined_segment):
                     if _local_reference_name(_target) is not None:
                         relevant_names.update(_expansion_names(_target))
+                relevant_names.update(
+                    _substitution_body_relevant_names(_joined_segment)
+                )
                 for _target_index, _target, _read_write in _argv_dropped_input_targets(
                     _joined_segment
                 ):
@@ -7616,12 +7926,14 @@ def run_selftest() -> int:
             )
             return 1
         if base_exit == 1 and int(case["exit"]) == 0:
-            print(
-                f"selftest: FAIL — {case['id']}: accept-widening (base REFUSE -> "
-                "folded ACCEPT) is never allowed in this fold"
-            )
-            return 1
-        if base_exit == 1 and case["id"] not in A12_BASE_REFUSAL_PINS:
+            if case["id"] not in A17_BASE_REFUSAL_REMOVALS:
+                print(
+                    f"selftest: FAIL — {case['id']}: accept-widening (base REFUSE -> "
+                    "folded ACCEPT) must be one of the enumerated #350d "
+                    "base-refusal removals"
+                )
+                return 1
+        elif base_exit == 1 and case["id"] not in A12_BASE_REFUSAL_PINS:
             print(
                 f"selftest: FAIL — {case['id']}: a fixture that already refused at "
                 "base must be one of the documented pre-existing pins"

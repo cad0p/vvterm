@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 756
-    private static let expectedBaseVerdictCases = 325
+    private static let expectedManifestCases = 794
+    private static let expectedBaseVerdictCases = 363
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -791,7 +791,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         // form, the substitution-nested continuation, and the array
         // slice/offset/literal-newline-subscript spellings.
         "accept-runid-github-env-write-xargs-assignment-wrapped-nested.yml",
-        "accept-runid-github-env-write-array-element-cmdsub-continuation.yml",
         "accept-runid-github-env-write-array-element-slice-target.yml",
         "accept-runid-github-env-write-array-element-offset-target.yml",
         "accept-runid-github-env-write-array-element-multiline-subscript.yml",
@@ -980,6 +979,47 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-operand-mask-compensation-rsync-unknown.yml",
         "reject-overrefusal-operand-mask-compensation-sed-unknown.yml",
         "accept-operand-mask-sed-read-write-benign.yml",
+        // #350d: ANSI-C escaped-quote lexer, the substitution sub-family,
+        // `;;` segmentation and the sed `s///w file` flag fixtures.
+        "reject-runid-github-env-write-ansic-escaped-quote-tail.yml",
+        "reject-runid-github-env-write-ansic-escaped-quote-body.yml",
+        "reject-runid-github-env-write-ansic-concat-after-close.yml",
+        "reject-runid-github-env-write-ansic-cross-model-continuation.yml",
+        "reject-runid-github-env-write-subst-cmdsub-assign.yml",
+        "reject-runid-github-env-write-subst-cmdsub-spaced.yml",
+        "reject-runid-github-env-write-subst-cmdsub-attached.yml",
+        "reject-runid-github-env-write-subst-backtick.yml",
+        "reject-runid-github-env-write-subst-eval-double.yml",
+        "reject-runid-github-env-write-subst-eval-single.yml",
+        "reject-runid-github-env-write-subst-case.yml",
+        "reject-runid-github-env-write-subst-case-paren.yml",
+        "reject-runid-github-env-write-subst-nested-parens.yml",
+        "reject-runid-github-env-write-subst-cmdsub-continuation.yml",
+        "reject-runid-github-env-write-array-element-cmdsub-assign-continuation.yml",
+        "reject-runid-github-env-write-sed-sflag-attached.yml",
+        "reject-runid-github-env-write-sed-sflag-spaced.yml",
+        "reject-runid-github-env-write-sed-sflag-alt-delimiter.yml",
+        "reject-runid-github-env-write-sed-sflag-gw.yml",
+        "reject-runid-github-env-write-sed-sflag-attached-e.yml",
+        "reject-runid-github-env-write-sed-sflag-address-line.yml",
+        "reject-runid-github-env-write-sed-sflag-address-range.yml",
+        "reject-runid-github-env-write-sed-sflag-address-regex.yml",
+        "reject-runid-github-env-write-sed-sflag-expression-eq.yml",
+        "reject-runid-github-env-write-sed-sflag-ex-abbrev.yml",
+        "reject-runid-github-env-write-sed-sflag-address-alt-delimiter.yml",
+        "reject-overrefusal-runid-github-env-write-subst-pure-target.yml",
+        "reject-overrefusal-runid-github-env-write-eval-pure-name.yml",
+        "accept-runid-github-env-write-ansic-benign-env-tail.yml",
+        "accept-runid-github-env-write-ansic-parseint-tail.yml",
+        "accept-runid-github-env-write-ansic-multiline-trailing-backslash.yml",
+        "accept-runid-github-env-write-subst-procsub-direct-target.yml",
+        "accept-runid-github-env-write-subst-case-separator-outside-case.yml",
+        "accept-runid-github-env-write-sed-sflag-benign-literal.yml",
+        "accept-runid-github-env-write-sed-sflag-no-w.yml",
+        "accept-runid-github-env-write-sed-sflag-w-in-replacement.yml",
+        "accept-runid-github-env-write-sed-sflag-wg-filename.yml",
+        "accept-runid-github-env-write-sed-sflag-block-opener.yml",
+        "accept-runid-github-env-write-ansic-octal-name-concat-target.yml",
     ]
 
     // MARK: - P1: the gate and its inputs exist

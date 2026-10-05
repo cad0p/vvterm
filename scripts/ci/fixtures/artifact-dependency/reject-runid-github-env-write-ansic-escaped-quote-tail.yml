@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the ANSI-C escaped-quote tokenizer gap, continuation-free
+# control (issue #350 item 17, w1). _shell_tokens read `\'` inside
+# `$'…'` as the close and swallowed the rest of the line, so the `cp`
+# target never reached the argv walk; the escape-aware lexer closes on
+# the first unescaped `'` and refuses. base ACCEPT -> head REFUSE,
+# runtime FLIP (bash 5.2.26).
+name: reject-runid-github-env-write-ansic-escaped-quote-tail
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          echo $'a\'' ; cp payload "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

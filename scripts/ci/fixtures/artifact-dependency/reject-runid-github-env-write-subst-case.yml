@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the single-line `case … ;; esac` body (issue #350 item 14,
+# w7): `;;` is a segment separator now, so the `cp` last operand is no
+# longer `esac`. base ACCEPT -> head REFUSE, runtime FLIP.
+name: reject-runid-github-env-write-subst-case
+on: [workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          case x in x) cp payload "${arr[0]}" ;; esac
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
