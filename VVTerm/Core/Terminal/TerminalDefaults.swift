@@ -202,12 +202,16 @@ enum TerminalDefaults {
     static let defaultPreserveTerminalSizeForKeyboard = true
     static let defaultZenModeFullScreen = true
     static let defaultZenModeStartup = true
-    #if os(macOS)
-    static let defaultPrimaryFontName = "Menlo"
+    /// Fallback font families appended after the primary family on macOS.
+    /// Plain data (not platform UI), kept outside the `#if os(macOS)` gate so
+    /// the fixture pin test can build the macOS config on any destination.
     static let macOSFallbackFontFamilies = [
         "Apple SD Gothic Neo",
         legacyDefaultFontName
     ]
+
+    #if os(macOS)
+    static let defaultPrimaryFontName = "Menlo"
     #endif
 
     static func applyIfNeeded() {
