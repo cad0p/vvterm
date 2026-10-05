@@ -10,8 +10,8 @@
 //  and the recorded per-bin median sums must still match the fixture that
 //  documents where they came from. The fixture is
 //  `scripts/ci/shard-split-medians.json`: the 88 per-method medians over the
-//  41-run qualifying population plus the three #277 local-calibration medians
-//  and its provenance. Without this pin, a list
+//  41-run qualifying population plus the #277 CI-calibration medians and the
+//  four #364 dispatch-seeded medians, with provenance. Without this pin, a list
 //  that silently drops a method, names a method that no longer exists, splits
 //  the #227 pair, or drifts away from the recorded fixture is invisible —
 //  the workflow is prose the compiler cannot check.
@@ -31,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  555.4 / 612.9 / 681.7 / 598.1. The exact sums are
-//  555.408 / 612.882 / 681.724 / 598.127 s, so the |sum − literal| deltas are
-//  0.008 / 0.018 / 0.024 / 0.027 — small but non-zero, recorded here so a
+//  617.2 / 612.9 / 681.7 / 613.9. The exact sums are
+//  617.169 / 612.882 / 681.724 / 613.896 s, so the |sum − literal| deltas are
+//  0.031 / 0.018 / 0.024 / 0.004 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -68,7 +68,7 @@
 //  declared/exempt/per-category counts below. A new method's median comes
 //  from a calibration measurement: the first green attempt-1 run after the
 //  change, whose run id is appended to `_provenance.runs`. Removals are
-//  additionally caught by the literal 91-method count and the per-class
+//  additionally caught by the literal 95-method count and the per-class
 //  counts below, which are asserted so an existing method cannot be dropped
 //  coherently from the fixture and the lists at once.
 //
@@ -119,7 +119,7 @@
 //  pin never executes the in-code `XCTSkip` guard and never proves a reason
 //  true; the 20-character reason floor is a LENGTH floor for the 6
 //  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×2, `platformGated`
-//  ×1) — the other 27 rows are additionally protected by the `#N` check;
+//  ×1) — the other 23 rows are additionally protected by the `#N` check;
 //  (9) `liveTrackers` is a static Swift set, so the pin cannot query
 //  GitHub: a closed tracker stays green until a human removes it, and a
 //  closed tracker must name its successor in the reason and in `liveTrackers`
@@ -147,37 +147,38 @@ struct WorkflowShardSplitPinsTests {
     private static let fixturePath = "scripts/ci/shard-split-medians.json"
     private static let uiTestsDirectory = "VVTermUITests"
 
-    /// 91 = the four lists' total; #277 scheduled the three
-    /// TeleportPhaseTransitionUITests methods in shard-3.
-    private static let expectedMethodCount = 91
+    /// 95 = the four lists' total; #277 scheduled the three
+    /// TeleportPhaseTransitionUITests methods in shard-3 and #364 scheduled
+    /// four measured never-run methods (three in shard-0, one in shard-3).
+    private static let expectedMethodCount = 95
 
     /// The four `only-testing` list lengths.
     private static let expectedEntriesPerShard: [String: Int] = [
-        "shard-0": 20,
+        "shard-0": 23,
         "shard-1": 24,
         "shard-2": 24,
-        "shard-3": 23,
+        "shard-3": 24,
     ]
 
     /// The recorded per-bin median sums, 1 dp (the NAMED rounding rule).
     private static let expectedBinSums1dp: [String: Double] = [
-        "shard-0": 555.4,
+        "shard-0": 617.2,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 598.1,
+        "shard-3": 613.9,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
     /// refresh path; deltas to the 1 dp literals are in the header).
     private static let exactBinSums: [String: Double] = [
-        "shard-0": 555.408,
+        "shard-0": 617.169,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 598.127,
+        "shard-3": 613.896,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
-    /// (≤0.027 s) so a refresh has room, narrower than any real method move.
+    /// (≤0.031 s) so a refresh has room, narrower than any real method move.
     private static let binSumTolerance = 0.05
 
     /// The acceptance's structural rebalance threshold (`> ~1.3`). Recorded
@@ -196,11 +197,11 @@ struct WorkflowShardSplitPinsTests {
         "TeleportReadinessIOSUITests": 6,
         "TeleportReadinessUITests": 5,
         "TeleportUITests": 24,
-        "TerminalKeyboardUITests": 16,
+        "TerminalKeyboardUITests": 19,
         "TerminalLinkTapUITests": 2,
         "TerminalReconnectUITests": 5,
         "TerminalScreenAwakeUITests": 1,
-        "TerminalZenModeUITests": 8,
+        "TerminalZenModeUITests": 9,
     ]
 
     /// The #227 atomic pair: `ServerNavigationUITests` shares one static
@@ -241,8 +242,8 @@ struct WorkflowShardSplitPinsTests {
         }
     }
 
-    /// Assertion 2 — partition + coverage. The four lists total 91 entries,
-    /// per-list 20/24/24/23, all unique; their union equals the fixture key
+    /// Assertion 2 — partition + coverage. The four lists total 95 entries,
+    /// per-list 23/24/24/24, all unique; their union equals the fixture key
     /// set exactly; and the per-class scheduled counts match, so an existing
     /// method cannot be dropped coherently from both the fixture and the
     /// lists.
@@ -292,7 +293,7 @@ struct WorkflowShardSplitPinsTests {
 
     /// Assertion 3 — existence. Every `Target/Class/method` resolves to a
     /// `func <method>(` inside that class body, with the class located
-    /// recursively under `VVTermUITests/` (40 of the 91 live under
+    /// recursively under `VVTermUITests/` (40 of the 95 live under
     /// `Features/Teleport/`), comments stripped first so a commented-out
     /// `func` cannot false-green.
     @Test
@@ -463,44 +464,38 @@ struct WorkflowShardSplitPinsTests {
     /// the #364 deletion of `VVTermUITests/testLaunchPerformance`.
     private static let expectedDeclaredMethodCount = 124
 
-    /// 33 = the exemption ledger after #364 deleted the `testLaunchPerformance`
-    /// launchPerf row.
-    private static let expectedExemptionCount = 33
+    /// 29 = the exemption ledger after #364 deleted `testLaunchPerformance`,
+    /// quarantined four measured never-scheduled rows, and scheduled four rows.
+    private static let expectedExemptionCount = 29
 
-    /// The six categories and their pinned counts (issue #362).
+    /// The five categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
         "quarantined": 18,
         "ciQuarantined": 5,
         "reproOnly": 3,
         "launchPerf": 2,
         "platformGated": 1,
-        "unscheduled": 4,
     ]
 
     /// Categories whose resolution is owned by a live issue.
     private static let trackerRequiredCategories: Set<String> = [
         "quarantined",
         "ciQuarantined",
-        "unscheduled",
     ]
 
-    /// Live trackers only (open at filing, 2026-10-04; #372 filed 2026-10-05).
-    /// The pin cannot query GitHub: a closed tracker must name its successor
-    /// here and in its reason, or assertion 8 reds.
-    private static let liveTrackers: Set<Int> = [92, 257, 364, 372]
+    /// Live trackers only (open at filing: #92 and #257 on 2026-10-04, #372 on
+    /// 2026-10-05). The pin cannot query GitHub: a closed tracker must name its
+    /// successor here and in its reason, or assertion 8 reds.
+    private static let liveTrackers: Set<Int> = [92, 257, 372]
 
-    /// The 8 never-scheduled methods (4 `unscheduled` + 4 `quarantined`),
-    /// frozen as exact `(id, category)` pairs so a category swap between the
-    /// categories is visible.
+    /// The 4 measured never-scheduled methods, frozen as exact
+    /// `(id, category)` pairs so a category swap away from `quarantined` is
+    /// visible.
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
-        ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "quarantined"),
-        ("VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
-        ("VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel", "unscheduled"),
     ]
 
     /// Assertion 7 — declared = scheduled ⊎ exempt (name-exact). The scanner
@@ -509,7 +504,7 @@ struct WorkflowShardSplitPinsTests {
     /// attributed + unattributed — a classification-completeness guard against
     /// a candidate dropped between match and attribution, not a second regex
     /// miss check. Also pins the declared/exempt/per-category counts, the
-    /// frozen 8 never-scheduled `(id, category)` pairs, and the
+    /// frozen 4 never-scheduled `(id, category)` pairs, and the
     /// scheduled-gate guard.
     @Test
     func testEveryDeclaredUITestIsScheduledOrExempt() throws {

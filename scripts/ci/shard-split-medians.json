@@ -1,10 +1,23 @@
 {
   "_provenance": {
-    "measured": "2026-10-04 (41-run population); 2026-10-05 (3-method CI calibration, run 37252082693)",
-    "population_rule": "every attempt-1 VVTerm PR CI run (event=pull_request, conclusion=success) whose four ui-tests-shard-* jobs all succeeded and whose four shard logs parse to exactly the 88-method universe at the last only-testing change (#236, merged 2026-09-29 17:07 UTC); this historical 41-run population does not cover the three #277 methods, which use the `calibration` object below (seed superseded by run 37252082693)",
+    "measured": "2026-10-04 (41-run population); 2026-10-05 (3-method CI calibration, run 37252082693; 4-method dispatch seed, runs 37269132486 + 37272070374)",
+    "population_rule": "every attempt-1 VVTerm PR CI run (event=pull_request, conclusion=success) whose four ui-tests-shard-* jobs all succeeded and whose four shard logs parse to exactly the 88-method universe at the last only-testing change (#236, merged 2026-09-29 17:07 UTC); this historical 41-run population does not cover the three #277 methods (see `calibration_277`; seed superseded by run 37252082693) nor the four #364 never-run methods (see `calibration`)",
     "extraction": "gh api --allow-escape-sequences /repos/cad0p/vvterm/actions/jobs/<job-id>/logs ; regex: Test Case '-\\[(\\S+) (\\S+)\\]' passed \\((\\d+(?:\\.\\d+)?) seconds\\)",
-    "method_count": 91,
+    "method_count": 95,
     "calibration": {
+      "methods": [
+        "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance",
+        "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",
+        "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting",
+        "VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel"
+      ],
+      "head": "218df334",
+      "date": "2026-10-05",
+      "device": "iPhone 17 / iOS 27.0 (xcode-27 CI runner), iOS Simulator arm64",
+      "basis": "seed: class-level workflow_dispatch samples - run 37269132486 (TerminalKeyboardUITests, debug_timeout=300) for 15.769 / 21.720 / 19.536 s and run 37272070374 (TerminalZenModeUITests) for 20.505 s; single samples, and the dispatch environment lacks CI=1, so the shard environment is the authoritative source",
+      "replacement_rule": "the first green attempt-1 PR CI run whose shard-0/shard-3 jobs name these methods replaces these four medians with its CI values and appends its run triple to _provenance.runs"
+    },
+    "calibration_277": {
       "methods": [
         "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet",
         "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap",
@@ -293,6 +306,7 @@
     "VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat": 25.119,
     "VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput": 37.287,
     "VVTermUITests/TerminalKeyboardUITests/testDirectTouchDoesNotClickOutsideMouseCapture": 24.866,
+    "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance": 15.769,
     "VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid": 32.447,
     "VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession": 25.844,
     "VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat": 25.35,
@@ -304,6 +318,8 @@
     "VVTermUITests/TerminalKeyboardUITests/testPreservedTerminalGridMovesCursorAboveKeyboard": 23.516,
     "VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable": 32.049,
     "VVTermUITests/TerminalKeyboardUITests/testRepeatedTerminalReconstructionKeepsRenderingAndInputResponsive": 48.231,
+    "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory": 21.72,
+    "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting": 19.536,
     "VVTermUITests/TerminalKeyboardUITests/testSplitPaneShortcutsRouteWithoutReachingTerminalInput": 33.295,
     "VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus": 18.642,
     "VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord": 20.871,
@@ -320,6 +336,7 @@
     "VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible": 22.537,
     "VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets": 18.723,
     "VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt": 24.269,
+    "VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel": 20.505,
     "VVTermUITests/TerminalZenModeUITests/testZenLauncherCircleIsFullyTappable": 16.346,
     "VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler": 18.69
   }

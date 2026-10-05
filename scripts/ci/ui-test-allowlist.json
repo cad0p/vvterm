@@ -2,7 +2,7 @@
   "_provenance": {
     "date": "2026-10-05",
     "issue": 362,
-    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3; #364 deleted VVTermUITests/testLaunchPerformance and dispositioned the never-scheduled rows"
+    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3; #364 deleted VVTermUITests/testLaunchPerformance, quarantined the four measured keyboard divergences (#92 x3, #372), and scheduled the four measured never-run methods"
   },
   "exemptions": [
     {
@@ -156,12 +156,6 @@
       "reason": "compiled only under #if os(macOS); every test destination is the iOS Simulator, so it is never compiled in CI"
     },
     {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
       "id": "VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews",
       "category": "quarantined",
       "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
@@ -178,24 +172,6 @@
       "category": "quarantined",
       "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
       "tracker": 92
-    },
-    {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; real-terminal-launcher harness unrelated to #92 - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
     }
   ]
 }
