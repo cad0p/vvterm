@@ -20,8 +20,9 @@
 //        `.success` (the per-invocation reset);
 //    (d) a release before/during `begin` is harmless (idempotent).
 //
-//  No sleeps beyond the mock's own 50 ms cadence; the whole suite runs in
-//  well under a second.
+//  The suite runs on the mock's 50 ms poll cadence plus one deliberate
+//  two-cadence (100 ms) stability sleep in case (b); it completes in well
+//  under a second.
 //
 
 #if DEBUG
@@ -110,10 +111,13 @@ struct MockTeleportBootstrapCoordinatorGateTests {
         #expect(mock.releaseApproval() == false)
 
         let begin = Task { await mock.begin(cluster: makeCluster()) }
-        await waitUntil { mock.state == .success }
-        await begin.value
+        // Time-bounded: if the pre-release did NOT disarm the hold, this wait
+        // expires at 2 s (well below the mock's 30 s self-release) and the
+        // `#expect` below reds instead of passing via the self-release.
+        await waitUntil({ mock.state == .success }, timeout: 2)
         #expect(mock.state == .success)
         #expect(mock.lastBootstrapResult != nil)
+        await begin.value
     }
 }
 #endif
