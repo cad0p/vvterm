@@ -960,7 +960,15 @@ what was missing). (ix-d) `;;` is a segment separator in BOTH
 `_shell_segments` and `_segment_conditional_flags` (the flag array is 1:1
 with the segment array, so a one-sided change would desync it), so a
 single-line `case x in x) cp … ;; esac` no longer reads `esac` as the
-last operand. (ix-e) the sed `s///w file` flag: `_SED_SUBST_W_FLAG_RE`
+last operand. The split's one non-additive cell is a malformed `;;`
+outside `case` (`cp payload ;; "${arr[0]}"`): the base gate ran `cp`'s
+operand walk past the separator, seeded `arr` and refused at the `read`
+line; the head gate ends `cp`'s segment at `payload`, so `arr` stays
+unseeded and the gate ACCEPTs — bash rejects `;;` outside `case` at parse
+time (exit 2; nothing executes), so the removal is safe; pinned by
+`accept-runid-github-env-write-subst-case-separator-outside-case` and
+enumerated in the removals accounting below. (ix-e) the sed `s///w file`
+flag: `_SED_SUBST_W_FLAG_RE`
 mirrors `_SED_WRITE_COMMAND_RE`'s command position (start/`;`/script line
 start, the reused `_SED_ADDRESS` before the `s`, an optional `!` and `{`)
 and extracts the first `w`'s filename tail from the flags region; the
@@ -975,15 +983,15 @@ and `/x/s/…` spellings are closed through the reused address grammar; the
 parse time). Both macOS FreeBSD sed and GNU sed 4.10 write via all tested
 spellings; `--expression=`/`--e=` are GNU-only at runtime (FreeBSD sed
 rejects the option), which is recorded, not claimed. Measured at A17: the
-fixture corpus is 793/793 cases (362 declare `base_exit`); the fold adds
-37 fixtures (27 rejects including 2 documented over-refusals and 10
+fixture corpus is 794/794 cases (363 declare `base_exit`); the fold adds
+38 fixtures (27 rejects including 2 documented over-refusals and 11
 boundary accepts) and moves the former
 `accept-runid-github-env-write-array-element-cmdsub-continuation` pin to
-the reject set (a 38th corpus change); the generated families F (50 cells)
+the reject set (a 39th corpus change); the generated families F (50 cells)
 + G (43) + H (140) + FC (108 restored comparator) report 341 cells, 0
 family-expected mismatches, 170 base-ACCEPT→head-REFUSE additions and the
-36 family removals above (F 12 + FC 24); the preserved 672-cell ANSI-C fuzz reports
-6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts; the
+36 family removals above (F 12 + FC 24); the preserved 672-cell ANSI-C
+fuzz reports 6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts; the
 preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
 ACCEPT→REFUSE against `cf1b75af`; the mutant matrix re-runs the 12 #350c
 mutants with patch-application assertions (12/12 applied; the red sets are
@@ -1056,7 +1064,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 793
+EXPECTED_MANIFEST_CASES = 794
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1074,20 +1082,28 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 362
-# #350d: the escape-aware ANSI-C lexer is not refusal-monotone. The old
-# swallow produced a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n'
-# >> "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled
-# benign write (runtime NOFLIP) or the parseInt literal (a deliberate
-# `_is_parseint_literal` policy accept). These two accept fixtures name the
-# class; the #350d evidence enumerates every other base-REFUSE ->
-# head-ACCEPT cell over the defined corpus union: 42 cells (family F 12,
-# restored 108-root comparator 24, preserved 672-cell fuzz 6), all benign
-# modelled writes (18) or `_is_parseint_literal` policy accepts (24).
+EXPECTED_BASE_VERDICT_CASES = 363
+# #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
+# a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
+# "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
+# write (runtime NOFLIP) or the parseInt literal (a deliberate
+# `_is_parseint_literal` policy accept). The `;;` separator split likewise
+# drops one spurious base refusal — a malformed `;;` outside `case`, which
+# bash rejects at parse time so nothing executes (runtime NOFLIP, exit 2).
+# The three accept fixtures in this set name those classes; the #350d
+# evidence enumerates every base-REFUSE -> head-ACCEPT cell over the
+# defined corpus union: 45 cell instances — the 42 generator cells (family
+# F 12, reconstructed 108-root comparator 24, preserved 672-cell fuzz 6)
+# plus the three boundary fixtures — collapsing to 31 distinct bodies (the
+# 12 family-F removals are byte-identical to comparator cells): 12 benign
+# modelled writes (runtime NOFLIP), 18 `_is_parseint_literal` policy
+# accepts (12 runtime-FLIP, 6 NOFLIP for the `SOURCE_RUN_ID=0` literal) and
+# the one malformed `;;` shape.
 A17_BASE_REFUSAL_REMOVALS = frozenset(
     {
         "accept-runid-github-env-write-ansic-benign-env-tail",
         "accept-runid-github-env-write-ansic-parseint-tail",
+        "accept-runid-github-env-write-subst-case-separator-outside-case",
     }
 )
 A12_BASE_REFUSAL_PINS = frozenset(

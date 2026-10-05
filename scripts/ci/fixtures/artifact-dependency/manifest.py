@@ -7127,6 +7127,14 @@ CASES = [
         "diagnostics": [],
     },
     {
+        "id": "accept-runid-github-env-write-subst-case-separator-outside-case",
+        "files": ["accept-runid-github-env-write-subst-case-separator-outside-case.yml"],
+        "exit": 0,
+        "base_exit": 1,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
         "id": "accept-runid-github-env-write-sed-sflag-benign-literal",
         "files": ["accept-runid-github-env-write-sed-sflag-benign-literal.yml"],
         "exit": 0,
