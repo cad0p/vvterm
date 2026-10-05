@@ -96,14 +96,41 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
     private let scenario: Scenario
     private let delay: TimeInterval
 
-    init(scenario: Scenario, delay: TimeInterval = 0.05) {
+    /// When true, `begin` parks in `.awaitingApproval` after its normal
+    /// delay and waits for `releaseApproval()` — the phase-chain UI test's
+    /// deterministic hold. Default false: every non-gated instance is
+    /// behaviour-identical to before (issue #277).
+    private let holdsForApproval: Bool
+
+    /// Set by `releaseApproval()` (or by `cancel()` while held). Idempotent.
+    private var approvalReleased = false
+
+    /// Set by `cancel()` while the held `begin` is parked, so the park loop
+    /// cannot fall through into the scenario switch after a cancellation.
+    private var cancelledWhileHeld = false
+
+    init(scenario: Scenario, delay: TimeInterval = 0.05, holdsForApproval: Bool = false) {
         self.scenario = scenario
         self.delay = delay
+        self.holdsForApproval = holdsForApproval
+    }
+
+    /// Releases a `holdsForApproval` hold. Returns true if the hold was
+    /// actually engaged and not yet released; the second call returns false
+    /// (idempotent). Non-gated instances always return false.
+    @discardableResult
+    func releaseApproval() -> Bool {
+        let wasHeld = holdsForApproval && !approvalReleased
+        approvalReleased = true
+        return wasHeld
     }
 
     func begin(cluster: TeleportCluster) async {
         beginCallCount += 1
         lastCluster = cluster
+        // Per-invocation lifecycle: a previous hold's cancellation flag must
+        // never swallow a later begin()/retry() (issue #277).
+        cancelledWhileHeld = false
         state = .preparing
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
@@ -117,6 +144,19 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         state = .awaitingApproval
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+        // The phase-chain UI test's deterministic hold: park in
+        // `.awaitingApproval` until the harness's release control is tapped.
+        // 50 ms poll cadence; the 30 s self-release bounds a lost tap far
+        // below the 300 s per-test execution allowance. Task cancellation
+        // exits the park.
+        if holdsForApproval && !approvalReleased {
+            let deadline = Date().addingTimeInterval(30)
+            while !approvalReleased && !Task.isCancelled && Date() < deadline {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        if cancelledWhileHeld || Task.isCancelled { return }
 
         switch scenario {
         case .happyPath, .alreadyLoggedIn:
@@ -145,6 +185,13 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
 
     func cancel() async {
         cancelCallCount += 1
+        if holdsForApproval {
+            // A cancel during the hold must stop the parked begin from
+            // falling through into the scenario switch. Non-gated instances
+            // stay bit-identical: these flags are never touched there.
+            cancelledWhileHeld = true
+            approvalReleased = true
+        }
         state = .failed(.userCancelled)
     }
 
