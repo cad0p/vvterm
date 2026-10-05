@@ -122,7 +122,7 @@
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews",
       "category": "capabilityGated",
-      "reason": "#372: the probe is now frame-based and capability-gated. Measured 2026-10-05 (iOS 26.3): iPhone 17 pre-pinch (75,237,724,163) on a 874x402 screen stays docked-width within 1 pt jitter (the pinch types characters); iPad Pro 11-inch (M4) pre-pinch (0,461,1210,370) on a 1210x834 screen floats to (7,536,320,216). The old label-based probe failed in run 37269132486 (TerminalKeyboardUITests.swift:1313, base 218df334) because the geometry-derived keyboardPresentation token read floating with a docked frame. No CI destination has the native float capability, so the row stays unscheduled on the live successor tracker #374",
+      "reason": "#372: the probe is now frame-based and capability-gated. Measured 2026-10-05 (iOS 26.3): iPhone 17 pre-pinch (75,237,724,163) on a 874x402 screen stays docked-width within 1 pt jitter (the pinch types characters); iPad Pro 11-inch (M4) pre-pinch (0,461,1210,370) on a 1210x834 screen floats to (7,536,320,216). The old label-based probe failed in run 37269132486 (TerminalKeyboardUITests.swift:1313, base 218df334) because the geometry-derived keyboardPresentation token read floating with a docked frame. Every scheduled CI shard targets an iPhone-class simulator (iPhone 17); no job targets an iPad-class destination, so the row stays unscheduled on the live successor tracker #374",
       "tracker": 374
     },
     {
