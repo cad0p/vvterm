@@ -477,12 +477,15 @@ struct WorkflowShardSplitPinsTests {
     private static let expectedDeclaredMethodCount = 124
 
     /// 29 = the exemption ledger after #364 deleted `testLaunchPerformance`,
-    /// quarantined four measured never-scheduled rows, and scheduled four rows.
+    /// quarantined three measured never-scheduled rows, re-categorised the
+    /// #372 native float probe as `capabilityGated`, and scheduled four rows.
     private static let expectedExemptionCount = 29
 
-    /// The five categories and their pinned counts (issue #362).
+    /// The six categories and their pinned counts (issue #362;
+    /// `capabilityGated` restored by #372).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
-        "quarantined": 18,
+        "quarantined": 17,
+        "capabilityGated": 1,
         "ciQuarantined": 5,
         "reproOnly": 3,
         "launchPerf": 2,
@@ -492,22 +495,24 @@ struct WorkflowShardSplitPinsTests {
     /// Categories whose resolution is owned by a live issue.
     private static let trackerRequiredCategories: Set<String> = [
         "quarantined",
+        "capabilityGated",
         "ciQuarantined",
     ]
 
-    /// Live trackers only (open at filing: #92 and #257 on 2026-10-04, #372 on
-    /// 2026-10-05). The pin cannot query GitHub: a closed tracker must name its
-    /// successor here and in its reason, or assertion 8 reds.
-    private static let liveTrackers: Set<Int> = [92, 257, 372]
+    /// Live trackers only (open at filing: #92 and #257 on 2026-10-04; #374 on
+    /// 2026-10-05, the successor for the #372 native-float coverage gap). The
+    /// pin cannot query GitHub: a closed tracker must name its successor here
+    /// and in its reason, or assertion 8 reds.
+    private static let liveTrackers: Set<Int> = [92, 257, 374]
 
     /// The 4 measured never-scheduled methods, frozen as exact
-    /// `(id, category)` pairs so a category swap away from `quarantined` is
-    /// visible.
+    /// `(id, category)` pairs so a category swap is visible (the native float
+    /// probe is `capabilityGated` on #374; the other three are `quarantined`).
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
         ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "quarantined"),
-        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "capabilityGated"),
     ]
 
     /// Assertion 7 — declared = scheduled ⊎ exempt (name-exact). The scanner
