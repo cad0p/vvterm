@@ -13,12 +13,12 @@ final class NoticePresentationUITests: XCTestCase {
         let retry = app.buttons["Retry"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
-        XCTAssertTrue(retry.waitForExistence(timeout: 5))
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(title.frame.minY, app.frame.midY)
-        XCTAssertLessThanOrEqual(retry.frame.maxY, app.frame.maxY)
-        XCTAssertGreaterThan(retry.frame.width, app.frame.width * 0.75)
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(close.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertGreaterThan(title.frame.minY, app.frame.midY, noticeDiagnosticsText(in: app))
+        XCTAssertLessThanOrEqual(retry.frame.maxY, app.frame.maxY, noticeDiagnosticsText(in: app))
+        XCTAssertGreaterThan(retry.frame.width, app.frame.width * 0.75, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -29,19 +29,20 @@ final class NoticePresentationUITests: XCTestCase {
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(close.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         close.tap()
 
-        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5))
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
 
         let back = app.buttons["vvterm.noticeTest.back"]
-        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        XCTAssertTrue(back.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         back.tap()
         XCTAssertTrue(
             app.descendants(matching: .any)["vvterm.noticeTest.serverList"]
-                .waitForExistence(timeout: 5)
+                .waitForExistence(timeout: 5),
+            noticeDiagnosticsText(in: app)
         )
     }
 
@@ -61,13 +62,13 @@ final class NoticePresentationUITests: XCTestCase {
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
         close.tap()
-        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
 
         Thread.sleep(forTimeInterval: 1)
-        XCTAssertFalse(close.exists)
-        XCTAssertTrue(app.buttons["Retry"].exists)
+        XCTAssertFalse(close.exists, noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Retry"].exists, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -77,14 +78,14 @@ final class NoticePresentationUITests: XCTestCase {
         let title = app.staticTexts["Connection Failed"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
         close.tap()
-        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
 
         let retry = app.buttons["Retry"]
-        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         retry.tap()
-        XCTAssertTrue(close.waitForExistence(timeout: 20))
+        XCTAssertTrue(close.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -94,13 +95,13 @@ final class NoticePresentationUITests: XCTestCase {
         let title = app.staticTexts["Disconnected"]
         let close = app.buttons["vvterm.connectionStatus.close"]
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
-        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         close.swipeDown()
 
-        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["vvterm.noticeTest.back"].exists)
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["vvterm.noticeTest.back"].exists, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -108,9 +109,9 @@ final class NoticePresentationUITests: XCTestCase {
         let app = launchNoticeHarness()
         selectScenario("hostKeyFailure", in: app)
 
-        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.buttons["vvterm.connectionStatus.close"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["vvterm.connectionStatus.close"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -120,8 +121,8 @@ final class NoticePresentationUITests: XCTestCase {
         let app = launchNoticeHarness()
         selectScenario("hostKeyUnknown", in: app)
 
-        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Connection Failed"].waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(app.buttons["Trust New Host Key"].waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -135,11 +136,11 @@ final class NoticePresentationUITests: XCTestCase {
             .matching(identifier: "vvterm.notice.banner")
             .firstMatch
 
-        XCTAssertTrue(title.waitForExistence(timeout: 20))
-        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
-        XCTAssertTrue(banner.waitForExistence(timeout: 5))
-        XCTAssertFalse(close.waitForExistence(timeout: 1))
-        XCTAssertLessThan(banner.frame.maxY, app.frame.midY)
+        XCTAssertTrue(title.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(banner.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertFalse(close.waitForExistence(timeout: 1), noticeDiagnosticsText(in: app))
+        XCTAssertLessThan(banner.frame.maxY, app.frame.midY, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -154,12 +155,12 @@ final class NoticePresentationUITests: XCTestCase {
         // (the original 3s auto-handoff made the banner transient — the stale
         // AX tree could miss its brief life under runner load). Every assert
         // below targets a persistent state.
-        XCTAssertTrue(connecting.waitForExistence(timeout: 20))
+        XCTAssertTrue(connecting.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
         let present = app.buttons["vvterm.noticeTest.bannerHandoff.present"]
-        XCTAssertTrue(present.waitForExistence(timeout: 5))
+        XCTAssertTrue(present.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         present.tap()
-        XCTAssertTrue(tmuxTitle.waitForExistence(timeout: 20))
-        XCTAssertTrue(connecting.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(tmuxTitle.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(connecting.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -169,8 +170,8 @@ final class NoticePresentationUITests: XCTestCase {
         let terminal = app.staticTexts["$ ssh production"]
         let inactiveConnecting = app.staticTexts["Connecting to inactive split..."]
 
-        XCTAssertTrue(terminal.waitForExistence(timeout: 20))
-        XCTAssertFalse(inactiveConnecting.waitForExistence(timeout: 2))
+        XCTAssertTrue(terminal.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertFalse(inactiveConnecting.waitForExistence(timeout: 2), noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -181,9 +182,9 @@ final class NoticePresentationUITests: XCTestCase {
         let previewNavigationBar = app.navigationBars["report.pdf"]
         let operationTitle = app.staticTexts["Downloading"]
 
-        XCTAssertTrue(previewNavigationBar.waitForExistence(timeout: 20))
-        XCTAssertTrue(operationTitle.waitForExistence(timeout: 20))
-        XCTAssertGreaterThan(operationTitle.frame.minY, app.frame.midY)
+        XCTAssertTrue(previewNavigationBar.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(operationTitle.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertGreaterThan(operationTitle.frame.minY, app.frame.midY, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -197,15 +198,15 @@ final class NoticePresentationUITests: XCTestCase {
         let stackCount = app.otherElements["vvterm.notice.operationStackCount"]
         let toolbarButton = app.buttons["vvterm.noticeTest.bottomToolbar"]
 
-        XCTAssertTrue(first.waitForExistence(timeout: 20))
-        XCTAssertTrue(second.waitForExistence(timeout: 5))
-        XCTAssertTrue(third.waitForExistence(timeout: 5))
-        XCTAssertTrue(stackCount.waitForExistence(timeout: 5))
-        XCTAssertTrue(toolbarButton.waitForExistence(timeout: 5))
-        XCTAssertEqual(stackCount.label, "3")
-        XCTAssertLessThan(first.frame.maxY, second.frame.minY)
-        XCTAssertLessThan(second.frame.maxY, third.frame.minY)
-        XCTAssertLessThan(third.frame.maxY, toolbarButton.frame.minY)
+        XCTAssertTrue(first.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(second.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(third.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(stackCount.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(toolbarButton.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertEqual(stackCount.label, "3", noticeDiagnosticsText(in: app))
+        XCTAssertLessThan(first.frame.maxY, second.frame.minY, noticeDiagnosticsText(in: app))
+        XCTAssertLessThan(second.frame.maxY, third.frame.minY, noticeDiagnosticsText(in: app))
+        XCTAssertLessThan(third.frame.maxY, toolbarButton.frame.minY, noticeDiagnosticsText(in: app))
     }
 
     @MainActor
@@ -216,7 +217,7 @@ final class NoticePresentationUITests: XCTestCase {
         let details = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.details")
             .firstMatch
-        XCTAssertTrue(details.waitForExistence(timeout: 20))
+        XCTAssertTrue(details.waitForExistence(timeout: 20), noticeDiagnosticsText(in: app))
         details.tap()
 
         let detailText = app.descendants(matching: .any)
@@ -225,16 +226,16 @@ final class NoticePresentationUITests: XCTestCase {
         let copy = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.copyDiagnostics")
             .firstMatch
-        XCTAssertTrue(detailText.waitForExistence(timeout: 5))
-        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        XCTAssertTrue(detailText.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(copy.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         detailText.swipeUp()
         copy.tap()
-        XCTAssertEqual(copy.label, "Copied")
+        XCTAssertEqual(copy.label, "Copied", noticeDiagnosticsText(in: app))
 
         let close = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.detailClose")
             .firstMatch
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(close.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
         close.tap()
 
         let dismiss = app.descendants(matching: .any)
@@ -243,10 +244,10 @@ final class NoticePresentationUITests: XCTestCase {
         let banner = app.descendants(matching: .any)
             .matching(identifier: "vvterm.notice.banner")
             .firstMatch
-        XCTAssertTrue(banner.waitForExistence(timeout: 5))
-        XCTAssertTrue(dismiss.exists)
+        XCTAssertTrue(banner.waitForExistence(timeout: 5), noticeDiagnosticsText(in: app))
+        XCTAssertTrue(dismiss.exists, noticeDiagnosticsText(in: app))
         dismiss.tap()
-        XCTAssertTrue(banner.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 5), noticeDiagnosticsText(in: app))
     }
 
     /// Selects a scenario from the notice harness's scenario menu.
@@ -288,6 +289,7 @@ final class NoticePresentationUITests: XCTestCase {
             XCTAssertTrue(
                 sheet.waitForNonExistence(timeout: 5),
                 "Leftover sheet did not dismiss before scenario switch"
+                    + " " + noticeDiagnosticsText(in: app)
             )
         }
         let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
@@ -332,6 +334,7 @@ final class NoticePresentationUITests: XCTestCase {
             didTapItem,
             "The '\(name)' scenario menu item never presented to be tapped. "
                 + "Menu exists: \(menu.exists); item exists: \(item.exists)."
+                + " " + noticeDiagnosticsText(in: app)
         )
         let observedLabel = current.exists ? current.label : "<missing>"
         XCTAssertEqual(
@@ -339,6 +342,7 @@ final class NoticePresentationUITests: XCTestCase {
             name,
             "Scenario did not switch to '\(name)' after the bounded menu/item taps. "
                 + "Menu exists: \(menu.exists); item exists: \(item.exists)."
+                + " " + noticeDiagnosticsText(in: app)
         )
     }
 
@@ -383,7 +387,7 @@ final class NoticePresentationUITests: XCTestCase {
                 // no scenario in this class is reachable — this is not a notice
                 // regression. Shards no longer retry (#253), so it names the
                 // class for triage instead of being retried away.
-                XCTFail("Notice harness did not mount")
+                XCTFail("Notice harness did not mount. " + noticeDiagnosticsText(in: app))
             }
         }
         Self.app = app

@@ -91,4 +91,29 @@ extension XCTestCase {
         }
         element.tap()
     }
+
+    /// Shared keyboard/link-harness diagnostics text: the
+    /// `vvterm.keyboardTest.diagnostics` label, or `diagnostics=<missing>`
+    /// when the harness does not render the element. Moved verbatim from the
+    /// private `TerminalKeyboardUITests` / `TerminalLinkTapUITests` copies
+    /// (issue #228); nonisolated so existing nonisolated call sites compile.
+    func diagnosticsText(in app: XCUIApplication) -> String {
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        guard diagnostics.exists else { return "diagnostics=<missing>" }
+        return "diagnostics=\(diagnostics.label)"
+    }
+
+    /// Notice-harness diagnostics payload for `NoticePresentationUITests`
+    /// (issue #228): that harness renders no keyboard diagnostics element, so
+    /// the keyboard helper cannot serve the class. Existence-only queries (no
+    /// waits): this runs on the failure path, including the eager `XCTFail`
+    /// mount gate on a degraded AX stack.
+    func noticeDiagnosticsText(in app: XCUIApplication) -> String {
+        let scenario = app.staticTexts["vvterm.noticeTest.scenario.current"]
+        let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
+        return "noticeDiagnostics=appState=\(String(describing: app.state))"
+            + " scenario=\(scenario.exists ? scenario.label : "<missing>")"
+            + " scenarioMenu=\(menu.exists)"
+            + " sheets=\(app.sheets.firstMatch.exists)"
+    }
 }

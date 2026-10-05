@@ -3356,12 +3356,6 @@ final class TerminalKeyboardUITests: XCTestCase {
         return false
     }
 
-    private func diagnosticsText(in app: XCUIApplication) -> String {
-        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
-        guard diagnostics.exists else { return "diagnostics=<missing>" }
-        return "diagnostics=\(diagnostics.label)"
-    }
-
     private func requiredDiagnosticMetric(
         _ name: String,
         in app: XCUIApplication,
