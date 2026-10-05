@@ -1528,9 +1528,13 @@ final class TerminalKeyboardUITests: XCTestCase {
     }
 
     /// Bounded wait for a float-sized frame. Returns the first float-sized
-    /// frame, otherwise the settled frame at the timeout (`.zero` when the
-    /// keyboard no longer exists — a dismissal must classify as a divergence,
-    /// never as a capability gate).
+    /// frame, otherwise the settled frame at the timeout. A transient AX
+    /// non-existence during the keyboard's layout transition must not zero the
+    /// observation (measured #372: `keyboard.exists` flaps false for one poll
+    /// right after the float pinch and is true with the floating frame again
+    /// on the next poll); `.zero` is returned only when the keyboard is still
+    /// gone at the timeout — a dismissal must classify as a divergence, never
+    /// as a capability gate.
     private func observedKeyboardFrame(
         _ keyboard: XCUIElement,
         timeout: TimeInterval,
@@ -1538,10 +1542,11 @@ final class TerminalKeyboardUITests: XCTestCase {
     ) -> CGRect {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            guard keyboard.exists else { return .zero }
-            let frame = keyboard.frame
-            if frame.width < floatWidth {
-                return frame
+            if keyboard.exists {
+                let frame = keyboard.frame
+                if frame.width < floatWidth {
+                    return frame
+                }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
@@ -1563,10 +1568,16 @@ final class TerminalKeyboardUITests: XCTestCase {
         in app: XCUIApplication
     ) -> Bool {
         let screenFrame = app.frame
-        keyboard.pinch(withScale: 3, velocity: 2)
-        if waitForKeyboardFrame(keyboard, timeout: 5, matching: { frame in
+        let matchesDockedWidth: (CGRect) -> Bool = { frame in
             frame.width > screenFrame.width * 0.8
-        }) {
+        }
+        keyboard.pinch(withScale: 3, velocity: 2)
+        if waitForSettledKeyboardFrame(
+            keyboard,
+            timeout: 8,
+            settle: 1.6,
+            matching: matchesDockedWidth
+        ) != nil {
             return true
         }
 
@@ -1588,24 +1599,50 @@ final class TerminalKeyboardUITests: XCTestCase {
             withVelocity: .slow,
             thenHoldForDuration: 1
         )
-        return waitForKeyboardFrame(currentKeyboard, timeout: 5, matching: { frame in
-            frame.width > screenFrame.width * 0.8
-        })
+        return waitForSettledKeyboardFrame(
+            currentKeyboard,
+            timeout: 8,
+            settle: 1.6,
+            matching: matchesDockedWidth
+        ) != nil
     }
 
-    private func waitForKeyboardFrame(
+    /// Waits for a frame that satisfies `predicate` and is stable (two
+    /// consecutive samples within `tolerance` on all edges, sampled every
+    /// 0.3 s) and at least `settle` seconds after the driving gesture. The
+    /// settle bound is measured (#372): a float pinch issued ~0.1 s after the
+    /// pinch-open dock is eaten and the keyboard settles docked, while the
+    /// same pinch 2 s later floats it; the stable frame also keeps the
+    /// probe's pre-pinch reference from being a mid-animation frame.
+    private func waitForSettledKeyboardFrame(
         _ keyboard: XCUIElement,
         timeout: TimeInterval,
+        settle: TimeInterval,
+        tolerance: CGFloat = 2,
         matching predicate: (CGRect) -> Bool
-    ) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+    ) -> CGRect? {
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
+        var previous: CGRect?
         while Date() < deadline {
-            if keyboard.exists, predicate(keyboard.frame) {
-                return true
+            if keyboard.exists {
+                let frame = keyboard.frame
+                if predicate(frame),
+                   let previous,
+                   abs(frame.minX - previous.minX) <= tolerance,
+                   abs(frame.minY - previous.minY) <= tolerance,
+                   abs(frame.width - previous.width) <= tolerance,
+                   abs(frame.height - previous.height) <= tolerance,
+                   Date().timeIntervalSince(started) >= settle {
+                    return frame
+                }
+                previous = frame
+            } else {
+                previous = nil
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         }
-        return false
+        return nil
     }
 
     @MainActor
