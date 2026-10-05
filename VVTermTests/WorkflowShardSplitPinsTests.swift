@@ -117,8 +117,8 @@
 //  (8) the ledger categories are reason classes, not verified mechanisms —
 //  only `platformGated` is cross-checked against the declaration's gate; the
 //  pin never executes the in-code `XCTSkip` guard and never proves a reason
-//  true; the 20-character reason floor is a LENGTH floor for the 7
-//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×3, `platformGated`
+//  true; the 20-character reason floor is a LENGTH floor for the 6
+//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×2, `platformGated`
 //  ×1) — the other 27 rows are additionally protected by the `#N` check;
 //  (9) `liveTrackers` is a static Swift set, so the pin cannot query
 //  GitHub: a closed tracker stays green until a human removes it, and a
@@ -459,11 +459,13 @@ struct WorkflowShardSplitPinsTests {
 
     private static let allowlistPath = "scripts/ci/ui-test-allowlist.json"
 
-    /// 125 = the declared universe at d98e3aa3 (18 `XCTestCase` classes).
-    private static let expectedDeclaredMethodCount = 125
+    /// 124 = the declared universe at d98e3aa3 (18 `XCTestCase` classes) minus
+    /// the #364 deletion of `VVTermUITests/testLaunchPerformance`.
+    private static let expectedDeclaredMethodCount = 124
 
-    /// 34 = the exemption ledger (pre-existing never-scheduled debt only).
-    private static let expectedExemptionCount = 34
+    /// 33 = the exemption ledger after #364 deleted the `testLaunchPerformance`
+    /// launchPerf row.
+    private static let expectedExemptionCount = 33
 
     /// The seven categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
@@ -471,7 +473,7 @@ struct WorkflowShardSplitPinsTests {
         "ciQuarantined": 5,
         "capabilityGated": 1,
         "reproOnly": 3,
-        "launchPerf": 3,
+        "launchPerf": 2,
         "platformGated": 1,
         "unscheduled": 7,
     ]

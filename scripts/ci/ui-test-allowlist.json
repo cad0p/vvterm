@@ -2,7 +2,7 @@
   "_provenance": {
     "date": "2026-10-05",
     "issue": 362,
-    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3"
+    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3; #364 deleted VVTermUITests/testLaunchPerformance and dispositioned the never-scheduled rows"
   },
   "exemptions": [
     {
@@ -144,11 +144,6 @@
       "id": "VVTermUITests/VVTermUITests/testExample",
       "category": "launchPerf",
       "reason": "template test with no functional assertions; CI-gated in the method body (#45, closed with the skip) and kept for local template parity"
-    },
-    {
-      "id": "VVTermUITests/VVTermUITests/testLaunchPerformance",
-      "category": "launchPerf",
-      "reason": "measure-only benchmark with no pass/fail verdict; no performance baseline is configured - delete-vs-keep decision tracked in #364"
     },
     {
       "id": "VVTermUITests/VVTermUITestsLaunchTests/testLaunch",
