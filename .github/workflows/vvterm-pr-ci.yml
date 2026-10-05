@@ -184,6 +184,15 @@ jobs:
           python3 scripts/ci/check-artifact-dependencies.py --selftest
           python3 scripts/ci/check-artifact-dependencies.py
 
+      # Ghostty config acceptance check (issue #247): the generated config
+      # fixtures must load through the vendored libghostty with zero
+      # diagnostics. The fixture pin test keeps both files byte-identical to
+      # ConfigBuilder's output for the canonical inputs, so a key the core
+      # rejects reds here in ~1 s instead of only showing up in the field.
+      # No simulator, no build product, no cache (the probe compile is ~0.2 s).
+      - name: Check ghostty config against the vendored core
+        run: ./scripts/ci/check-ghostty-config.sh scripts/ci/fixtures/ghostty-config/generated-ios.config scripts/ci/fixtures/ghostty-config/generated-macos.config
+
       - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
         uses: ./.github/actions/prepare-xcode-build
         with:
