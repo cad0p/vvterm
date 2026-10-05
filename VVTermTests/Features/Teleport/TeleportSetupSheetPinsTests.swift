@@ -14,18 +14,19 @@
 //  but adding a bypass `switch chain.phase`, or a restored private wrapper)
 //  would silently re-create the mirror #369 closed.
 //
-//  This is the sixth copy of the WORKFLOW-pin idiom (`repositoryRoot()`
-//  honouring `VVTERM_PINS_SOURCE_ROOT` + YAML comment stripping) after
-//  `WorkflowArtifactDependencyPinsTests`,
+//  This is the sixth copy of the `repositoryRoot()` /
+//  `VVTERM_PINS_SOURCE_ROOT` pin idiom after the five workflow-pin files
+//  (`WorkflowArtifactDependencyPinsTests`,
 //  `WorkflowArtifactDependencyClassGatePinsTests`,
 //  `WorkflowXcodebuildFlagPinsTests`, `WorkflowPerPREventGatePinsTests` and
-//  `WorkflowShardSplitPinsTests`. Measured at the fold head: 6 `VVTermTests`
-//  files call `strippingYAMLComments`, and the `VVTERM_PINS_SOURCE_ROOT`
-//  override itself appears in 25 files across the other pin families.
-//  Extraction is DELIBERATELY DEFERRED for the same reason
-//  `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is small, and
-//  extraction would span six independent workflow-pin suites. Re-evaluate
-//  when a seventh workflow-pin file lands.
+//  `WorkflowShardSplitPinsTests`; those five use the YAML comment stripper,
+//  while this file strips Swift comments). Measured at the fold head: 6
+//  `VVTermTests` files call `strippingYAMLComments`, and the
+//  `VVTERM_PINS_SOURCE_ROOT` override itself appears in 25 files across the
+//  other pin families. Extraction is DELIBERATELY DEFERRED for the same
+//  reason `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is
+//  small, and extraction would span six independent pin suites. Re-evaluate
+//  when a seventh pin file lands.
 //
 //  COUNTERFACTUAL HOOK: `VVTERM_PINS_SOURCE_ROOT` points the scans at a copy
 //  of the tree; set it from the test process by exporting
@@ -84,6 +85,11 @@ struct TeleportSetupSheetPinsTests {
             // that function so an unrelated future literal elsewhere in these
             // 900+-line hosts cannot false-red the pin.
             let setupSheetBody = try functionRegion(named: "teleportSetupSheet", in: source)
+            // Guard the extractor's signature-shape assumption (closure lens
+            // NIT-5): the captured region must be the routing function, not a
+            // default-argument closure inside its signature.
+            #expect(count("TeleportSetupSheet(", in: setupSheetBody) == 1,
+                    "\(path): functionRegion did not capture the teleportSetupSheet body")
             for token in [".bootstrap", ".registration", ".login", ".ready"] {
                 #expect(count(token, in: setupSheetBody) == 0,
                         "\(path): phase-case token \(token) must not appear in teleportSetupSheet")

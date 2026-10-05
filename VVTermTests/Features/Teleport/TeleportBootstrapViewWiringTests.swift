@@ -299,9 +299,10 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     ///
     /// This test intentionally exercises the BUGGY inline pattern as a
     /// permanent regression marker. Production wiring NO LONGER uses inline
-    /// construction — `ServerSidebarView.teleportSetupSheet` and
-    /// `ServerFormSheet` now wrap the coordinator in `@StateObject` via
-    /// `TeleportBootstrapSheet` (see b530ed9). The companion test
+    /// construction — `ServerSidebarView.teleportSetupSheet` now wraps the
+    /// coordinator in `@StateObject` through the shared `TeleportSetupSheet`
+    /// (its `TeleportBootstrapSheet`), and `ServerFormSheet` uses the same
+    /// shared wrapper directly (see b530ed9, #369). The companion test
     /// `testBootstrapSuccess_firesOnSuccess_whenCoordinatorHeldInStateObject`
     /// proves the `@StateObject` wiring fires `onSuccess` correctly.
     ///
