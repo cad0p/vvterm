@@ -31,6 +31,18 @@
 //  emits trailing blank lines); never trim it — `git diff --check` flags it,
 //  but the byte pin would red (issue #247 impl lens 3 F4).
 //
+//  Defeat list, stated honestly (fold round 1 closure lens N1/N3/N4). The
+//  default-argument assertions are text containment over the declaration
+//  region, so the same text inside a string literal in that region satisfies
+//  them — a comment does not (comments are stripped before the scan, verified
+//  with a comment-bearing mutant). `stepText` widens past an unnamed
+//  `- uses:` step (every current step is named, so this is contrived), and
+//  `canonical_theme` is duplicated between this suite and
+//  `check-ghostty-config.sh`, so a one-sided edit reds the check
+//  (fail-closed) rather than drifting silently. None of these can make the
+//  check pass a config the core rejects; they only weaken the pin's mutation
+//  coverage.
+//
 //  Refresh path: a builder text change regenerates both fixtures from the
 //  canonical inputs in the same PR —
 //    - iOS:   configContent(primaryFontFamily: "Menlo", fontSize: 13,
