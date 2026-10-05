@@ -495,8 +495,10 @@ struct ServerFormSheet: View {
                     TeleportLoginSheet(
                         makeCoordinator: { makeLoginCoordinator() },
                         cluster: teleportCluster,
-                        server: server,
-                        serverManager: serverManager,
+                        storedHostLogin: server.teleportHostLogin,
+                        persistHostLogin: { login in
+                            try await serverManager.setTeleportHostLogin(login, for: server.id)
+                        },
                         reuseNotice: teleportReuseSourceName.map {
                             String(format: String(localized: "Using the existing device registration from %@."), $0)
                         },
@@ -1532,156 +1534,6 @@ struct ServerFormSheet: View {
                     self.isSaving = false
                 }
             }
-        }
-    }
-}
-
-// MARK: - Teleport phase sheet wrappers
-//
-// Each Teleport phase view (bootstrap / registration / login) observes its
-// coordinator via `@ObservedObject`. The coordinator MUST be held in a
-// `@StateObject`-backed wrapper so SwiftUI creates it once (when the sheet
-// first appears) and preserves its identity across the PARENT view's body
-// re-evaluations. Constructing the coordinator inline in the `.sheet` content
-// (the previous wiring) orphaned the coordinator that reached `.success`
-// when the parent re-rendered during the async POST — the sheet's
-// `.onChange(of: coordinator.state)` then observed a fresh `.idle`
-// coordinator, so `onSuccess` never fired (the live-device "stuck on Waiting
-// for Safari approval" bug).
-
-private struct TeleportBootstrapSheet: View {
-    let makeCoordinator: () -> TeleportBootstrapCoordinator
-    let cluster: TeleportCluster
-    let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
-    let onCancel: () -> Void
-
-    @StateObject private var coordinator: TeleportBootstrapCoordinator
-
-    @MainActor
-    init(
-        makeCoordinator: @escaping () -> TeleportBootstrapCoordinator,
-        cluster: TeleportCluster,
-        onSuccess: @escaping (TeleportBootstrapCoordinator.BootstrapResult) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.makeCoordinator = makeCoordinator
-        self.cluster = cluster
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
-        _coordinator = StateObject(wrappedValue: makeCoordinator())
-    }
-
-    var body: some View {
-        TeleportBootstrapView(
-            coordinator: coordinator,
-            cluster: cluster,
-            onSuccess: onSuccess,
-            onCancel: onCancel
-        )
-    }
-}
-
-private struct TeleportRegistrationSheet: View {
-    let makeCoordinator: () -> TeleportRegistrationCoordinator
-    let cluster: TeleportCluster
-    let bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult
-    let onSuccess: () -> Void
-    let onCancel: () -> Void
-
-    @StateObject private var coordinator: TeleportRegistrationCoordinator
-
-    @MainActor
-    init(
-        makeCoordinator: @escaping () -> TeleportRegistrationCoordinator,
-        cluster: TeleportCluster,
-        bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult,
-        onSuccess: @escaping () -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.makeCoordinator = makeCoordinator
-        self.cluster = cluster
-        self.bootstrapResult = bootstrapResult
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
-        _coordinator = StateObject(wrappedValue: makeCoordinator())
-    }
-
-    var body: some View {
-        TeleportRegistrationView(
-            coordinator: coordinator,
-            cluster: cluster,
-            bootstrapResult: bootstrapResult,
-            onSuccess: onSuccess,
-            onCancel: onCancel
-        )
-    }
-}
-
-private struct TeleportLoginSheet: View {
-    let makeCoordinator: () -> TeleportLoginCoordinator
-    let cluster: TeleportCluster
-    let server: Server
-    /// The host's injected manager (never the `.shared` singleton: a
-    /// test/preview/injected composition root must persist to its own store).
-    let serverManager: ServerManager
-    var reuseNotice: String? = nil
-    let onSuccess: (String) -> Void
-    let onCancel: () -> Void
-
-    @StateObject private var coordinator: TeleportLoginCoordinator
-
-    /// The last persist failure, shown as an alert while the sheet stays
-    /// open so the user can retry (dismissing would silently lose the pick).
-    @State private var persistErrorMessage: String?
-
-    @MainActor
-    init(
-        makeCoordinator: @escaping () -> TeleportLoginCoordinator,
-        cluster: TeleportCluster,
-        server: Server,
-        serverManager: ServerManager,
-        reuseNotice: String? = nil,
-        onSuccess: @escaping (String) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.makeCoordinator = makeCoordinator
-        self.cluster = cluster
-        self.server = server
-        self.serverManager = serverManager
-        self.reuseNotice = reuseNotice
-        self.onSuccess = onSuccess
-        self.onCancel = onCancel
-        _coordinator = StateObject(wrappedValue: makeCoordinator())
-    }
-
-    var body: some View {
-        TeleportLoginView(
-            coordinator: coordinator,
-            cluster: cluster,
-            storedHostLogin: server.teleportHostLogin,
-            onSuccess: { login in
-                Task { @MainActor in
-                    do {
-                        try await serverManager.setTeleportHostLogin(login, for: server.id)
-                        onSuccess(login)
-                    } catch {
-                        persistErrorMessage = error.localizedDescription
-                    }
-                }
-            },
-            onCancel: onCancel,
-            reuseNotice: reuseNotice
-        )
-        .alert(
-            String(localized: "Couldn't Save the Host Login"),
-            isPresented: Binding(
-                get: { persistErrorMessage != nil },
-                set: { if !$0 { persistErrorMessage = nil } }
-            )
-        ) {
-            Button(String(localized: "OK"), role: .cancel) { persistErrorMessage = nil }
-        } message: {
-            Text(persistErrorMessage ?? "")
         }
     }
 }

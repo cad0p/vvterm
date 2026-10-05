@@ -6,25 +6,29 @@
 //  Regression tests for the Teleport phase-chaining fix in the
 //  prompt-on-connect (sidebar) flow.
 //
-//  Bug: `ServerSidebarView.teleportSetupSheet`'s `onSuccess` callbacks for
+//  Bug (fixed by #272): the setup sheet's `onSuccess` callbacks for
 //  `.needsBootstrap` and `.needsRegistration` just dismissed the sheet
 //  (or re-ran bootstrap) instead of chaining to the next phase. The user
 //  saw "bootstrap succeeded" but no registration sheet appeared.
 //
-//  Fix: the bootstrap `onSuccess` now stores the `BootstrapResult` in view
-//  state and flips `teleportSetupReadiness` to `.needsRegistration`, which
-//  re-renders the same sheet as `TeleportRegistrationView` (phase 2) using
-//  the in-memory TLS keypair — no keychain persistence, no Phase-1 redo.
+//  The chain is now single-source (issue #369): `TeleportPhaseChain` decides
+//  the phase and the shared `TeleportSetupSheet` renders it. Bootstrap
+//  success stores the `BootstrapResult` and advances to registration, which
+//  re-renders the same sheet as `TeleportRegistrationView` using the
+//  in-memory TLS keypair — no keychain persistence, no Phase-1 redo.
 //
 //  These tests verify the chain end-to-end via the
-//  `TeleportPhaseChainUITestHarness` (which mirrors the fixed production
-//  routing) against the mock coordinators.
+//  `TeleportPhaseChainUITestHarness`, which presents the SHARED production
+//  `TeleportSetupSheet` (the production routing view) with mock coordinators.
+//  The host call-site composition (readiness capture + presentation binding)
+//  is pinned by `TeleportSetupSheetPinsTests`, not exercised here.
 //
 //  Launch-arg contract (parsed by TeleportPhaseChainUITestHarness+iOS.swift):
 //    --vvterm-ui-test-teleport-phase-chain   enables the harness
 //
 //  See:
-//    - VVTerm/Features/Servers/UI/Sidebar/ServerSidebarView.swift (the fix)
+//    - VVTerm/Features/Teleport/UI/TeleportSetupSheet.swift (the shared routing)
+//    - VVTerm/Features/Teleport/Application/TeleportPhaseChain.swift (the rule)
 //    - VVTerm/App/iOS/TeleportPhaseChainUITestHarness+iOS.swift (the harness)
 //
 
@@ -237,14 +241,14 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // `begin` calls and the harness renders the count outside the sheet, so
         // it survives the bootstrap → registration swap. A second (fallback)
         // bootstrap would increment it to 2.
-        let readiness = app.staticTexts["vvterm.teleport.phaseChainHarness.readiness"]
+        let bootstrapBeginsLabel = app.staticTexts["vvterm.teleport.phaseChainHarness.bootstrapBegins"]
         XCTAssertTrue(
-            readiness.waitForExistence(timeout: 5),
-            "the harness readiness label should be visible after the transition"
+            bootstrapBeginsLabel.waitForExistence(timeout: 5),
+            "the harness bootstrapBegins label should be visible after the transition"
         )
         XCTAssertTrue(
-            waitForLabel("bootstrapBegins: 1", in: readiness),
-            "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count; readiness label was \(readiness.label)"
+            waitForLabel("bootstrapBegins: 1", in: bootstrapBeginsLabel),
+            "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count; label was \(bootstrapBeginsLabel.label)"
         )
 
         attachScreenshot(app, named: "phaseChain-no-bootstrap-rerun")
@@ -289,6 +293,34 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
             "registration sheet should NOT persist — it should have transitioned to login"
         )
 
-        attachScreenshot(app, named: "phaseChain-3-login-sheet")
+        // Tap Sign in → the mock login coordinator (happyPath) succeeds and
+        // the host-login step appears with a Continue button.
+        XCTAssertTrue(waitForHittable(signInButton), "Sign in button must be hittable")
+        signInButton.tap()
+        let loginContinue = app.buttons["vvterm.teleport.login.continueButton"]
+        XCTAssertTrue(
+            loginContinue.waitForExistence(timeout: 8),
+            "the host-login step (Continue button) should appear after Face ID succeeds"
+        )
+        attachScreenshot(app, named: "phaseChain-3-login-hostLogin")
+
+        // Continue persists the host login (no-op in the harness) and the
+        // shared sheet's login success calls `onFinish`, dismissing the sheet.
+        //
+        // `signInButton` renders only in login `.idle` and disappears as soon
+        // as the coordinator leaves it, so its absence is NOT a dismissal
+        // signal. Assert the host-login step is gone AND the harness row is
+        // interactive again: the sheet must actually dismiss.
+        XCTAssertTrue(waitForHittable(loginContinue), "host-login Continue must be hittable")
+        loginContinue.tap()
+
+        XCTAssertTrue(
+            loginContinue.waitForNonExistence(timeout: 8),
+            "the host-login step should be gone after Continue — login success must finish the chain"
+        )
+        XCTAssertTrue(
+            waitForHittable(serverRow(app)),
+            "the harness row must be hittable again — the setup sheet must have dismissed"
+        )
     }
 }

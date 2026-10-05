@@ -22,8 +22,8 @@
 //    is never invoked and the sheet shows `waitingBlock` forever.
 //
 //  The UI-test harnesses (`TeleportPhaseChainUITestHarness`) do NOT reproduce
-//  this because they hold the coordinator in `@StateObject` (see
-//  `PhaseChainBootstrapSheet`), which preserves identity across body re-evals.
+//  this because they hold the coordinator in `@StateObject` (see the shared
+//  `TeleportBootstrapSheet`), which preserves identity across body re-evals.
 //
 //  These unit tests host a parent view that mirrors the production inline
 //  construction pattern, drive the REAL `TeleportBootstrapCoordinator` (with a
@@ -299,9 +299,10 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     ///
     /// This test intentionally exercises the BUGGY inline pattern as a
     /// permanent regression marker. Production wiring NO LONGER uses inline
-    /// construction — `ServerSidebarView.teleportSetupSheet` and
-    /// `ServerFormSheet` now wrap the coordinator in `@StateObject` via
-    /// `TeleportBootstrapSheet` (see b530ed9). The companion test
+    /// construction — `ServerSidebarView.teleportSetupSheet` now wraps the
+    /// coordinator in `@StateObject` through the shared `TeleportSetupSheet`
+    /// (its `TeleportBootstrapSheet`), and `ServerFormSheet` uses the same
+    /// shared wrapper directly (see b530ed9, #369). The companion test
     /// `testBootstrapSuccess_firesOnSuccess_whenCoordinatorHeldInStateObject`
     /// proves the `@StateObject` wiring fires `onSuccess` correctly.
     ///
