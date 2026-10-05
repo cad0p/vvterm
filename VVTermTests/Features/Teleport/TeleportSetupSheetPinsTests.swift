@@ -14,14 +14,18 @@
 //  but adding a bypass `switch chain.phase`, or a restored private wrapper)
 //  would silently re-create the mirror #369 closed.
 //
-//  This is the SIXTH copy of the `repositoryRoot()` / comment-strip pin idiom
-//  (after `WorkflowArtifactDependencyPinsTests`,
+//  This is the sixth copy of the WORKFLOW-pin idiom (`repositoryRoot()`
+//  honouring `VVTERM_PINS_SOURCE_ROOT` + YAML comment stripping) after
+//  `WorkflowArtifactDependencyPinsTests`,
 //  `WorkflowArtifactDependencyClassGatePinsTests`,
 //  `WorkflowXcodebuildFlagPinsTests`, `WorkflowPerPREventGatePinsTests` and
-//  `WorkflowShardSplitPinsTests`). Extraction is DELIBERATELY DEFERRED for the
-//  same reason `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is
-//  small, and extraction would span six independent pin suites. Re-evaluate
-//  when a seventh pin file lands.
+//  `WorkflowShardSplitPinsTests`. Measured at the fold head: 6 `VVTermTests`
+//  files call `strippingYAMLComments`, and the `VVTERM_PINS_SOURCE_ROOT`
+//  override itself appears in 25 files across the other pin families.
+//  Extraction is DELIBERATELY DEFERRED for the same reason
+//  `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is small, and
+//  extraction would span six independent workflow-pin suites. Re-evaluate
+//  when a seventh workflow-pin file lands.
 //
 //  COUNTERFACTUAL HOOK: `VVTERM_PINS_SOURCE_ROOT` points the scans at a copy
 //  of the tree; set it from the test process by exporting
@@ -76,10 +80,23 @@ struct TeleportSetupSheetPinsTests {
 
             // A bypass `switch chain.phase { case .bootstrap: … }` kept beside
             // the shared-sheet call (CF-8): none of the phase-case tokens may
-            // appear in a call site.
+            // appear in the `teleportSetupSheet` body. The scan is scoped to
+            // that function so an unrelated future literal elsewhere in these
+            // 900+-line hosts cannot false-red the pin.
+            let setupSheetBody = try functionRegion(named: "teleportSetupSheet", in: source)
             for token in [".bootstrap", ".registration", ".login", ".ready"] {
-                #expect(count(token, in: source) == 0,
-                        "\(path): phase-case token \(token) must not appear in a call site")
+                #expect(count(token, in: setupSheetBody) == 0,
+                        "\(path): phase-case token \(token) must not appear in teleportSetupSheet")
+            }
+
+            // A direct wrapper call beside the shared-sheet call would bypass
+            // the single routing switch (the `if readiness == …` re-inline
+            // shape the token scan above cannot see).
+            for wrapperCall in [
+                "TeleportBootstrapSheet(", "TeleportRegistrationSheet(", "TeleportLoginSheet("
+            ] {
+                #expect(count(wrapperCall, in: source) == 0,
+                        "\(path): direct \(wrapperCall) call bypasses the shared routing switch")
             }
 
             // The call-site composition shape: every invocation label once.
@@ -151,6 +168,12 @@ struct TeleportSetupSheetPinsTests {
             #expect(count(wrapper, in: source) == 0,
                     "TeleportPhaseChainUITestHarness+iOS.swift: \(wrapper) must be deleted")
         }
+        for wrapperCall in [
+            "TeleportBootstrapSheet(", "TeleportRegistrationSheet(", "TeleportLoginSheet("
+        ] {
+            #expect(count(wrapperCall, in: source) == 0,
+                    "TeleportPhaseChainUITestHarness+iOS.swift: direct \(wrapperCall) call bypasses the shared routing switch")
+        }
     }
 
     // MARK: - Helpers
@@ -164,6 +187,31 @@ struct TeleportSetupSheetPinsTests {
             searchRange = range.upperBound..<source.endIndex
         }
         return count
+    }
+
+    /// The brace-balanced body of `private func <name>(`, used to scope the
+    /// phase-token scan to the routing function instead of the whole host file.
+    private func functionRegion(named name: String, in source: String) throws -> String {
+        guard let start = source.range(of: "private func \(name)(") else {
+            throw PinFailure("could not find private func \(name)( in the source")
+        }
+        var depth = 0
+        var sawBrace = false
+        var index = start.lowerBound
+        while index < source.endIndex {
+            let character = source[index]
+            if character == "{" {
+                depth += 1
+                sawBrace = true
+            } else if character == "}" {
+                depth -= 1
+                if sawBrace, depth == 0 {
+                    return String(source[start.lowerBound...index])
+                }
+            }
+            index = source.index(after: index)
+        }
+        throw PinFailure("private func \(name)( is not brace-terminated")
     }
 
     private func strippedSource(at relativePath: String) throws -> String {

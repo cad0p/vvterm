@@ -106,7 +106,13 @@ struct TeleportPhaseChainTests {
 
     @Test
     func loginSucceededReachesReadyAndClearsResult() throws {
-        var chain = TeleportPhaseChain(readiness: .needsLogin)
+        var chain = TeleportPhaseChain(readiness: .needsBootstrap)
+        chain.bootstrapSucceeded(try TeleportFixtureSupport.makeBootstrapResult())
+        chain.registrationSucceeded()
+
+        // Seed the result first, so the nil assertion below actually proves
+        // `loginSucceeded()` clears it (an unseeded chain is nil either way).
+        #expect(chain.bootstrapResult != nil)
 
         chain.loginSucceeded()
 
