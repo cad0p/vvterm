@@ -193,9 +193,9 @@ struct TeleportIOSServerListUITestHarness: View {
     // MARK: - Sheet routing (replicates ServerListScreen.teleportSetupSheet)
 
     /// Maps a readiness state to the sheet the production router presents.
-    /// NOTE: production routes `needsRegistration` BACK to bootstrap (the TLS
-    /// keypair isn't persisted between Phase 1 and Phase 2). We replicate
-    /// that exact behavior here so the test asserts what the code ACTUALLY does.
+    /// NOTE: a fresh `needsRegistration` with no in-memory result routes to
+    /// bootstrap (the TLS keypair isn't persisted between Phase 1 and Phase 2).
+    /// This harness has no in-memory result, so it replicates that path.
     private func sheetKind(for readiness: TeleportDeviceReadiness) -> SheetKind {
         // The #272 dismissal mode drives the bootstrap sheet (the empty mock
         // key ring probes as needsBootstrap) with the parent-owned suspended

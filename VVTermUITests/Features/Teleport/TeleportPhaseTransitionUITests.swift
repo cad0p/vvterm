@@ -17,8 +17,8 @@
 //  the in-memory TLS keypair — no keychain persistence, no Phase-1 redo.
 //
 //  These tests verify the chain end-to-end via the
-//  `TeleportPhaseChainUITestHarness` (which mirrors the fixed production
-//  routing) against the mock coordinators.
+//  `TeleportPhaseChainUITestHarness`, which presents the SHARED production
+//  `TeleportSetupSheet` (the production routing view) with mock coordinators.
 //
 //  Launch-arg contract (parsed by TeleportPhaseChainUITestHarness+iOS.swift):
 //    --vvterm-ui-test-teleport-phase-chain   enables the harness
@@ -287,6 +287,23 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         XCTAssertFalse(
             registrationContinue.exists,
             "registration sheet should NOT persist — it should have transitioned to login"
+        )
+
+        // Tap Sign in → the mock login coordinator (happyPath) succeeds and
+        // the host-login step appears with a Continue button.
+        signInButton.tap()
+        let loginContinue = app.buttons["vvterm.teleport.login.continueButton"]
+        XCTAssertTrue(
+            loginContinue.waitForExistence(timeout: 8),
+            "the host-login step (Continue button) should appear after Face ID succeeds"
+        )
+        loginContinue.tap()
+
+        // Continue persists the host login (no-op in the harness) and the
+        // shared sheet's login success calls `onFinish`, dismissing the sheet.
+        XCTAssertTrue(
+            signInButton.waitForNonExistence(timeout: 8),
+            "the login sheet should dismiss after Continue — login success must finish the chain"
         )
 
         attachScreenshot(app, named: "phaseChain-3-login-sheet")
