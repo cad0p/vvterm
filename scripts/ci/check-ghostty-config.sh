@@ -30,6 +30,22 @@ vendor_root="$repo_root/Vendor/libghostty"
 probe_source="$script_dir/ghostty-config-probe.c"
 internal_library="$vendor_root/GhosttyKit.xcframework/macos-arm64_x86_64/ghostty-internal.a"
 
+# The canonical fixtures carry the app's bundled theme as a bare name
+# (`theme = "Aizen Light"`), which the core resolves through
+# `GHOSTTY_RESOURCES_DIR/themes` (then the XDG config dir). A developer shell
+# running inside Ghostty.app exports GHOSTTY_RESOURCES_DIR to the installed
+# app, so the check passed there and failed on a clean runner (CI run
+# 37377696869, `theme … not found`): the check is only portable if it pins the
+# repo's bundled resources itself. Overriding the variable unconditionally also
+# makes a dev-host run validate the same resources CI validates (issue #247,
+# impl lens 1/2/3 B1).
+resources_dir="$repo_root/VVTerm/Resources/ghostty"
+export GHOSTTY_RESOURCES_DIR="$resources_dir"
+
+# The canonical theme the fixtures use; kept in sync with the pin suite's
+# `canonicalTheme` (VVTermTests/GhosttyGeneratedConfigFixturePinsTests.swift).
+canonical_theme="Aizen Light"
+
 fail() {
   printf 'check-ghostty-config: %s\n' "$1" >&2
   exit 1
@@ -40,6 +56,9 @@ if [ ! -f "$probe_source" ]; then
 fi
 if [ ! -f "$internal_library" ]; then
   fail "vendored macOS libghostty slice is missing: $internal_library"
+fi
+if [ ! -f "$resources_dir/themes/$canonical_theme" ]; then
+  fail "the bundled theme the canonical fixtures use is missing: $resources_dir/themes/$canonical_theme — the fixtures' bare-name theme cannot resolve (issue #247)"
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/vvterm-ghostty-config.XXXXXX")"
@@ -101,6 +120,12 @@ for config_path in "$@"; do
   if [ ! -f "$config_path" ]; then
     fail "config is not an existing regular file: $config_path (the probe alone exits 0 on a missing path, so this is guarded here)"
   fi
+  if [ ! -s "$config_path" ]; then
+    fail "config is empty: $config_path — the probe reports zero diagnostics for arbitrary text, so an empty fixture would pass silently (issue #247)"
+  fi
+  if ! grep -q '^font-size = ' "$config_path"; then
+    fail "config does not carry the generated 'font-size = ' directive: $config_path — the probe reports zero diagnostics for arbitrary text, so the fixture shape is guarded here (issue #247)"
+  fi
 
   absolute_dir="$(cd "$(dirname "$config_path")" 2>/dev/null && pwd)" || fail "could not resolve the directory of: $config_path"
   absolute_path="$absolute_dir/$(basename "$config_path")"
@@ -110,9 +135,15 @@ for config_path in "$@"; do
   printf '%s:\n' "$absolute_path"
   if [ "$probe_status" -eq 0 ]; then
     printf '  no diagnostics\n'
-  else
+  elif [ "$probe_status" -eq 1 ]; then
     printf '%s\n' "$probe_output" | sed 's/^/  /'
     status=1
+  else
+    # Exit 2 is the probe's usage/`ghostty_init` failure; a signal or crash
+    # lands anywhere else. Those are infrastructure failures, not core
+    # diagnostics, and must not be reported as a rejected config (issue #247,
+    # impl lens 1 finding 5).
+    fail "the probe failed to run for $absolute_path (exit $probe_status) — this is an infrastructure failure, not a core diagnostic: $probe_output"
   fi
 done
 
