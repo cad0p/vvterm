@@ -239,12 +239,6 @@ final class TerminalLinkTapUITests: XCTestCase {
         }
     }
 
-    private func diagnosticsText(in app: XCUIApplication) -> String {
-        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
-        guard diagnostics.exists else { return "diagnostics=<missing>" }
-        return "diagnostics=\(diagnostics.label)"
-    }
-
     private func waitForDiagnosticMetrics(
         in app: XCUIApplication,
         timeout: TimeInterval = 8,
