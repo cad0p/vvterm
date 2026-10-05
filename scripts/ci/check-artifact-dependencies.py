@@ -944,7 +944,8 @@ body-classifies each cell and asserts its class's runtime verdict
 cells (family F 12, the reconstructed comparator 24, the preserved fuzz
 6) plus the three boundary fixtures — collapsing to 31 distinct removal
 bodies (the 12 family-F removals are byte-identical to 12 of the
-comparator's): 12 benign modelled env writes (runtime NOFLIP), 18
+comparator's, and the two ANSI-C boundary fixtures duplicate further
+F/FC cells): 12 benign modelled env writes (runtime NOFLIP), 18
 `_is_parseint_literal` policy accepts (12 runtime-FLIP, 6 NOFLIP because
 the `SOURCE_RUN_ID=0` literal leaves the seeded line in place) and the one
 malformed `;;` shape (bash parse error, nothing executes; runtime NOFLIP);
@@ -1027,7 +1028,10 @@ word carries the opener and neither the relevance descent nor the body
 scan ever sees it (the fold-round-1 guard-widening candidate is measured
 to leave the witness ACCEPT — the tokenizer never yields a `<(…` word),
 pinned by `accept-runid-github-env-write-subst-procsub-direct-target`
-(runtime FLIP, the over-claim the fold removed); the `>8` continuation
+(runtime FLIP, the over-claim the fold removed); the pin covers the two
+`:` spellings, and the bare/`echo`/`cat <(…)` spellings of the same class
+are also measured ACCEPT + runtime FLIP and stay open under this class
+sentence (not limited to the pinned spellings); the `>8` continuation
 bound, sed `-f` script bodies and the remaining #350 classes (items 3–6,
 8, 10, 11, 15) stay open. Two over-refusals are shipped as
 `reject-overrefusal-*` pins (a substitution/eval inner target that is a
