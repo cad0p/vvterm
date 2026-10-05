@@ -945,7 +945,7 @@ an unproven-value write. The two boundary fixtures
 `accept-runid-github-env-write-ansic-parseint-tail`) carry `base_exit: 1`
 and are the only ids in `A17_BASE_REFUSAL_REMOVALS`.
 (ix-b) inner-target relevance propagation: `_substitution_body_relevant_names`
-descends into every `$(…)`/backtick/`<(…)` body (bounded by the
+descends into every `$(…)`/backtick body (bounded by the
 substitution depth limit) and re-adds each inner argv write target's base
 name to the relevance set, on the physical line and on both joined
 continuation pre-passes, so the read-populated `arr` in
@@ -975,14 +975,14 @@ and `/x/s/…` spellings are closed through the reused address grammar; the
 parse time). Both macOS FreeBSD sed and GNU sed 4.10 write via all tested
 spellings; `--expression=`/`--e=` are GNU-only at runtime (FreeBSD sed
 rejects the option), which is recorded, not claimed. Measured at A17: the
-fixture corpus is 792/792 cases (361 declare `base_exit`); the fold adds
-37 fixtures (28 rejects including 2 documented over-refusals and 9
+fixture corpus is 793/793 cases (362 declare `base_exit`); the fold adds
+37 fixtures (27 rejects including 2 documented over-refusals and 10
 boundary accepts) and moves the former
 `accept-runid-github-env-write-array-element-cmdsub-continuation` pin to
-the reject set; the generated families F (50 cells) + G (43) + H (140) +
-FC (108 restored comparator) report 341 cells, 0 family-expected
-mismatches, 170 base-ACCEPT→head-REFUSE additions and the 36 family
-removals above (F 12 + FC 24); the preserved 672-cell ANSI-C fuzz reports
+the reject set (a 38th corpus change); the generated families F (50 cells)
++ G (43) + H (140) + FC (108 restored comparator) report 341 cells, 0
+family-expected mismatches, 170 base-ACCEPT→head-REFUSE additions and the
+36 family removals above (F 12 + FC 24); the preserved 672-cell ANSI-C fuzz reports
 6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts; the
 preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
 ACCEPT→REFUSE against `cf1b75af`; the mutant matrix re-runs the 12 #350c
@@ -997,7 +997,15 @@ trailing-backslash shape is a distinct tokenizer state and stays ACCEPT
 (pinned by `accept-runid-github-env-write-ansic-multiline-trailing-backslash`,
 runtime FLIP); item 8's `$'\\105'` name-concat stays ACCEPT (pinned by
 `accept-runid-github-env-write-ansic-octal-name-concat-target`, runtime
-FLIP) because the lexer does not decode escapes; the `>8` continuation
+FLIP) because the lexer does not decode escapes; the direct
+process-substitution body write (`: <(cp payload "${arr[0]}")`,
+`: >(cp payload "${arr[0]}")`) is a named residual: `_shell_tokens` splits
+the `<( … )`/`>( … )` opener into a `<`/`>` operator plus a `(`-word, so no
+word carries the opener and neither the relevance descent nor the body
+scan ever sees it (the fold-round-1 guard-widening candidate is measured
+to leave the witness ACCEPT — the tokenizer never yields a `<(…` word),
+pinned by `accept-runid-github-env-write-subst-procsub-direct-target`
+(runtime FLIP, the over-claim the fold removed); the `>8` continuation
 bound, sed `-f` script bodies and the remaining #350 classes (items 3–6,
 8, 10, 11, 15) stay open. Two over-refusals are shipped as
 `reject-overrefusal-*` pins (a substitution/eval inner target that is a
@@ -1048,7 +1056,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 792
+EXPECTED_MANIFEST_CASES = 793
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1066,7 +1074,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 361
+EXPECTED_BASE_VERDICT_CASES = 362
 # #350d: the escape-aware ANSI-C lexer is not refusal-monotone. The old
 # swallow produced a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n'
 # >> "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled

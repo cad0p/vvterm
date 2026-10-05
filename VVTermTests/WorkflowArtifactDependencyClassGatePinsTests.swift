@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 792
-    private static let expectedBaseVerdictCases = 361
+    private static let expectedManifestCases = 793
+    private static let expectedBaseVerdictCases = 362
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -1012,6 +1012,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-ansic-benign-env-tail.yml",
         "accept-runid-github-env-write-ansic-parseint-tail.yml",
         "accept-runid-github-env-write-ansic-multiline-trailing-backslash.yml",
+        "accept-runid-github-env-write-subst-procsub-direct-target.yml",
         "accept-runid-github-env-write-sed-sflag-benign-literal.yml",
         "accept-runid-github-env-write-sed-sflag-no-w.yml",
         "accept-runid-github-env-write-sed-sflag-w-in-replacement.yml",

@@ -7119,6 +7119,14 @@ CASES = [
         "diagnostics": [],
     },
     {
+        "id": "accept-runid-github-env-write-subst-procsub-direct-target",
+        "files": ["accept-runid-github-env-write-subst-procsub-direct-target.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [],
+    },
+    {
         "id": "accept-runid-github-env-write-sed-sflag-benign-literal",
         "files": ["accept-runid-github-env-write-sed-sflag-benign-literal.yml"],
         "exit": 0,
