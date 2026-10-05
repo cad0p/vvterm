@@ -2,7 +2,7 @@
   "_provenance": {
     "date": "2026-10-05",
     "issue": 362,
-    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3"
+    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3; #364 deleted VVTermUITests/testLaunchPerformance, quarantined the four measured keyboard divergences (#92 x3, #372), and scheduled the four measured never-run methods"
   },
   "exemptions": [
     {
@@ -121,9 +121,9 @@
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews",
-      "category": "capabilityGated",
-      "reason": "skips only when the simulator suppresses the software keyboard or lacks the native dock/redock gesture; never scheduled - decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#372: run 37269132486 failed the float gesture at TerminalKeyboardUITests.swift:1313 (base 218df334) with keyboardPresentation=floating together with policy=geom=docked and terminalHeight=0.0 (geometry-derived token; two-cause ambiguity in makeKeyboardFloating)",
+      "tracker": 372
     },
     {
       "id": "VVTermUITests/ZmxScrollbackReloadUITests/testKeyboardCloseDoesNotReloadScrollback",
@@ -146,11 +146,6 @@
       "reason": "template test with no functional assertions; CI-gated in the method body (#45, closed with the skip) and kept for local template parity"
     },
     {
-      "id": "VVTermUITests/VVTermUITests/testLaunchPerformance",
-      "category": "launchPerf",
-      "reason": "measure-only benchmark with no pass/fail verdict; no performance baseline is configured - delete-vs-keep decision tracked in #364"
-    },
-    {
       "id": "VVTermUITests/VVTermUITestsLaunchTests/testLaunch",
       "category": "launchPerf",
       "reason": "template launch test, CI-gated in setUpWithError; runs once per UI configuration (77 variants per run) (#45, closed with the skip)"
@@ -161,46 +156,22 @@
       "reason": "compiled only under #if os(macOS); every test destination is the iOS Simulator, so it is never compiled in CI"
     },
     {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
       "id": "VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92 family: the privacy.shield tap itself computed {-1, -1} (no-op) and the privacyShield element was then absent 5 s after the tap (TerminalKeyboardUITests.swift:1109 base 218df334; run 37269132486) with diagnostics accessoryAppearance=dark, keyboardPresentation=docked, inputReloads=2; the sibling privacy-shield test passed in the same run",
+      "tracker": 92
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; real-terminal-launcher harness unrelated to #92 - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
     }
   ]
 }

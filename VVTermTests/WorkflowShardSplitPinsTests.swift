@@ -10,8 +10,8 @@
 //  and the recorded per-bin median sums must still match the fixture that
 //  documents where they came from. The fixture is
 //  `scripts/ci/shard-split-medians.json`: the 88 per-method medians over the
-//  41-run qualifying population plus the three #277 local-calibration medians
-//  and its provenance. Without this pin, a list
+//  41-run qualifying population plus the #277 CI-calibration medians and the
+//  four #364 CI-calibrated medians, with provenance. Without this pin, a list
 //  that silently drops a method, names a method that no longer exists, splits
 //  the #227 pair, or drifts away from the recorded fixture is invisible —
 //  the workflow is prose the compiler cannot check.
@@ -31,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  555.4 / 612.9 / 681.7 / 598.1. The exact sums are
-//  555.408 / 612.882 / 681.724 / 598.127 s, so the |sum − literal| deltas are
-//  0.008 / 0.018 / 0.024 / 0.027 — small but non-zero, recorded here so a
+//  611.0 / 612.9 / 681.7 / 615.7. The exact sums are
+//  610.956 / 612.882 / 681.724 / 615.662 s, so the |sum − literal| deltas are
+//  0.044 / 0.018 / 0.024 / 0.038 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -66,9 +66,14 @@
 //  reasoned exemption row in `scripts/ci/ui-test-allowlist.json` (with a live
 //  tracker where the category requires one) and refresh the
 //  declared/exempt/per-category counts below. A new method's median comes
-//  from a calibration measurement: the first green attempt-1 run after the
-//  change, whose run id is appended to `_provenance.runs`. Removals are
-//  additionally caught by the literal 91-method count and the per-class
+//  from a calibration measurement. When it is SEEDED from a dispatch sample
+//  (no attempt-1 PR run has executed it yet), record the seed in
+//  `_provenance.calibration.basis` and leave `_provenance.runs` untouched
+//  (its population rule is attempt-1 `pull_request` runs); the first green
+//  attempt-1 run after the change then replaces the seeds, appends its run
+//  id to `_provenance.runs`, and records the superseded seed under
+//  `calibration.superseded`. Removals are
+//  additionally caught by the literal 95-method count and the per-class
 //  counts below, which are asserted so an existing method cannot be dropped
 //  coherently from the fixture and the lists at once.
 //
@@ -117,9 +122,9 @@
 //  (8) the ledger categories are reason classes, not verified mechanisms —
 //  only `platformGated` is cross-checked against the declaration's gate; the
 //  pin never executes the in-code `XCTSkip` guard and never proves a reason
-//  true; the 20-character reason floor is a LENGTH floor for the 7
-//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×3, `platformGated`
-//  ×1) — the other 27 rows are additionally protected by the `#N` check;
+//  true; the 20-character reason floor is a LENGTH floor for the 6
+//  tracker-forbidden rows (`reproOnly` ×3, `launchPerf` ×2, `platformGated`
+//  ×1) — the other 23 rows are additionally protected by the `#N` check;
 //  (9) `liveTrackers` is a static Swift set, so the pin cannot query
 //  GitHub: a closed tracker stays green until a human removes it, and a
 //  closed tracker must name its successor in the reason and in `liveTrackers`
@@ -147,37 +152,38 @@ struct WorkflowShardSplitPinsTests {
     private static let fixturePath = "scripts/ci/shard-split-medians.json"
     private static let uiTestsDirectory = "VVTermUITests"
 
-    /// 91 = the four lists' total; #277 scheduled the three
-    /// TeleportPhaseTransitionUITests methods in shard-3.
-    private static let expectedMethodCount = 91
+    /// 95 = the four lists' total; #277 scheduled the three
+    /// TeleportPhaseTransitionUITests methods in shard-3 and #364 scheduled
+    /// four measured never-run methods (three in shard-0, one in shard-3).
+    private static let expectedMethodCount = 95
 
     /// The four `only-testing` list lengths.
     private static let expectedEntriesPerShard: [String: Int] = [
-        "shard-0": 20,
+        "shard-0": 23,
         "shard-1": 24,
         "shard-2": 24,
-        "shard-3": 23,
+        "shard-3": 24,
     ]
 
     /// The recorded per-bin median sums, 1 dp (the NAMED rounding rule).
     private static let expectedBinSums1dp: [String: Double] = [
-        "shard-0": 555.4,
+        "shard-0": 611.0,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 598.1,
+        "shard-3": 615.7,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
     /// refresh path; deltas to the 1 dp literals are in the header).
     private static let exactBinSums: [String: Double] = [
-        "shard-0": 555.408,
+        "shard-0": 610.956,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 598.127,
+        "shard-3": 615.662,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
-    /// (≤0.027 s) so a refresh has room, narrower than any real method move.
+    /// (≤0.044 s) so a refresh has room, narrower than any real method move.
     private static let binSumTolerance = 0.05
 
     /// The acceptance's structural rebalance threshold (`> ~1.3`). Recorded
@@ -196,11 +202,11 @@ struct WorkflowShardSplitPinsTests {
         "TeleportReadinessIOSUITests": 6,
         "TeleportReadinessUITests": 5,
         "TeleportUITests": 24,
-        "TerminalKeyboardUITests": 16,
+        "TerminalKeyboardUITests": 19,
         "TerminalLinkTapUITests": 2,
         "TerminalReconnectUITests": 5,
         "TerminalScreenAwakeUITests": 1,
-        "TerminalZenModeUITests": 8,
+        "TerminalZenModeUITests": 9,
     ]
 
     /// The #227 atomic pair: `ServerNavigationUITests` shares one static
@@ -241,8 +247,8 @@ struct WorkflowShardSplitPinsTests {
         }
     }
 
-    /// Assertion 2 — partition + coverage. The four lists total 91 entries,
-    /// per-list 20/24/24/23, all unique; their union equals the fixture key
+    /// Assertion 2 — partition + coverage. The four lists total 95 entries,
+    /// per-list 23/24/24/24, all unique; their union equals the fixture key
     /// set exactly; and the per-class scheduled counts match, so an existing
     /// method cannot be dropped coherently from both the fixture and the
     /// lists.
@@ -292,7 +298,7 @@ struct WorkflowShardSplitPinsTests {
 
     /// Assertion 3 — existence. Every `Target/Class/method` resolves to a
     /// `func <method>(` inside that class body, with the class located
-    /// recursively under `VVTermUITests/` (40 of the 91 live under
+    /// recursively under `VVTermUITests/` (40 of the 95 live under
     /// `Features/Teleport/`), comments stripped first so a commented-out
     /// `func` cannot false-green.
     @Test
@@ -364,6 +370,13 @@ struct WorkflowShardSplitPinsTests {
             }
             sums[block.name] = total
         }
+
+        // A dropped key in the exact table must not silently disable that
+        // bin's exact check (impl-lens 2 F4): the key sets move together.
+        #expect(
+            Set(Self.exactBinSums.keys) == Set(Self.expectedBinSums1dp.keys),
+            "exactBinSums and expectedBinSums1dp must cover the same bins — a dropped key silently disables that bin's exact check (issue #248)"
+        )
 
         for (name, literal) in Self.expectedBinSums1dp {
             guard let sum = sums[name] else {
@@ -459,48 +472,42 @@ struct WorkflowShardSplitPinsTests {
 
     private static let allowlistPath = "scripts/ci/ui-test-allowlist.json"
 
-    /// 125 = the declared universe at d98e3aa3 (18 `XCTestCase` classes).
-    private static let expectedDeclaredMethodCount = 125
+    /// 124 = the declared universe at d98e3aa3 (18 `XCTestCase` classes) minus
+    /// the #364 deletion of `VVTermUITests/testLaunchPerformance`.
+    private static let expectedDeclaredMethodCount = 124
 
-    /// 34 = the exemption ledger (pre-existing never-scheduled debt only).
-    private static let expectedExemptionCount = 34
+    /// 29 = the exemption ledger after #364 deleted `testLaunchPerformance`,
+    /// quarantined four measured never-scheduled rows, and scheduled four rows.
+    private static let expectedExemptionCount = 29
 
-    /// The seven categories and their pinned counts (issue #362).
+    /// The five categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
-        "quarantined": 14,
+        "quarantined": 18,
         "ciQuarantined": 5,
-        "capabilityGated": 1,
         "reproOnly": 3,
-        "launchPerf": 3,
+        "launchPerf": 2,
         "platformGated": 1,
-        "unscheduled": 7,
     ]
 
     /// Categories whose resolution is owned by a live issue.
     private static let trackerRequiredCategories: Set<String> = [
         "quarantined",
         "ciQuarantined",
-        "capabilityGated",
-        "unscheduled",
     ]
 
-    /// Live trackers only (open at filing, 2026-10-04). The pin cannot query
-    /// GitHub: a closed tracker must name its successor here and in its
-    /// reason, or assertion 8 reds.
-    private static let liveTrackers: Set<Int> = [92, 257, 364]
+    /// Live trackers only (open at filing: #92 and #257 on 2026-10-04, #372 on
+    /// 2026-10-05). The pin cannot query GitHub: a closed tracker must name its
+    /// successor here and in its reason, or assertion 8 reds.
+    private static let liveTrackers: Set<Int> = [92, 257, 372]
 
-    /// The 8 never-scheduled methods (7 `unscheduled` + 1 `capabilityGated`),
-    /// frozen as exact `(id, category)` pairs so a category swap between
-    /// `unscheduled` and `capabilityGated` is visible.
+    /// The 4 measured never-scheduled methods, frozen as exact
+    /// `(id, category)` pairs so a category swap away from `quarantined` is
+    /// visible.
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
-        ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "capabilityGated"),
-        ("VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
     ]
 
     /// Assertion 7 — declared = scheduled ⊎ exempt (name-exact). The scanner
@@ -509,7 +516,7 @@ struct WorkflowShardSplitPinsTests {
     /// attributed + unattributed — a classification-completeness guard against
     /// a candidate dropped between match and attribution, not a second regex
     /// miss check. Also pins the declared/exempt/per-category counts, the
-    /// frozen 8 never-scheduled `(id, category)` pairs, and the
+    /// frozen 4 never-scheduled `(id, category)` pairs, and the
     /// scheduled-gate guard.
     @Test
     func testEveryDeclaredUITestIsScheduledOrExempt() throws {
