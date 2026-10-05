@@ -31,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  555.4 / 612.9 / 681.7 / 589.6. The exact sums are
-//  555.408 / 612.882 / 681.724 / 589.648 s, so the |sum − literal| deltas are
-//  0.008 / 0.018 / 0.024 / 0.048 — small but non-zero, recorded here so a
+//  555.4 / 612.9 / 681.7 / 598.1. The exact sums are
+//  555.408 / 612.882 / 681.724 / 598.127 s, so the |sum − literal| deltas are
+//  0.008 / 0.018 / 0.024 / 0.027 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -164,7 +164,7 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.4,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 589.6,
+        "shard-3": 598.1,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
@@ -173,11 +173,11 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.408,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 589.648,
+        "shard-3": 598.127,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
-    /// (≤0.048 s) so a refresh has room, narrower than any real method move.
+    /// (≤0.027 s) so a refresh has room, narrower than any real method move.
     private static let binSumTolerance = 0.05
 
     /// The acceptance's structural rebalance threshold (`> ~1.3`). Recorded
