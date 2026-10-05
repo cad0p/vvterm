@@ -55,6 +55,24 @@ enum TeleportFixtureSupport {
         return FixedTeleportTLSKeyPairGenerator(keyPair: keyPair)
     }
 
+    /// Build a synthetic Phase-1 `BootstrapResult` bound to the committed TLS
+    /// fixture. The same shape `TeleportRedactionTests` and
+    /// `TeleportWebAuthnRPIDTests` construct in their private copies; this one
+    /// is shared so the phase-chain and pin suites do not add a fifth copy.
+    /// The two existing private copies are intentionally left untouched
+    /// (recorded on #369, not refactored).
+    static func makeBootstrapResult() throws -> TeleportBootstrapCoordinator.BootstrapResult {
+        let keyPair = try makeFixedTLSGenerator().keyPair
+        return TeleportBootstrapCoordinator.BootstrapResult(
+            sshCertPEM: fixedIssuedUserCert,
+            tlsCertPEM: "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----",
+            tlsKeyPairPrivateKey: keyPair.privateKey,
+            clusterName: "teleport.pcad.it",
+            clusterCAPEMs: [],
+            certValidBefore: fixtureClock.addingTimeInterval(3_600)
+        )
+    }
+
     // MARK: - Attempt-tagged credential fixtures (the pair-atomicity tests)
 
     /// 2036-01-01T00:05:00Z — later than the real `Date()` (the live-cert gate
