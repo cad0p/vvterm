@@ -15,7 +15,7 @@
       "date": "2026-10-05",
       "device": "iPhone 17 / iOS 27.0 (xcode-27 CI runner), iOS Simulator arm64",
       "basis": "seed: class-level workflow_dispatch samples - run 37269132486 (TerminalKeyboardUITests, debug_timeout=300) for 15.769 / 21.720 / 19.536 s and run 37272070374 (TerminalZenModeUITests) for 20.505 s; single samples, and the dispatch environment lacks CI=1, so the shard environment is the authoritative source",
-      "replacement_rule": "the first green attempt-1 PR CI run whose shard-0/shard-3 jobs name these methods replaces these four medians with its CI values and appends its run triple to _provenance.runs"
+      "replacement_rule": "the first green attempt-1 PR CI run whose shard-0/shard-3 jobs name these methods replaces these four medians with its CI values, appends its run triple to _provenance.runs, and records the superseded seed run(s) and values under _provenance.calibration.superseded"
     },
     "calibration_277": {
       "methods": [

@@ -66,8 +66,13 @@
 //  reasoned exemption row in `scripts/ci/ui-test-allowlist.json` (with a live
 //  tracker where the category requires one) and refresh the
 //  declared/exempt/per-category counts below. A new method's median comes
-//  from a calibration measurement: the first green attempt-1 run after the
-//  change, whose run id is appended to `_provenance.runs`. Removals are
+//  from a calibration measurement. When it is SEEDED from a dispatch sample
+//  (no attempt-1 PR run has executed it yet), record the seed in
+//  `_provenance.calibration.basis` and leave `_provenance.runs` untouched
+//  (its population rule is attempt-1 `pull_request` runs); the first green
+//  attempt-1 run after the change then replaces the seeds, appends its run
+//  id to `_provenance.runs`, and records the superseded seed under
+//  `calibration.superseded`. Removals are
 //  additionally caught by the literal 95-method count and the per-class
 //  counts below, which are asserted so an existing method cannot be dropped
 //  coherently from the fixture and the lists at once.
@@ -365,6 +370,13 @@ struct WorkflowShardSplitPinsTests {
             }
             sums[block.name] = total
         }
+
+        // A dropped key in the exact table must not silently disable that
+        // bin's exact check (impl-lens 2 F4): the key sets move together.
+        #expect(
+            Set(Self.exactBinSums.keys) == Set(Self.expectedBinSums1dp.keys),
+            "exactBinSums and expectedBinSums1dp must cover the same bins — a dropped key silently disables that bin's exact check (issue #248)"
+        )
 
         for (name, literal) in Self.expectedBinSums1dp {
             guard let sum = sums[name] else {

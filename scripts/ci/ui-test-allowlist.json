@@ -122,7 +122,7 @@
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews",
       "category": "quarantined",
-      "reason": "#372: run 37269132486 failed the float gesture at TerminalKeyboardUITests.swift:1313 with keyboardPresentation=floating together with policy=geom=docked and terminalHeight=0.0 (geometry-derived token; two-cause ambiguity in makeKeyboardFloating)",
+      "reason": "#372: run 37269132486 failed the float gesture at TerminalKeyboardUITests.swift:1313 (base 218df334) with keyboardPresentation=floating together with policy=geom=docked and terminalHeight=0.0 (geometry-derived token; two-cause ambiguity in makeKeyboardFloating)",
       "tracker": 372
     },
     {
@@ -164,7 +164,7 @@
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance",
       "category": "quarantined",
-      "reason": "#92 family: privacyShield element absent 5 s after the shield tap (TerminalKeyboardUITests.swift:1109; run 37269132486) with diagnostics accessoryAppearance=dark, keyboardPresentation=docked, inputReloads=2; the sibling privacy-shield test passed in the same run",
+      "reason": "#92 family: the privacy.shield tap itself computed {-1, -1} (no-op) and the privacyShield element was then absent 5 s after the tap (TerminalKeyboardUITests.swift:1109 base 218df334; run 37269132486) with diagnostics accessoryAppearance=dark, keyboardPresentation=docked, inputReloads=2; the sibling privacy-shield test passed in the same run",
       "tracker": 92
     },
     {
