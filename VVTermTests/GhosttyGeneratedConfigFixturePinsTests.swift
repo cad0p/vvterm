@@ -14,8 +14,22 @@
 //
 //  Fixture provenance (issue #247 plan §3.3): both fixtures were captured from
 //  the pre-parameterization builder at f3a3abff and `cmp`-ed byte-equal
-//  against the post-parameterization defaults; the `cmp` evidence lives in the
-//  PR verification walk.
+//  against the post-parameterization output; the macOS variant could only be
+//  produced through the verification walk §3 forced-gate emulation because
+//  `VVTermTests` does not compile for macOS. The `cmp` evidence lives in the
+//  PR verification walk. Provenance is one step removed from this suite: the
+//  byte pins prove `fixtures ≡ builder output`, and the required `build` job
+//  then validates the fixtures through the vendored core (issue #247 impl
+//  lens 2 M3 / lens 3 F3).
+//
+//  Oracle boundary (F8): the checked-in probe catches keys the core rejects;
+//  the canonical tuple below is the only input the fixture pins observe, and
+//  silent aliases / duplicate keys are accepted by the core. The semantic
+//  drift class is tracked in issue #381 and is NOT claimed as covered here.
+//
+//  The iOS fixture deliberately ends in `\n\n\n` (the builder's iOS template
+//  emits trailing blank lines); never trim it — `git diff --check` flags it,
+//  but the byte pin would red (issue #247 impl lens 3 F4).
 //
 //  Refresh path: a builder text change regenerates both fixtures from the
 //  canonical inputs in the same PR —
@@ -80,9 +94,13 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     }
 
     /// Byte-exact: the iOS fixture must equal the builder output for the iOS
-    /// production defaults.
+    /// variant inputs (`[], false`), which are the iOS production defaults
+    /// (runtime-checked in `iOSDefaultsAreEmptyAndPlatformless`). The name is
+    /// variant-scoped because a later destination split could run this suite
+    /// on macOS, where "production defaults" means the other branch (issue
+    /// #247 impl lens 2 N1).
     @Test
-    func iOSFixtureMatchesTheProductionDefaults() throws {
+    func iOSFixtureMatchesTheIOSVariantInputs() throws {
         let fixture = try Self.fixtureData("generated-ios.config")
         let generated = Self.canonicalContent(
             fallbackFontFamilies: [],
@@ -182,7 +200,10 @@ struct GhosttyGeneratedConfigFixturePinsTests {
                 cursorStyle: style,
                 cursorBlink: true
             )
-            #expect(content.contains("cursor-style = \(ghosttyValue)"))
+            #expect(
+                content.contains("\ncursor-style = \(ghosttyValue)\n"),
+                "the emitted cursor-style line must be exactly `cursor-style = \(ghosttyValue)` — a substring match would accept `block` inside `block_hollow` (issue #247 impl lens 2 M2)"
+            )
         }
 
         let blinking = Ghostty.ConfigBuilder.configContent(
@@ -247,11 +268,57 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         )
     }
 
+    /// The default-argument wiring is the production call path (the app's
+    /// call site in `Ghostty.App.swift` omits both arguments), and a default
+    /// expression cannot be observed by any runtime assertion from this
+    /// suite, so its source text is pinned. Measured before this pin: a
+    /// mutant tree whose `configContent` defaults were `= []` / `= false`
+    /// passed 8/8 — the same class CF-11 exists to catch, one hop upstream
+    /// (issue #247 impl lens 1 finding 1).
+    @Test
+    func configBuilderDefaultsRemainTheProductionWiring() throws {
+        let source = Self.normalized(
+            Self.strippingComments(try Self.swiftSource("VVTerm/GhosttyTerminal/Ghostty.App.swift"))
+        )
+
+        guard let configContent = Self.declarationText(startingAt: "static func configContent(", in: source) else {
+            throw PinFailure("could not find `static func configContent(` in Ghostty.App.swift — re-derive this pin (issue #247)")
+        }
+        #expect(
+            configContent.contains("fallbackFontFamilies: [String] = defaultFallbackFontFamilies"),
+            "`configContent` must keep `fallbackFontFamilies: [String] = defaultFallbackFontFamilies`; a platform literal here would silently drop the macOS fallback font stack (issue #247)"
+        )
+        #expect(
+            configContent.contains("emitsPlatformInputConfig: Bool = defaultEmitsPlatformInputConfig"),
+            "`configContent` must keep `emitsPlatformInputConfig: Bool = defaultEmitsPlatformInputConfig`; a platform literal here would silently drop/add the `macos-option-as-alt` line (issue #247)"
+        )
+        #expect(
+            configContent.contains("fontFamilyLines(primaryFamily: primaryFontFamily, fallbackFamilies: fallbackFontFamilies)"),
+            "`configContent` must thread `fallbackFontFamilies` through to `fontFamilyLines` — without the argument the macOS fixture cannot be generated on the iOS destination and the byte pins would bind the wrong font stack (issue #247)"
+        )
+
+        guard let fontFamilyLines = Self.declarationText(startingAt: "static func fontFamilyLines(", in: source) else {
+            throw PinFailure("could not find `static func fontFamilyLines(` in Ghostty.App.swift — re-derive this pin (issue #247)")
+        }
+        #expect(
+            fontFamilyLines.contains("fallbackFamilies: [String] = defaultFallbackFontFamilies"),
+            "`fontFamilyLines` must keep `fallbackFamilies: [String] = defaultFallbackFontFamilies` (issue #247)"
+        )
+        #expect(
+            fontFamilyLines.contains("sanitizedFontFamilies(primaryFamily: primaryFamily, fallbackFamilies: fallbackFamilies)"),
+            "`fontFamilyLines` must thread `fallbackFamilies` through to `sanitizedFontFamilies` (issue #247)"
+        )
+    }
+
     // MARK: - Workflow pin
 
     /// The required `build` job must run the core check over the explicit
     /// fixture list, after the artifact-dependency gate and before the build
-    /// starts (fail in ~1 s, not after a 15 m compile).
+    /// starts (fail in under a second, not after a 15 m compile), and the
+    /// step must live inside the `build` job: the UI shards are report-only,
+    /// so a relocation would drop the enforcement while this pin stayed
+    /// green (measured before the job binding landed: a step moved to
+    /// `ui-tests` passed 8/8 — issue #247 impl lens 1 finding 2).
     @Test
     func buildJobRunsTheCoreConfigCheckBetweenTheGates() throws {
         let source = Self.strippingYAMLComments(try Self.swiftSource(Self.workflowPath))
@@ -262,34 +329,98 @@ struct GhosttyGeneratedConfigFixturePinsTests {
             "the workflow must contain exactly one `\(Self.checkStepName)` step (found \(stepOccurrences)); without it a core-rejected key only shows up in the field (issue #247)"
         )
 
-        guard let artifactGate = source.range(of: "- name: Check artifact dependencies") else {
-            throw PinFailure("the workflow is missing the `Check artifact dependencies` step (issue #316) — re-derive this pin")
+        guard let buildJob = Self.buildJobText(in: source) else {
+            throw PinFailure("the workflow is missing the required `  build:` job — re-derive this pin (issue #247)")
         }
-        guard let checkStep = source.range(of: "- name: \(Self.checkStepName)") else {
-            throw PinFailure("the workflow is missing the `\(Self.checkStepName)` step (issue #247) — re-derive this pin")
+        let stepOccurrencesInBuildJob = buildJob.components(separatedBy: "- name: \(Self.checkStepName)").count - 1
+        #expect(
+            stepOccurrencesInBuildJob == 1,
+            "the `\(Self.checkStepName)` step must live inside the required `build` job (found \(stepOccurrencesInBuildJob) there); the UI shards are not merge blockers, so a relocation would silently drop the check (issue #247)"
+        )
+
+        guard let checkStep = Self.stepText(named: Self.checkStepName, in: buildJob) else {
+            throw PinFailure("the `build` job is missing the `\(Self.checkStepName)` step — re-derive this pin (issue #247)")
         }
-        guard let prepareStep = source.range(
+        #expect(
+            checkStep.contains(Self.checkStepCommand),
+            "the `\(Self.checkStepName)` step must run the explicit fixture list (not a glob): `\(Self.checkStepCommand)` (issue #247)"
+        )
+
+        guard let artifactGate = buildJob.range(of: "- name: Check artifact dependencies") else {
+            throw PinFailure("the `build` job is missing the `Check artifact dependencies` step (issue #316) — re-derive this pin")
+        }
+        guard let checkStepRange = buildJob.range(of: "- name: \(Self.checkStepName)") else {
+            throw PinFailure("the `build` job is missing the `\(Self.checkStepName)` step (issue #247) — re-derive this pin")
+        }
+        guard let prepareStep = buildJob.range(
             of: "- name: Prepare Xcode build (mtimes, caches, Metal toolchain)",
-            range: checkStep.upperBound..<source.endIndex
+            range: checkStepRange.upperBound..<buildJob.endIndex
         ) else {
-            throw PinFailure("the workflow is missing the `Prepare Xcode build` step after the ghostty config check — re-derive this pin")
+            throw PinFailure("the `build` job is missing the `Prepare Xcode build` step after the ghostty config check — re-derive this pin")
         }
 
         #expect(
-            artifactGate.upperBound < checkStep.lowerBound,
+            artifactGate.upperBound < checkStepRange.lowerBound,
             "the ghostty config check must run after `Check artifact dependencies` (exact placement verified by the class-gate pin too)"
         )
         #expect(
-            checkStep.upperBound < prepareStep.lowerBound,
-            "the ghostty config check must run before `Prepare Xcode build`/`xcodebuild`: a rejection must fail in ~1 s, not after a 15 m build (issue #247)"
-        )
-        #expect(
-            source.contains(Self.checkStepCommand),
-            "the `\(Self.checkStepName)` step must run the explicit fixture list (not a glob): `\(Self.checkStepCommand)` (issue #247)"
+            checkStepRange.upperBound < prepareStep.lowerBound,
+            "the ghostty config check must run before `Prepare Xcode build`/`xcodebuild`: a rejection must fail before the compile, not after it (issue #247)"
         )
     }
 
     // MARK: - Filesystem helpers
+
+    /// The text of a `static func` declaration anchored at `start`: from there
+    /// to the first following `\nstatic func ` (the next declaration) or `\n}`
+    /// (the enclosing enum's closing brace). Callers pass comment-stripped,
+    /// normalized Swift source. Default-argument expressions cannot be
+    /// observed by any runtime assertion, so their text is pinned here (issue
+    /// #247 impl lens 1 finding 1).
+    private static func declarationText(startingAt start: String, in source: String) -> String? {
+        guard let startRange = source.range(of: start) else { return nil }
+        let remainder = source[startRange.upperBound...]
+        let endCandidates = ["\nstatic func ", "\n}"].compactMap { remainder.range(of: $0) }
+        guard let end = endCandidates.min(by: { $0.lowerBound < $1.lowerBound }) else {
+            return String(source[startRange.lowerBound...])
+        }
+        return String(source[startRange.lowerBound..<end.lowerBound])
+    }
+
+    /// The `  build:` job block of comment-stripped workflow YAML, up to the
+    /// next two-space-indented job key (the
+    /// `WorkflowArtifactDependencyClassGatePinsTests` job-block precedent).
+    /// Binding the check step to this slice is what makes a relocation to a
+    /// non-required job red (issue #247 impl lens 1 finding 2).
+    private static func buildJobText(in workflow: String) -> String? {
+        let lines = workflow.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0 == "  build:" }) else { return nil }
+        var end = lines.count
+        for index in (start + 1)..<lines.count
+        where lines[index].range(of: #"^  [A-Za-z0-9_-]+:\s*$"#, options: .regularExpression) != nil {
+            end = index
+            break
+        }
+        guard end > start + 1 else { return nil }
+        return lines[start..<end].joined(separator: "\n")
+    }
+
+    /// The step block named `name` (up to the next `- name: ` step key) from
+    /// comment-stripped workflow YAML. Scoping the command assertion to the
+    /// step closes the lens-1 finding-5 whole-file check.
+    private static func stepText(named name: String, in text: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "- name: \(name)"
+        }) else { return nil }
+        var end = lines.count
+        for index in (start + 1)..<lines.count
+        where lines[index].range(of: #"^      - name: "#, options: .regularExpression) != nil {
+            end = index
+            break
+        }
+        return lines[start..<end].joined(separator: "\n")
+    }
 
     private struct PinFailure: Error, CustomStringConvertible {
         let description: String
