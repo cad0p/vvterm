@@ -75,6 +75,11 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
     /// (e.g. the suspended scenario succeeds on the second call).
     private(set) var beginCallCount = 0
 
+    /// Monotonic `begin` invocation counter. A parked invocation whose
+    /// generation is stale (a later `begin` superseded it) returns without
+    /// writing state, so it can never clobber the newer invocation.
+    private var beginGeneration = 0
+
     /// The number of times `cancel` was called.
     private(set) var cancelCallCount = 0
 
@@ -96,14 +101,46 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
     private let scenario: Scenario
     private let delay: TimeInterval
 
-    init(scenario: Scenario, delay: TimeInterval = 0.05) {
+    /// When true, `begin` parks in `.awaitingApproval` after its normal
+    /// delay and waits for `releaseApproval()` — the phase-chain UI test's
+    /// deterministic hold. The hold is one-shot: it applies to the first
+    /// `begin` after construction, and a released or cancelled hold does not
+    /// re-engage on a later `begin`. A parked invocation superseded by a
+    /// later `begin` returns without writing state. Default false: every
+    /// non-gated instance is behaviour-identical to before (issue #277).
+    private let holdsForApproval: Bool
+
+    /// Set by `releaseApproval()` (or by `cancel()` while held). Idempotent.
+    private var approvalReleased = false
+
+    /// Set by `cancel()` while the held `begin` is parked, so the park loop
+    /// cannot fall through into the scenario switch after a cancellation.
+    private var cancelledWhileHeld = false
+
+    init(scenario: Scenario, delay: TimeInterval = 0.05, holdsForApproval: Bool = false) {
         self.scenario = scenario
         self.delay = delay
+        self.holdsForApproval = holdsForApproval
+    }
+
+    /// Releases a `holdsForApproval` hold. Returns true iff the hold was
+    /// armed and not yet released; the second call returns false
+    /// (idempotent). Non-gated instances always return false.
+    @discardableResult
+    func releaseApproval() -> Bool {
+        let wasHeld = holdsForApproval && !approvalReleased
+        approvalReleased = true
+        return wasHeld
     }
 
     func begin(cluster: TeleportCluster) async {
         beginCallCount += 1
+        beginGeneration += 1
+        let generation = beginGeneration
         lastCluster = cluster
+        // Per-invocation lifecycle: a previous hold's cancellation flag must
+        // never swallow a later begin()/retry() (issue #277).
+        cancelledWhileHeld = false
         state = .preparing
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
@@ -117,6 +154,26 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         state = .awaitingApproval
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+        // The phase-chain UI test's deterministic hold: park in
+        // `.awaitingApproval` until the harness's release control is tapped.
+        // 50 ms poll cadence; the 30 s self-release bounds a lost tap far
+        // below the 300 s per-test execution allowance. Task cancellation
+        // exits the park.
+        if holdsForApproval && !approvalReleased {
+            let deadline = Date().addingTimeInterval(30)
+            while !approvalReleased && !Task.isCancelled && Date() < deadline {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        // A parked invocation superseded by a later `begin` (e.g. retry)
+        // must not write state over the newer invocation. This is checked
+        // before the cancellation guard/switch (issue #277).
+        guard generation == beginGeneration else { return }
+        // Scoped to the gated path: a cancelled non-gated instance still
+        // falls through to its scenario switch exactly as before, keeping
+        // the default-off path behaviour-identical.
+        if holdsForApproval && (cancelledWhileHeld || Task.isCancelled) { return }
 
         switch scenario {
         case .happyPath, .alreadyLoggedIn:
@@ -145,6 +202,13 @@ final class MockTeleportBootstrapCoordinator: ObservableObject, TeleportBootstra
 
     func cancel() async {
         cancelCallCount += 1
+        if holdsForApproval {
+            // A cancel during the hold must stop the parked begin from
+            // falling through into the scenario switch. Non-gated instances
+            // stay bit-identical: these flags are never touched there.
+            cancelledWhileHeld = true
+            approvalReleased = true
+        }
         state = .failed(.userCancelled)
     }
 

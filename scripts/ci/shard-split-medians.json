@@ -1,9 +1,22 @@
 {
   "_provenance": {
-    "measured": "2026-10-04",
-    "population_rule": "every attempt-1 VVTerm PR CI run (event=pull_request, conclusion=success) whose four ui-tests-shard-* jobs all succeeded and whose four shard logs parse to exactly the current 88-method universe, since the last only-testing change (#236, merged 2026-09-29 17:07 UTC)",
+    "measured": "2026-10-04 (41-run population); 2026-10-05 (3-method CI calibration, run 37252082693)",
+    "population_rule": "every attempt-1 VVTerm PR CI run (event=pull_request, conclusion=success) whose four ui-tests-shard-* jobs all succeeded and whose four shard logs parse to exactly the 88-method universe at the last only-testing change (#236, merged 2026-09-29 17:07 UTC); this historical 41-run population does not cover the three #277 methods, which use the `calibration` object below (seed superseded by run 37252082693)",
     "extraction": "gh api --allow-escape-sequences /repos/cad0p/vvterm/actions/jobs/<job-id>/logs ; regex: Test Case '-\\[(\\S+) (\\S+)\\]' passed \\((\\d+(?:\\.\\d+)?) seconds\\)",
-    "method_count": 88,
+    "method_count": 91,
+    "calibration": {
+      "methods": [
+        "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet",
+        "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap",
+        "VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet"
+      ],
+      "head": "6ba78c27",
+      "date": "2026-10-05",
+      "device": "iPhone 17 / iOS 26.3.1 (Xcode 26.3), iOS Simulator arm64",
+      "basis": "seed: median of three consecutive green local runs of the class, in method order 13.750 / 14.404 / 11.937 s; all three methods green in each run",
+      "replacement_rule": "the first green attempt-1 PR CI run whose shard-3 job names the class replaces these three medians and appends its run triple to _provenance.runs",
+      "superseded": "run 37252082693 (head d94ba433, shard-3 job 111582721049): its CI values in method order 16.404 / 17.071 / 15.095 s now populate `medians`; the run's shard-0 was a report-only host-state flake classified on #257, not a measurement input"
+    },
     "runs": [
       {
         "run": "36641124208",
@@ -209,6 +222,11 @@
         "run": "37209386282",
         "head": "3fc2d1bab31361f3e0e011e17525ad481ac21013",
         "created": "2026-10-04T14:28:30Z"
+      },
+      {
+        "run": "37252082693",
+        "head": "d94ba43339d12d02c9d63c273364ae481e772de9",
+        "created": "2026-10-05T01:36:29Z"
       }
     ]
   },
@@ -234,6 +252,9 @@
     "VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates": 63.101,
     "VVTermUITests/TeleportFormUITests/testAddMode_faceIDTeleport_showsTeleportFieldCopy": 49.265,
     "VVTermUITests/TeleportFormUITests/testEditMode_teleportServer_showsTeleportCaptions": 20.073,
+    "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet": 16.404,
+    "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap": 17.071,
+    "VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet": 15.095,
     "VVTermUITests/TeleportReadinessIOSUITests/testBootstrap_swipeDismissDuringRetry_cancelsTheFlow": 51.865,
     "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap": 12.761,
     "VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet": 12.912,

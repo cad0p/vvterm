@@ -62,10 +62,12 @@
 #     target (fast), then runs the `VVTermUnitTests` suite (~30 s).
 #   - Shard split is a measured assignment over the 41-run clean population
 #     (issue #248): every attempt-1 `pull_request` run whose four shard logs
-#     parse to exactly the current 88-method universe, since the last
-#     `only-testing` change (#236). Per-method medians (n=41) summed per bin:
-#     555.4 / 612.9 / 681.7 / 549.6 s → max/min 1.2405 ≤ 1.3, so NO rebalance
-#     (2026-10-04). The 2026-09-23 five-run LPT split (78 methods, bins
+#     parse to exactly the 88-method universe at the last `only-testing`
+#     change (#236), plus the three #277 TeleportPhaseTransitionUITests
+#     (CI-calibrated from run 37252082693, shard-3). Per-method medians
+#     (n=41; the three #277 methods are the CI calibration) summed per bin:
+#     555.4 / 612.9 / 681.7 / 598.1 s → max/min 1.2274 ≤ 1.3, so NO rebalance
+#     (2026-10-05). The 2026-09-23 five-run LPT split (78 methods, bins
 #     527.6/517.8/527.0/527.8 s, max/min 1.02) is superseded; #227's split
 #     pair stays co-located in shard-0. The 164 measured shard-jobs carry
 #     326.6-796.7 s of setup/overhead (p10-p90 385-652 s; exclusive
@@ -511,20 +513,22 @@ jobs:
           # Shard split is a measured assignment over the 41-run clean
           # population (issue #248): every attempt-1 `pull_request` run whose
           # four `ui-tests-shard-*` jobs all succeeded and whose four shard
-          # logs parse to exactly the current 88-method universe, since the
-          # last `only-testing` change (#236). Per-method medians (n=41)
-          # summed per bin: shard-0 555.4 s (20 methods) / shard-1 612.9 s
-          # (24) / shard-2 681.7 s (24) / shard-3 549.6 s (20) → max/min
-          # 1.2405 ≤ 1.3 → NO rebalance (2026-10-04). The 2026-09-23
+          # logs parse to exactly the 88-method universe at the last
+          # `only-testing` change (#236), plus the three #277
+          # TeleportPhaseTransitionUITests (CI-calibrated from run 37252082693,
+          # shard-3). Per-method medians (n=41; the three #277 methods are the
+          # CI calibration) summed per bin: shard-0 555.4 s (20 methods) /
+          # shard-1 612.9 s (24) / shard-2 681.7 s (24) / shard-3 598.1 s
+          # (23) → max/min 1.2274 ≤ 1.3 → NO rebalance (2026-10-05). The 2026-09-23
           # five-run LPT split (78 methods, bins 527.6/517.8/527.0/527.8 s,
           # max/min 1.02) is superseded. The normative trigger metric is the
           # per-bin SUM OF PER-METHOD MEDIANS over the qualifying population;
           # single-run and job-wall ratios are diagnostic only. LPT over the
-          # same medians would reach 1.0012 but moves 67/88 methods, and the
-          # observed per-run distribution (median 1.459, 33/41 runs > 1.3) is
-          # dominated by run-level host variance — recorded, not adopted; the
-          # acceptance's structural branch decides. Refresh procedure:
-          # re-enumerate the population, re-extract the
+          # same 88-method population would reach 1.0012 but moves 67/88
+          # methods, and the observed per-run distribution (median 1.459,
+          # 33/41 runs > 1.3) is dominated by run-level host variance —
+          # recorded, not adopted; the acceptance's structural branch decides.
+          # Refresh procedure: re-enumerate the population, re-extract the
           # `Test Case '-[...]' passed (N seconds)` lines, LPT-repack only if
           # max/min > ~1.3, then update `scripts/ci/shard-split-medians.json`,
           # the pinned 1 dp literals in
@@ -555,19 +559,15 @@ jobs:
           # then 264.594/256.121/244.008/220.380s; fix-or-quarantine stays on
           # #349/#264/#257.
           #
-          # The 3
-          # TeleportPhaseTransitionUITests are deliberately NOT added yet, for
-          # two independent reasons measured on 2026-09-28: (1)
-          # testPhase1BootstrapSuccess_transitionsToRegistrationSheet fails
-          # deterministically at :113 because it queries
-          # `app.staticTexts["vvterm.serverRow.readinessPill.setup"]` while
-          # `PillBadge` sets `.accessibilityElement(children: .ignore)` (the
-          # element is `Other`, never `StaticText`) — the same query migration
-          # 85421b53 applied to the other suites but not this class; and (2)
-          # testPhase1BootstrapSuccess_doesNotReRunBootstrap races the
-          # harness's immediate-success mock at :158 (the bootstrap header's
-          # visible window can close before the first AX poll). The class still
-          # has no CI gate; the follow-up is tracked on #277.
+          # The 3 TeleportPhaseTransitionUITests are scheduled in shard-3
+          # (2026-10-05, #277): the readiness-pill query was migrated from
+          # `staticTexts` (the `PillBadge` `.ignore` container surfaces the
+          # element as `Other`) and the harness's mock now parks in
+          # `.awaitingApproval` until the test taps the release control, so
+          # neither phase-1 test depends on a ~100 ms transient. Medians from
+          # run 37252082693's shard-3 job (2026-10-05, attempt 1, head
+          # d94ba433; the local 3-run seed was superseded): 16.404 / 17.071 /
+          # 15.095 s; shard-3 sum 598.1 s, max/min 1.2274.
           - name: shard-0
             needs-fixture: true
             only-testing: "VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesListPosition,VVTermUITests/ServerNavigationUITests/testActiveTerminalPushPopPreservesSession,VVTermUITests/TerminalKeyboardUITests/testIMECompositionStopsPrintableHardwareKeyRepeat,VVTermUITests/NoticePresentationUITests/testConnectionFailureCloseExposesNavigationWithoutRetrying,VVTermUITests/NoticePresentationUITests/testDisconnectedSheetSupportsSwipeDismissalAndKeepsReconnect,VVTermUITests/TerminalLinkTapUITests/testDoubleTapStillSelectsWord,VVTermUITests/TerminalLinkTapUITests/testOSC8LinkTapPresentsConfirmationAlert,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardAttachmentHidesAccessoryFromExistingSoftwareSession,VVTermUITests/TerminalKeyboardUITests/testBackgroundLifecycleStopsPrintableHardwareKeyRepeat,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsLogin_tapShowsLoginSheet,VVTermUITests/TerminalKeyboardUITests/testTouchingTerminalRequestsPaneFocus,VVTermUITests/TerminalZenModeUITests/testFullScreenZenConnectionBannerSitsBelowNotch,VVTermUITests/NoticePresentationUITests/testConnectionFailureUsesBottomSheetWithLargePrimaryAction,VVTermUITests/TerminalZenModeUITests/testDefaultToZenEntersZenAutomaticallyAndTerminalCoversScreen,VVTermUITests/TeleportUITests/testLogin_happyPath12h_showsSuccessCopyWith12hValidity,VVTermUITests/TeleportUITests/testBootstrap_suspended_showsReconnectingThenSucceedsOnRetry,VVTermUITests/TeleportReadinessUITests/testReadiness_needsRegistration_tapShowsBootstrapSheetNotRegistration,VVTermUITests/NoticePresentationUITests/testFirstUseHostKeyShowsTrustAffordance,VVTermUITests/TeleportReadinessUITests/testReadiness_ready_tapConnectsDirectly,VVTermUITests/TeleportUITests/testBootstrap_happyPath_showsSuccessCopy"
@@ -579,7 +579,7 @@ jobs:
             only-testing: "VVTermUITests/TerminalReconnectUITests/testProductionCodexFindKeyboardMenuRestoresPTYTyping,VVTermUITests/StatsCardsLayoutUITests/testLockedDockerCardRemainsContainedAfterRepeatedRotation,VVTermUITests/StatsStorageUITests/testBrowsingSwipeEditVisibilityAndHealthStates,VVTermUITests/TerminalKeyboardUITests/testCommandPlusAndMinusZoomWithoutReachingTerminalInput,VVTermUITests/TerminalReconnectUITests/testProductionSSHBackgroundPreservesDarkAccessoryAppearance,VVTermUITests/NoticePresentationUITests/testInactiveSplitPaneCannotPresentConnectionBanner,VVTermUITests/TerminalZenModeUITests/testMenuEntryHidesChromeAndFloatingControlRestoresIt,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardDetachStopsPrintableHardwareKeyRepeat,VVTermUITests/TerminalKeyboardUITests/testIMEProxyMarkedTextDeleteAndCommitPath,VVTermUITests/TerminalZenModeUITests/testZenPanelShareDiagnosticsButtonTriggersHandler,VVTermUITests/TerminalZenModeUITests/testFullScreenZenOverscrollShiftsContentPastTopEdgeAndResets,VVTermUITests/TerminalKeyboardUITests/testHardwareKeyboardFocusSuppressesAccessoryBar,VVTermUITests/TeleportReadinessUITests/testReadiness_needsLogin_tapShowsLoginSheet,VVTermUITests/TeleportUITests/testRegistration_happyPath_showsFormAndContinueSucceeds,VVTermUITests/TeleportUITests/testLogin_faceIDCancelled_showsFaceIDCancelledCopy,VVTermUITests/TeleportUITests/testLogin_serverError_showsTheServerMessageVerbatim,VVTermUITests/TeleportReadinessUITests/testReadiness_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportUITests/testLogin_certExpiredOnTap_showsSuccessCopyWithNewTTL,VVTermUITests/TeleportUITests/testLogin_happyPath1h_showsSuccessCopyWith1hValidity,VVTermUITests/TeleportUITests/testBootstrap_safariUnavailable_showsManualLinkCopy,VVTermUITests/TeleportUITests/testBootstrap_userCancelled_showsSetupCancelledCopy,VVTermUITests/TeleportFormUITests/testAddMode_faceIDTeleport_showsTeleportFieldCopy,VVTermUITests/TeleportFormUITests/testEditMode_teleportServer_showsTeleportCaptions,VVTermUITests/TeleportReadinessIOSUITests/testBootstrap_swipeDismissDuringRetry_cancelsTheFlow"
           - name: shard-3
             needs-fixture: true
-            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness,VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy"
+            only-testing: "VVTermUITests/StatsCardsLayoutUITests/testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions,VVTermUITests/ServerNavigationUITests/testBackgroundReturnPreservesSessionKeyboardAndBackResponsiveness,VVTermUITests/TerminalReconnectUITests/testProductionCodexModesKeepKeyboardAndPTYTyping,VVTermUITests/NoticePresentationUITests/testConcurrentOperationsStackAboveBottomToolbar,VVTermUITests/TerminalKeyboardUITests/testDockedFloatingDockedGeometryKeepsSurfaceAndViewportValid,VVTermUITests/TerminalKeyboardUITests/testRepeatedFocusTapsKeepDefaultKeyboardAndLayoutStable,VVTermUITests/NoticePresentationUITests/testInitialConnectionBannerYieldsToTmuxSelectionSheet,VVTermUITests/TerminalKeyboardUITests/testPaneCloseAlertRestoresTerminalFocusAfterCancel,VVTermUITests/NoticePresentationUITests/testHostKeyFailureRetainsCloseAndTrustActions,VVTermUITests/TerminalZenModeUITests/testFullScreenZenKeyboardOpenPreservesGridAndKeepsContentVisible,VVTermUITests/TerminalScreenAwakeUITests/testTerminalSettingControlsIdleTimerAndRestoresAfterBackground,VVTermUITests/NoticePresentationUITests/testRetryFromDismissedBannerCanPresentANewFailure,VVTermUITests/NoticePresentationUITests/testInitialConnectionUsesNonBlockingTopBanner,VVTermUITests/TeleportUITests/testRegistration_cancelBetweenSafariTrips_showsFormAfterCancel,VVTermUITests/TeleportUITests/testLogin_faceIDUnavailable_showsFaceIDUnavailableCopy,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_crossDevice_iCloudSync_showsNeedsBootstrap,VVTermUITests/TeleportReadinessIOSUITests/testReadinessIOS_needsBootstrap_tapShowsBootstrapSheet,VVTermUITests/NoticePresentationUITests/testFilesOperationNoticeRemainsVisibleOnPushedPreview,VVTermUITests/TeleportUITests/testBootstrap_serverError_showsServerMessageVerbatim,VVTermUITests/TeleportUITests/testBootstrap_timeout_showsApprovalTimedOutCopy,VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet,VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap,VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet"
 
     steps:
       - name: Checkout
@@ -744,7 +744,7 @@ jobs:
           # on #349/#264/#257.
           #
           # Parallel testing is explicitly OFF. The shard bins are packed
-          # from SERIAL per-test medians (recorded per-bin sums 549.6-681.7s
+          # from SERIAL per-test medians (recorded per-bin sums 555.4-681.7s
           # plus 326.6-796.7s of per-shard overhead; observed wall clock
           # 21.5-37.5m, median 27.8m), and
           # `-parallel-testing-enabled YES` (the first #230 revision) instead
