@@ -102,4 +102,18 @@ extension XCTestCase {
         guard diagnostics.exists else { return "diagnostics=<missing>" }
         return "diagnostics=\(diagnostics.label)"
     }
+
+    /// Notice-harness diagnostics payload for `NoticePresentationUITests`
+    /// (issue #228): that harness renders no keyboard diagnostics element, so
+    /// the keyboard helper cannot serve the class. Existence-only queries (no
+    /// waits): this runs on the failure path, including the eager `XCTFail`
+    /// mount gate on a degraded AX stack.
+    func noticeDiagnosticsText(in app: XCUIApplication) -> String {
+        let scenario = app.staticTexts["vvterm.noticeTest.scenario.current"]
+        let menu = app.buttons["vvterm.noticeTest.scenarioMenu"]
+        return "noticeDiagnostics=appState=\(String(describing: app.state))"
+            + " scenario=\(scenario.exists ? scenario.label : "<missing>")"
+            + " scenarioMenu=\(menu.exists)"
+            + " sheets=\(app.sheets.firstMatch.exists)"
+    }
 }
