@@ -467,11 +467,10 @@ struct WorkflowShardSplitPinsTests {
     /// launchPerf row.
     private static let expectedExemptionCount = 33
 
-    /// The seven categories and their pinned counts (issue #362).
+    /// The six categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
-        "quarantined": 17,
+        "quarantined": 18,
         "ciQuarantined": 5,
-        "capabilityGated": 1,
         "reproOnly": 3,
         "launchPerf": 2,
         "platformGated": 1,
@@ -482,18 +481,17 @@ struct WorkflowShardSplitPinsTests {
     private static let trackerRequiredCategories: Set<String> = [
         "quarantined",
         "ciQuarantined",
-        "capabilityGated",
         "unscheduled",
     ]
 
-    /// Live trackers only (open at filing, 2026-10-04). The pin cannot query
-    /// GitHub: a closed tracker must name its successor here and in its
-    /// reason, or assertion 8 reds.
-    private static let liveTrackers: Set<Int> = [92, 257, 364]
+    /// Live trackers only (open at filing, 2026-10-04; #372 filed 2026-10-05).
+    /// The pin cannot query GitHub: a closed tracker must name its successor
+    /// here and in its reason, or assertion 8 reds.
+    private static let liveTrackers: Set<Int> = [92, 257, 364, 372]
 
-    /// The 8 never-scheduled methods (4 `unscheduled` + 3 `quarantined` + 1
-    /// `capabilityGated`), frozen as exact `(id, category)` pairs so a category
-    /// swap between the categories is visible.
+    /// The 8 never-scheduled methods (4 `unscheduled` + 4 `quarantined`),
+    /// frozen as exact `(id, category)` pairs so a category swap between the
+    /// categories is visible.
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
         ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
@@ -501,7 +499,7 @@ struct WorkflowShardSplitPinsTests {
         ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "capabilityGated"),
+        ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
         ("VVTermUITests/TerminalZenModeUITests/testRealTerminalLauncherOpensZenPanel", "unscheduled"),
     ]
 

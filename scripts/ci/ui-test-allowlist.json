@@ -121,9 +121,9 @@
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews",
-      "category": "capabilityGated",
-      "reason": "skips only when the simulator suppresses the software keyboard or lacks the native dock/redock gesture; never scheduled - decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#372: run 37269132486 failed the float gesture at TerminalKeyboardUITests.swift:1313 with keyboardPresentation=floating together with policy=geom=docked and terminalHeight=0.0 (geometry-derived token; two-cause ambiguity in makeKeyboardFloating)",
+      "tracker": 372
     },
     {
       "id": "VVTermUITests/ZmxScrollbackReloadUITests/testKeyboardCloseDoesNotReloadScrollback",
