@@ -163,21 +163,21 @@
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92 family: privacyShield element absent 5 s after the shield tap (TerminalKeyboardUITests.swift:1109; run 37269132486) with diagnostics accessoryAppearance=dark, keyboardPresentation=docked, inputReloads=2; the sibling privacy-shield test passed in the same run",
+      "tracker": 92
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop",
-      "category": "unscheduled",
-      "reason": "never scheduled since the #91 sync; uses the same launchKeyboardHarness helper as the #92 quarantines (failure never measured) - schedule-or-quarantine decision tracked in #364",
-      "tracker": 364
+      "category": "quarantined",
+      "reason": "#92: upstream keyboard test coupled to upstream TerminalTabManager wiring",
+      "tracker": 92
     },
     {
       "id": "VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory",

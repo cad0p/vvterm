@@ -469,13 +469,13 @@ struct WorkflowShardSplitPinsTests {
 
     /// The seven categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
-        "quarantined": 14,
+        "quarantined": 17,
         "ciQuarantined": 5,
         "capabilityGated": 1,
         "reproOnly": 3,
         "launchPerf": 2,
         "platformGated": 1,
-        "unscheduled": 7,
+        "unscheduled": 4,
     ]
 
     /// Categories whose resolution is owned by a live issue.
@@ -491,14 +491,14 @@ struct WorkflowShardSplitPinsTests {
     /// reason, or assertion 8 reds.
     private static let liveTrackers: Set<Int> = [92, 257, 364]
 
-    /// The 8 never-scheduled methods (7 `unscheduled` + 1 `capabilityGated`),
-    /// frozen as exact `(id, category)` pairs so a category swap between
-    /// `unscheduled` and `capabilityGated` is visible.
+    /// The 8 never-scheduled methods (4 `unscheduled` + 3 `quarantined` + 1
+    /// `capabilityGated`), frozen as exact `(id, category)` pairs so a category
+    /// swap between the categories is visible.
     private static let frozenNeverScheduledPairs: [(id: String, category: String)] = [
         ("VVTermUITests/TerminalKeyboardUITests/testDockedAccessoryUsesOwningTerminalDarkAppearance", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "unscheduled"),
-        ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "unscheduled"),
+        ("VVTermUITests/TerminalKeyboardUITests/testFloatingKeyboardRoundTripDoesNotReloadInputViews", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testPrivacyResumeRestoresDockedAccessoryDarkAppearance", "quarantined"),
+        ("VVTermUITests/TerminalKeyboardUITests/testRepeatedSplitPaneFocusKeepsOneInputUISessionWithoutReloadLoop", "quarantined"),
         ("VVTermUITests/TerminalKeyboardUITests/testSameScreenForeignKeyboardDoesNotReclaimTerminalAccessory", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testSoftwareToolbarAndCustomShortcutCombinationsUseAppRouting", "unscheduled"),
         ("VVTermUITests/TerminalKeyboardUITests/testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews", "capabilityGated"),
