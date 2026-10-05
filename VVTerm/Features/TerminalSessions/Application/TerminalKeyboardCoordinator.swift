@@ -462,12 +462,16 @@ final class TerminalKeyboardCoordinator: ObservableObject {
             return .hidden
         }
 
-        let overlap = screenFrame.intersection(visibleFrame)
-        let edgeTolerance: CGFloat = 1
-        let fillsBottomEdge = abs(overlap.maxY - screenFrame.maxY) <= edgeTolerance
-        let fillsWidth = abs(overlap.minX - screenFrame.minX) <= edgeTolerance
-            && abs(overlap.maxX - screenFrame.maxX) <= edgeTolerance
-        return fillsBottomEdge && fillsWidth
+        // #372: the dominant width rule is shared with
+        // `TerminalKeyboardAvoidancePolicy.resolvedGeometry`; the published
+        // frame stays the raw (unsnapped) notification frame. Vertical
+        // position is deliberately not part of the rule: iOS 26
+        // focus-following slides a docked keyboard up the screen, and the raw
+        // frame may end a few points short of the bottom edge.
+        return TerminalKeyboardAvoidancePolicy.spansScreenWidth(
+            visibleFrame,
+            screenFrame: screenFrame
+        )
             ? .docked(frame: visibleFrame)
             : .floating(frame: visibleFrame)
     }

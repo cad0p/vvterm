@@ -31,6 +31,18 @@ enum TerminalKeyboardAvoidancePolicy {
     /// sits orders of magnitude below the grid).
     nonisolated static let staleCaretToleranceFraction: CGFloat = 0.05
 
+    /// A keyboard at least 80 % of the screen width is docked geometry. The
+    /// test is deliberately independent of the vertical position: iOS 26
+    /// focus-following slides a docked keyboard up the screen, and the raw
+    /// notification frame may end a few points short of the bottom edge
+    /// (measured: iPhone 22 pt, iPad 3 pt on iOS 26.3).
+    nonisolated static func spansScreenWidth(
+        _ keyboardFrame: CGRect,
+        screenFrame: CGRect
+    ) -> Bool {
+        keyboardFrame.width >= screenFrame.width * 0.8
+    }
+
     nonisolated static func resolvedGeometry(
         screenFrame: CGRect,
         terminalFrame: CGRect,
@@ -51,8 +63,7 @@ enum TerminalKeyboardAvoidancePolicy {
             return .hidden
         }
 
-        let attachesToBottom = keyboardFrame.maxY >= screenFrame.maxY - 1
-        let spansScreenWidth = keyboardFrame.width >= screenFrame.width * 0.8
+        let spansWidth = spansScreenWidth(keyboardFrame, screenFrame: screenFrame)
         // The system may slide a full-width keyboard up the screen to follow
         // the focused input (iOS 26 focus-following keyboards, and the
         // full-width undocked state). A full-width keyboard is still
@@ -61,7 +72,7 @@ enum TerminalKeyboardAvoidancePolicy {
         // follows up → bigger overlap → bigger lift → runaway until the
         // terminal is off-screen). Compact floating keyboards (iPad) keep
         // their frame.
-        if spansScreenWidth {
+        if spansWidth {
             let snapped = CGRect(
                 x: keyboardFrame.minX,
                 y: screenFrame.maxY - keyboardFrame.height,
@@ -70,9 +81,11 @@ enum TerminalKeyboardAvoidancePolicy {
             )
             return .docked(frame: snapped)
         }
-        return attachesToBottom && spansScreenWidth
-            ? .docked(frame: keyboardFrame)
-            : .floating(frame: keyboardFrame)
+        // #372: anything narrower than 80 % of the screen is floating
+        // geometry. The pre-#372 ternary (`attachesToBottom && spansWidth`) was
+        // dead here (`spansWidth == false`) and is dropped; behavior is
+        // unchanged.
+        return .floating(frame: keyboardFrame)
     }
 
     nonisolated static func verticalOffset(

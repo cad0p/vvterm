@@ -2158,6 +2158,55 @@ struct TerminalKeyboardCoordinatorTests {
     }
 
     @Test
+    func keyboardFrameMinimumHeightBoundaryIsNinetyNineVersusOneHundred() {
+        // The gate is the intersection height, not the raw frame height: a
+        // 300 pt frame clipped to 98 pt of screen is invisible, and 100 pt is
+        // the inclusive minimum.
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 401, width: 1_000, height: 99),
+                in: screen
+            ) == nil
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 400, width: 1_000, height: 100),
+                in: screen
+            ) == CGRect(x: 0, y: 400, width: 1_000, height: 100)
+        )
+        #expect(
+            TerminalKeyboardCoordinator.visibleKeyboardFrame(
+                CGRect(x: 0, y: 402, width: 1_000, height: 300),
+                in: screen
+            ) == nil
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationAcceptsWiderThanScreenAndNonZeroOriginFrames() {
+        // #372 lens-2 NIT: the raw-width rule has no screen-origin term and
+        // a frame wider than the screen still spans.
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        let widerThanScreen = CGRect(x: -40, y: 200, width: 1_100, height: 300)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: widerThanScreen,
+                in: screen
+            ) == .docked(frame: widerThanScreen)
+        )
+
+        let offsetScreen = CGRect(x: 120, y: 60, width: 1_000, height: 500)
+        let frame = CGRect(x: 130, y: 260, width: 800, height: 300)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: frame,
+                in: offsetScreen
+            ) == .docked(frame: frame)
+        )
+    }
+
+    @Test
     func keyboardPresentationModelsHiddenDockedAndFloatingStatesExplicitly() {
         let screen = CGRect(x: 0, y: 0, width: 1_366, height: 1_024)
         let docked = CGRect(x: 0, y: 650, width: 1_366, height: 374)
@@ -2181,6 +2230,156 @@ struct TerminalKeyboardCoordinatorTests {
                 in: screen
             ) == .floating(frame: floating)
         )
+    }
+
+    @Test
+    func softwareKeyboardPresentationUsesTheMeasuredRawFrameShape() {
+        // #372: exact measured notification shapes (iOS 26.3). The published
+        // frame is the raw, unsnapped notification frame; a full-width
+        // keyboard is docked geometry even when the frame ends short of the
+        // screen bottom (iPhone 22 pt gap, iPad 3 pt gap).
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 108, width: 874, height: 272),
+                in: CGRect(x: 0, y: 0, width: 874, height: 402)
+            ) == .docked(frame: CGRect(x: 0, y: 108, width: 874, height: 272))
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 461, width: 1_210, height: 370),
+                in: CGRect(x: 0, y: 0, width: 1_210, height: 834)
+            ) == .docked(frame: CGRect(x: 0, y: 461, width: 1_210, height: 370))
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationResolvesTheWidthBoundaryAtEightyPercent() {
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 200, width: 800, height: 300),
+                in: screen
+            ) == .docked(frame: CGRect(x: 0, y: 200, width: 800, height: 300))
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 200, width: 799, height: 300),
+                in: screen
+            ) == .floating(frame: CGRect(x: 0, y: 200, width: 799, height: 300))
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationUsesRawWidthNotTheIntersection() {
+        // #372: a partially off-screen full-width frame — the raw width (720)
+        // spans 80 % of the 874 pt screen, the intersection width (690) does
+        // not. The raw notification frame is the rule's input.
+        let screen = CGRect(x: 0, y: 0, width: 874, height: 402)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: -30, y: 150, width: 720, height: 200),
+                in: screen
+            ) == .docked(frame: CGRect(x: -30, y: 150, width: 720, height: 200))
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationKeepsNarrowAndSubMinimumFramesOutOfTheDockedCase() {
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 200, y: 300, width: 320, height: 200),
+                in: screen
+            ) == .floating(frame: CGRect(x: 200, y: 300, width: 320, height: 200))
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 470, width: 874, height: 32),
+                in: screen
+            ) == .hidden
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: nil,
+                in: screen
+            ) == .hidden
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: .zero,
+                in: screen
+            ) == .hidden
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 200, width: 800, height: 300),
+                in: nil
+            ) == .hidden
+        )
+        #expect(
+            TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                for: CGRect(x: 0, y: 200, width: 800, height: 300),
+                in: .zero
+            ) == .hidden
+        )
+    }
+
+    @Test
+    func softwareKeyboardPresentationAgreesWithAvoidanceGeometryOnCase() {
+        // #372: for on-screen frames the presentation token and the avoidance
+        // policy must resolve the same case. The one deliberate divergence is
+        // `.hidden`: the policy has no minimum-height rule, so a
+        // sub-minimum-height full-width frame is `.hidden` for the token but
+        // `.docked` for the policy (documented by the last row).
+        enum GeometryCase {
+            case hidden, docked, floating
+        }
+        func presentationCase(
+            _ presentation: TerminalKeyboardCoordinator.SoftwareKeyboardPresentation
+        ) -> GeometryCase {
+            switch presentation {
+            case .hidden: .hidden
+            case .docked: .docked
+            case .floating: .floating
+            }
+        }
+        func geometryCase(
+            _ geometry: TerminalKeyboardAvoidancePolicy.KeyboardGeometry
+        ) -> GeometryCase {
+            switch geometry {
+            case .hidden: .hidden
+            case .docked: .docked
+            case .floating: .floating
+            }
+        }
+
+        let screen = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        let rows: [(frame: CGRect, presentation: GeometryCase, geometry: GeometryCase)] = [
+            (CGRect(x: 0, y: 200, width: 1_000, height: 300), .docked, .docked),
+            (CGRect(x: 0, y: 100, width: 1_000, height: 200), .docked, .docked),
+            (CGRect(x: 200, y: 300, width: 320, height: 200), .floating, .floating),
+            (CGRect(x: 200, y: 150, width: 320, height: 200), .floating, .floating),
+            (CGRect(x: 0, y: 470, width: 1_000, height: 30), .hidden, .docked),
+        ]
+        for row in rows {
+            #expect(
+                presentationCase(
+                    TerminalKeyboardCoordinator.softwareKeyboardPresentation(
+                        for: row.frame,
+                        in: screen
+                    )
+                ) == row.presentation
+            )
+            #expect(
+                geometryCase(
+                    TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+                        screenFrame: screen,
+                        terminalFrame: screen,
+                        keyboardFrame: row.frame
+                    )
+                ) == row.geometry
+            )
+        }
     }
 
     @Test

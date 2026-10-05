@@ -5,9 +5,12 @@
 // scripts/ci/ui-test-allowlist.json:
 // upstream's new harness is coupled to upstream's TerminalTabManager wiring and
 // fails on the fork's app (harness control-panel geometry + keyboard state machine).
-// One more carries an unconditional #372 XCTSkip for the measured native
-// floating-keyboard geometry divergence (floating presentation token with docked
-// geometry; testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews).
+// testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews is a
+// frame-based native float probe (#372): it capability-skips only when the
+// pinch is a measured no-op on a destination without the native float
+// capability (the iPhone pinch types characters instead of floating),
+// hard-fails on an iPad destination and whenever the frame moves without
+// floating, and never skips once a float has been observed in-run.
 // Four more are CI-only gated in the test body: #119
 // (testPrivacyModeBackgroundResumeRestoresResponsiveTerminal), #201 (closed;
 // testPrivacyShieldHidesAccessoryAndRestoresResponsiveTerminal and
@@ -16,6 +19,9 @@
 // host-state tracker for those is #257, and scripts/ci/ui-test-allowlist.json is
 // the authoritative ledger (WorkflowShardSplitPinsTests assertions 7-8).
 import XCTest
+#if canImport(UIKit)
+import UIKit
+#endif
 
 final class TerminalKeyboardUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -1285,10 +1291,6 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testNativeFloatingKeyboardRoundTripDoesNotReloadInputViews() throws {
-        // #372: the float-gesture probe diverged (floating presentation token with
-        // docked geometry) rather than proving a simulator capability limit — see
-        // https://github.com/cad0p/vvterm/issues/372.
-        throw XCTSkip("#372: native floating-keyboard gesture probe diverges (floating token, docked geometry)")
         XCUIDevice.shared.orientation = .landscapeLeft
         defer {
             XCUIDevice.shared.orientation = .portrait
@@ -1301,17 +1303,30 @@ final class TerminalKeyboardUITests: XCTestCase {
         let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
         let keyboard = app.keyboards.firstMatch
         guard keyboard.waitForExistence(timeout: 8) else {
+            // #372: the capability is unknown here (no frame was ever
+            // observed), so this stays a skip on every idiom — including
+            // `.pad`, where a keyboard-suppression event is a skip, not a
+            // regression signal.
             throw XCTSkip(
-                "Simulator suppressed the software keyboard. \(diagnosticsText(in: app))"
+                "Simulator suppressed the software keyboard (idiom=\(isCapableFloatDestination ? "pad" : "non-pad") capabilityProven=false). \(diagnosticsText(in: app))"
             )
         }
 
         let screenFrame = app.frame
-        if keyboard.frame.width < screenFrame.width / 2 {
-            guard dockFloatingKeyboard(keyboard, diagnostics: diagnostics, in: app) else {
-                throw XCTSkip(
-                    "Simulator did not support the native docking gesture. \(diagnosticsText(in: app))"
+        // The probe needs docked-width geometry on entry (the classifier reads
+        // an already-float-sized entry frame as a divergence); a narrower-than
+        // 0.8 x screen entry frame is re-docked first (#372 lens-1 MAJOR: a
+        // float-sized entry *proves* the native capability, so a failed dock
+        // there is an app-side regression on every idiom, never a skip).
+        let entryFrame = keyboard.frame
+        if entryFrame.width < screenFrame.width * 0.8 {
+            guard dockFloatingKeyboard(keyboard, in: app, reShowVia: terminal) else {
+                XCTFail(
+                    """
+                    #372: the native docking gesture failed on a capable destination (float-sized entry, app-side regression, not a capability gate). entry=\(entryFrame.debugDescription) idiom=\(isCapableFloatDestination ? "pad" : "non-pad") capabilityProven=true \(diagnosticsText(in: app))
+                    """
                 )
+                return
             }
         }
 
@@ -1324,13 +1339,45 @@ final class TerminalKeyboardUITests: XCTestCase {
         )
         let inputReloads = try requiredDiagnosticMetric("inputReloads", in: app)
 
-        guard makeKeyboardFloating(
+        // #372 lens-1 MAJOR: the classifier's pre-pinch reference must be a
+        // settled frame, not a mid-animation AX read (measured 48 pt delta on
+        // the iPad). The settled anchor is recorded in the messages below so a
+        // failed stability wait is diagnosable from the red.
+        let settledAnchor = waitForSettledKeyboardFrame(
             keyboard,
-            diagnostics: diagnostics,
-            screenWidth: screenFrame.width
-        ) else {
+            timeout: 5,
+            settle: 0.5,
+            matching: { $0.width >= screenFrame.width * 0.8 }
+        )
+        let anchorWasSettled = settledAnchor != nil
+        let prePinchFrame = settledAnchor ?? keyboard.frame
+        let floatOutcome = makeKeyboardFloating(
+            keyboard,
+            screenWidth: screenFrame.width,
+            prePinchFrame: prePinchFrame
+        )
+        switch floatOutcome {
+        case .floated:
+            break
+        case .unsupported(let frames):
+            let frameHistory = frames.map(\.debugDescription).joined(separator: " -> ")
+            // #372: the pinch is a measured no-op on destinations without the
+            // native float capability (the iPhone pinch types characters), but
+            // a capable (`.pad`) destination must never skip: there the same
+            // unmoved frame is an app-side regression.
+            let message = """
+                #372: the native float pinch was a no-op (no frame ever dropped below half the screen and every frame stayed within 4 pt of the settled pre-pinch frame). pre-pinch=\(prePinchFrame.debugDescription) anchorSettled=\(anchorWasSettled) frames=\(frameHistory). Measured 2026-10-05: iPhone 17 (874x402 screen) pre-pinch (75.0, 237.0, 724.0, 163.0) with post-pinch (75.0, 237.0, 724.0, 163.0) -> (75.0, 238.0, 724.0, 162.0) (1 pt jitter, never float-sized); iPad Pro 11-inch (M4) (1210x834 screen) pre-pinch (0.0, 461.0, 1210.0, 370.0) floats to (7.0, 536.0, 320.0, 216.0). The old label-based probe failed in CI run 37269132486 (TerminalKeyboardUITests.swift:1313). \(diagnosticsText(in: app))
+                """
+            if isCapableFloatDestination {
+                XCTFail(message)
+                return
+            }
+            throw XCTSkip(message)
+        case .divergence(let frames):
             XCTFail(
-                "Simulator did not perform the floating-keyboard gesture. \(diagnosticsText(in: app))"
+                """
+                #372: the keyboard frame moved or vanished without ever becoming float-sized (app-side divergence, not a capability gate). pre-pinch=\(prePinchFrame.debugDescription) anchorSettled=\(anchorWasSettled) frames=\(frames.map(\.debugDescription).joined(separator: " -> ")). \(diagnosticsText(in: app))
+                """
             )
             return
         }
@@ -1367,10 +1414,14 @@ final class TerminalKeyboardUITests: XCTestCase {
                 """
             )
         }
-        guard dockFloatingKeyboard(keyboard, diagnostics: diagnostics, in: app) else {
-            throw XCTSkip(
-                "Simulator did not support the native redocking gesture. \(diagnosticsText(in: app))"
+        // The capability is proven in-run once a float-sized frame has been
+        // observed, so a failed redock is an app-side regression, never a
+        // capability gate (no XCTSkip here).
+        guard dockFloatingKeyboard(keyboard, in: app, reShowVia: terminal) else {
+            XCTFail(
+                "The native redocking gesture failed after a float was observed in-run (app-side regression, not a capability gate). \(diagnosticsText(in: app))"
             )
+            return
         }
         XCTAssertTrue(
             accessory.exists,
@@ -1407,86 +1458,211 @@ final class TerminalKeyboardUITests: XCTestCase {
         )
     }
 
+    /// A `.pad` destination always has the native float capability, so an
+    /// unmoved frame there is an app-side regression, never a skip.
+    private var isCapableFloatDestination: Bool {
+        #if canImport(UIKit)
+        UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        false
+        #endif
+    }
+
+    /// #372: drive the native float gesture and classify the observed frames.
+    /// The `keyboardPresentation` token is geometry-derived and can read
+    /// `floating` with a docked frame, so it is a diagnostic in the caller's
+    /// messages, never the gate. A pinch on a floating keyboard can move it or
+    /// type a character, so the loop exits as soon as a float-sized frame is
+    /// observed.
     private func makeKeyboardFloating(
         _ keyboard: XCUIElement,
-        diagnostics: XCUIElement,
-        screenWidth: CGFloat
-    ) -> Bool {
+        screenWidth: CGFloat,
+        prePinchFrame: CGRect
+    ) -> FloatGestureOutcome {
+        var frames: [CGRect] = []
         for scale: CGFloat in [0.5, 0.35, 0.25] {
             keyboard.pinch(withScale: scale, velocity: -2)
-            guard waitForLabel(
-                diagnostics,
-                containing: "keyboardPresentation=floating",
-                timeout: 3
-            ) else {
-                continue
-            }
-            if waitForKeyboardFrame(keyboard, timeout: 3, matching: { frame in
-                frame.width < screenWidth / 2
-            }) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private func dockFloatingKeyboard(
-        _ keyboard: XCUIElement,
-        diagnostics: XCUIElement,
-        in app: XCUIApplication
-    ) -> Bool {
-        let screenFrame = app.frame
-        keyboard.pinch(withScale: 2, velocity: 2)
-        if waitForLabel(
-            diagnostics,
-            containing: "keyboardPresentation=docked",
-            timeout: 5
-        ), waitForKeyboardFrame(keyboard, timeout: 5, matching: { frame in
-            frame.width > screenFrame.width * 0.8
-        }) {
-            return true
-        }
-
-        let currentKeyboard = app.keyboards.firstMatch
-        guard currentKeyboard.waitForExistence(timeout: 2) else { return false }
-        let keyboardFrame = currentKeyboard.frame
-        let dragStart = app.coordinate(
-            withNormalizedOffset: CGVector(
-                dx: keyboardFrame.midX / screenFrame.width,
-                dy: min(keyboardFrame.maxY - 12, screenFrame.maxY - 12) / screenFrame.height
+            let frame = observedKeyboardFrame(
+                keyboard,
+                timeout: 3,
+                floatWidth: screenWidth / 2
             )
+            frames.append(frame)
+            // A dismissed keyboard yields an unusable (`.zero`) frame; stop
+            // pinching so the classifier can return its designed
+            // `.divergence` message instead of an XCUITest "no matches"
+            // error on the next pinch (lens-1 MINOR).
+            if !frame.isUsableKeyboardFrame { break }
+            if frame.width < screenWidth / 2 { break }
+        }
+        return classifyFloatGesture(
+            frames: frames,
+            prePinchFrame: prePinchFrame,
+            screenWidth: screenWidth
         )
-        let dragEnd = app.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99)
-        )
-        dragStart.press(
-            forDuration: 0.5,
-            thenDragTo: dragEnd,
-            withVelocity: .slow,
-            thenHoldForDuration: 1
-        )
-        return waitForLabel(
-            diagnostics,
-            containing: "keyboardPresentation=docked",
-            timeout: 5
-        ) && waitForKeyboardFrame(currentKeyboard, timeout: 5, matching: { frame in
-            frame.width > screenFrame.width * 0.8
-        })
     }
 
-    private func waitForKeyboardFrame(
+    /// Bounded wait for a float-sized frame. Returns the first float-sized
+    /// frame, otherwise the settled frame at the timeout. A transient AX
+    /// non-existence during the keyboard's layout transition must not zero the
+    /// observation (measured #372: `keyboard.exists` flaps false for one poll
+    /// right after the float pinch and is true with the floating frame again
+    /// on the next poll); `.zero` is returned only when the keyboard is still
+    /// gone at the timeout — a dismissal must classify as a divergence, never
+    /// as a capability gate.
+    private func observedKeyboardFrame(
         _ keyboard: XCUIElement,
         timeout: TimeInterval,
-        matching predicate: (CGRect) -> Bool
-    ) -> Bool {
+        floatWidth: CGFloat
+    ) -> CGRect {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if keyboard.exists, predicate(keyboard.frame) {
-                return true
+            if keyboard.exists {
+                let frame = keyboard.frame
+                if frame.width < floatWidth {
+                    return frame
+                }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
+        return keyboard.exists ? keyboard.frame : .zero
+    }
+
+    /// Drives the native dock gesture on the AX frame (the geometry-derived
+    /// `keyboardPresentation` token is not a gate: on iOS 26 it reads
+    /// `floating` for the full-width docked frame `(0, 461, 1210, 370)`).
+    ///
+    /// The measured shapes are tried in order because the reliable gesture is
+    /// device/state-dependent (#372 lens-2 MAJOR):
+    /// - `wholeKeyboardPinch3` — iPad Pro 11-inch (M4), iOS 26.3.1: a scale-3
+    ///   pinch open docks `(7, 530, 320, 216)` -> `(0, 461, 1210, 370)`; a
+    ///   scale-2 pinch is a no-op (the scale is the deciding factor).
+    /// - `spaceKeyPinch3` — the same device: the space-key scale-3 pinch also
+    ///   docks and never lands on the delete key; on the M5 the whole-keyboard
+    ///   float pinch types DEL (`inputHex=7f`), so this shape is the
+    ///   typed-input-safe variant.
+    /// - `topEdgeDrag` — the standard grabber drag, retained as the last
+    ///   resort (measured not to dock on either iPad).
+    ///
+    /// A shape that typed input (`sentCount` moved) is a gesture-shape
+    /// mismatch: the helper recovers the keyboard and tries the next shape.
+    /// Returns false only when every shape failed; the post-float caller keeps
+    /// the hard `XCTFail`.
+    ///
+    /// M5 limitation (measured 2026-10-05, iOS 26.3.1): once floating, no
+    /// shape docks — pinches of 1.5/2/3/4/5 (velocities 1/2/5), pill drags at
+    /// six offsets, and rotation are all no-ops, while a key tap still types.
+    /// The system Settings app on the same simulator is equally undockable
+    /// (scratch `testSettingsDock` probe), so this is the simulator's
+    /// touch/gesture behavior, not the app's.
+    private func dockFloatingKeyboard(
+        _ keyboard: XCUIElement,
+        in app: XCUIApplication,
+        reShowVia terminal: XCUIElement
+    ) -> Bool {
+        let screenFrame = app.frame
+        let matchesDockedWidth: (CGRect) -> Bool = { frame in
+            frame.width > screenFrame.width * 0.8
+        }
+
+        func settleDocked() -> Bool {
+            waitForSettledKeyboardFrame(
+                keyboard,
+                timeout: 8,
+                settle: 1.6,
+                matching: matchesDockedWidth
+            ) != nil
+        }
+
+        for shape in ["wholeKeyboardPinch3", "spaceKeyPinch3", "topEdgeDrag"] {
+            let sentCountBefore = diagnosticMetrics(in: app)["sentCount"]
+            switch shape {
+            case "wholeKeyboardPinch3":
+                keyboard.pinch(withScale: 3, velocity: 2)
+            case "spaceKeyPinch3":
+                if let spaceKey = widestKeyboardKey(in: keyboard) {
+                    spaceKey.pinch(withScale: 3, velocity: 2)
+                } else {
+                    keyboard.pinch(withScale: 3, velocity: 2)
+                }
+            default:
+                let keyboardFrame = keyboard.exists ? keyboard.frame : .zero
+                guard keyboardFrame.isUsableKeyboardFrame else { continue }
+                let dragStart = app.coordinate(
+                    withNormalizedOffset: CGVector(
+                        dx: keyboardFrame.midX / screenFrame.width,
+                        dy: min(keyboardFrame.minY + 12, screenFrame.maxY - 12) / screenFrame.height
+                    )
+                )
+                let dragEnd = app.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99)
+                )
+                dragStart.press(
+                    forDuration: 0.5,
+                    thenDragTo: dragEnd,
+                    withVelocity: .slow,
+                    thenHoldForDuration: 1
+                )
+            }
+            if settleDocked() { return true }
+            let typedInput = diagnosticMetrics(in: app)["sentCount"] != sentCountBefore
+            if typedInput {
+                // The shape landed on the keys: restore the keyboard and try
+                // the next shape rather than treating the typing as the
+                // dock result.
+                terminal.tap()
+                _ = keyboard.waitForExistence(timeout: 4)
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+            }
+        }
         return false
+    }
+
+    /// The widest visible key of the current keyboard (the space bar). Used to
+    /// anchor a pinch away from the delete key, which the whole-keyboard pinch
+    /// reaches on the M5.
+    private func widestKeyboardKey(in keyboard: XCUIElement) -> XCUIElement? {
+        keyboard.keys.allElementsBoundByIndex
+            .filter { $0.exists && !$0.frame.isEmpty && $0.frame.height < 120 }
+            .max(by: { $0.frame.width < $1.frame.width })
+    }
+
+    /// Waits for a frame that satisfies `predicate` and is stable (two
+    /// consecutive samples within `tolerance` on all edges, sampled every
+    /// 0.3 s) and at least `settle` seconds after the driving gesture. The
+    /// settle bound is measured (#372): a float pinch issued ~0.1 s after the
+    /// pinch-open dock is eaten and the keyboard settles docked, while the
+    /// same pinch 2 s later floats it; the stable frame also keeps the
+    /// probe's pre-pinch reference from being a mid-animation frame.
+    private func waitForSettledKeyboardFrame(
+        _ keyboard: XCUIElement,
+        timeout: TimeInterval,
+        settle: TimeInterval,
+        tolerance: CGFloat = 2,
+        matching predicate: (CGRect) -> Bool
+    ) -> CGRect? {
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
+        var previous: CGRect?
+        while Date() < deadline {
+            if keyboard.exists {
+                let frame = keyboard.frame
+                if predicate(frame),
+                   let previous,
+                   abs(frame.minX - previous.minX) <= tolerance,
+                   abs(frame.minY - previous.minY) <= tolerance,
+                   abs(frame.width - previous.width) <= tolerance,
+                   abs(frame.height - previous.height) <= tolerance,
+                   Date().timeIntervalSince(started) >= settle {
+                    return frame
+                }
+                previous = frame
+            } else {
+                previous = nil
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return nil
     }
 
     @MainActor

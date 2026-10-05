@@ -435,6 +435,56 @@ struct TerminalKeyboardAvoidancePolicyTests {
 
         #expect(geometry == .floating(frame: floating))
     }
+
+    @Test
+    func spansScreenWidthReadsRawWidthOnAWiderThanScreenFrame() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1_000, height: 500)
+        let widerThanScreen = CGRect(x: -40, y: 200, width: 1_100, height: 300)
+        #expect(
+            TerminalKeyboardAvoidancePolicy.spansScreenWidth(
+                widerThanScreen,
+                screenFrame: screenFrame
+            )
+        )
+    }
+
+    @Test
+    func spansScreenWidthIgnoresTheScreenOrigin() {
+        // The rule compares widths; a non-zero screen origin must not shift
+        // the 80 % boundary.
+        let screenFrame = CGRect(x: 120, y: 60, width: 1_000, height: 500)
+        #expect(
+            TerminalKeyboardAvoidancePolicy.spansScreenWidth(
+                CGRect(x: 130, y: 260, width: 800, height: 300),
+                screenFrame: screenFrame
+            )
+        )
+        #expect(
+            !TerminalKeyboardAvoidancePolicy.spansScreenWidth(
+                CGRect(x: 130, y: 260, width: 799, height: 300),
+                screenFrame: screenFrame
+            )
+        )
+    }
+
+    @Test
+    func resolvedGeometrySnapsFullWidthKeyboardOnANonZeroScreenOrigin() {
+        let screenFrame = CGRect(x: 100, y: 50, width: 1_000, height: 500)
+        let terminalFrame = screenFrame
+        let slidUp = CGRect(x: 110, y: 300, width: 980, height: 190)
+
+        let geometry = TerminalKeyboardAvoidancePolicy.resolvedGeometry(
+            screenFrame: screenFrame,
+            terminalFrame: terminalFrame,
+            keyboardFrame: slidUp
+        )
+
+        #expect(
+            geometry == .docked(
+                frame: CGRect(x: 110, y: 360, width: 980, height: 190)
+            )
+        )
+    }
 }
 #endif
 
