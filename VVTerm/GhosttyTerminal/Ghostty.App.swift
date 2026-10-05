@@ -151,12 +151,32 @@ nonisolated enum GhosttyClipboardConfirmDebug {
 
 extension Ghostty {
     enum ConfigBuilder {
-        static func sanitizedFontFamilies(primaryFamily: String) -> [String] {
+        /// Fallback font families appended after the primary family. Production
+        /// uses the macOS stack on macOS and none elsewhere; injectable so a
+        /// test can build either platform's config on any destination.
+        static var defaultFallbackFontFamilies: [String] {
             #if os(macOS)
-            let candidates = [primaryFamily] + TerminalDefaults.macOSFallbackFontFamilies
+            return TerminalDefaults.macOSFallbackFontFamilies
             #else
-            let candidates = [primaryFamily]
+            return []
             #endif
+        }
+
+        /// Whether the config carries the `macos-option-as-alt` platform line.
+        /// Production emits it on macOS only; injectable for the same reason.
+        static var defaultEmitsPlatformInputConfig: Bool {
+            #if os(macOS)
+            return true
+            #else
+            return false
+            #endif
+        }
+
+        static func sanitizedFontFamilies(
+            primaryFamily: String,
+            fallbackFamilies: [String] = defaultFallbackFontFamilies
+        ) -> [String] {
+            let candidates = [primaryFamily] + fallbackFamilies
 
             var seen = Set<String>()
             var families: [String] = []
@@ -207,8 +227,11 @@ extension Ghostty {
             (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
         }
 
-        static func fontFamilyLines(primaryFamily: String) -> String {
-            sanitizedFontFamilies(primaryFamily: primaryFamily)
+        static func fontFamilyLines(
+            primaryFamily: String,
+            fallbackFamilies: [String] = defaultFallbackFontFamilies
+        ) -> String {
+            sanitizedFontFamilies(primaryFamily: primaryFamily, fallbackFamilies: fallbackFamilies)
                 .map { "font-family = \"\(sanitizedConfigValue($0))\"" }
                 .joined(separator: "\n")
         }
@@ -229,20 +252,20 @@ extension Ghostty {
             theme: String,
             cursorStyle: TerminalCursorStyle = TerminalDefaults.defaultCursorStyle,
             cursorBlink: Bool = TerminalDefaults.defaultCursorBlink,
-            optionAsAltMode: TerminalOptionAsAltMode = .none
+            optionAsAltMode: TerminalOptionAsAltMode = .none,
+            fallbackFontFamilies: [String] = defaultFallbackFontFamilies,
+            emitsPlatformInputConfig: Bool = defaultEmitsPlatformInputConfig
         ) -> String {
-            #if os(macOS)
-            let platformInputConfig = "macos-option-as-alt = \(optionAsAltConfigValue(optionAsAltMode))"
-            #else
-            let platformInputConfig = ""
-            #endif
+            let platformInputConfig = emitsPlatformInputConfig
+                ? "macos-option-as-alt = \(optionAsAltConfigValue(optionAsAltMode))"
+                : ""
 
             // An empty theme name has no usable value (it would resolve to the
             // themes directory), so the directive is omitted entirely.
             let themeLine = theme.isEmpty ? "" : "theme = \"\(sanitizedConfigValue(theme))\""
 
             return """
-            \(fontFamilyLines(primaryFamily: primaryFontFamily))
+            \(fontFamilyLines(primaryFamily: primaryFontFamily, fallbackFamilies: fallbackFontFamilies))
             font-size = \(Int(fontSize))
             window-inherit-font-size = false
             window-padding-balance = false
