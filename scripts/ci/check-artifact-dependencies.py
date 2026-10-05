@@ -1008,9 +1008,11 @@ the preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
 ACCEPT→REFUSE against `cf1b75af`; the mutant matrix re-runs the 12 #350c
 mutants with patch-application assertions (12/12 applied; the red sets are
 byte-identical except `reject-runid-github-env-write-subst-nested-parens`
-joining `operand-walk-off` and `paren-strip-off`) plus one mechanism-off
+joining `operand-walk-off` and `paren-strip-off`, and the fold's
+`accept-runid-github-env-write-subst-procsub-direct-target` boundary pin
+joining `redirect-drop-off`) plus one mechanism-off
 mutant per new mechanism (5/5 applied, each red set pinned to its own
-fixtures). Every closed witness has a reject fixture carrying its measured
+fixtures — `case-separator-off` also reds the fold's `;;` boundary pin). Every closed witness has a reject fixture carrying its measured
 `base_exit`; the c3 escaped-backslash and c1/c2 controls stay REFUSE. The
 boundary (stays open, never implied closed): the multi-line ANSI-C
 trailing-backslash shape is a distinct tokenizer state and stays ACCEPT
