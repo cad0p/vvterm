@@ -83,7 +83,7 @@ struct TeleportPhaseChainUITestHarness: View {
             Text("bootstrapBegins: \(bootstrapCoordinator.beginCallCount)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.readiness")
+                .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.bootstrapBegins")
                 .padding()
 
             Spacer()
