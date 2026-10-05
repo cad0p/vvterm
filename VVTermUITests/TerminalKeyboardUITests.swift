@@ -1552,12 +1552,18 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// `keyboardPresentation` token is not a gate: on iOS 26 it reads
     /// `floating` for the full-width docked frame `(0, 461, 1210, 370)`).
     /// Tried as a pinch first, then as a slow drag to the bottom edge.
+    ///
+    /// #372 measured on iOS 26.3 / iPad Pro 11-inch (M4): a scale-2 pinch open
+    /// on the 320x216 floating keyboard is a no-op (`(7, 528, 320, 216)` ->
+    /// unchanged), while a scale-3 pinch open docks it to
+    /// `(0, 461, 1210, 370)` at both fast and slow velocities; drags toward
+    /// the bottom edge do not dock. The scale is the deciding factor.
     private func dockFloatingKeyboard(
         _ keyboard: XCUIElement,
         in app: XCUIApplication
     ) -> Bool {
         let screenFrame = app.frame
-        keyboard.pinch(withScale: 2, velocity: 2)
+        keyboard.pinch(withScale: 3, velocity: 2)
         if waitForKeyboardFrame(keyboard, timeout: 5, matching: { frame in
             frame.width > screenFrame.width * 0.8
         }) {
