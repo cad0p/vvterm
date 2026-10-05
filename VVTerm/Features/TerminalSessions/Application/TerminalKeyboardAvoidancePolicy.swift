@@ -63,7 +63,6 @@ enum TerminalKeyboardAvoidancePolicy {
             return .hidden
         }
 
-        let attachesToBottom = keyboardFrame.maxY >= screenFrame.maxY - 1
         let spansWidth = spansScreenWidth(keyboardFrame, screenFrame: screenFrame)
         // The system may slide a full-width keyboard up the screen to follow
         // the focused input (iOS 26 focus-following keyboards, and the
@@ -82,9 +81,11 @@ enum TerminalKeyboardAvoidancePolicy {
             )
             return .docked(frame: snapped)
         }
-        return attachesToBottom && spansWidth
-            ? .docked(frame: keyboardFrame)
-            : .floating(frame: keyboardFrame)
+        // #372: anything narrower than 80 % of the screen is floating
+        // geometry. The pre-#372 ternary (`attachesToBottom && spansWidth`) was
+        // dead here (`spansWidth == false`) and is dropped; behavior is
+        // unchanged.
+        return .floating(frame: keyboardFrame)
     }
 
     nonisolated static func verticalOffset(
