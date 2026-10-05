@@ -10,7 +10,8 @@
 //  and the recorded per-bin median sums must still match the fixture that
 //  documents where they came from. The fixture is
 //  `scripts/ci/shard-split-medians.json`: the 88 per-method medians over the
-//  41-run qualifying population plus its provenance. Without this pin, a list
+//  41-run qualifying population plus the three #277 local-calibration medians
+//  and its provenance. Without this pin, a list
 //  that silently drops a method, names a method that no longer exists, splits
 //  the #227 pair, or drifts away from the recorded fixture is invisible —
 //  the workflow is prose the compiler cannot check.
@@ -30,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  555.4 / 612.9 / 681.7 / 549.6. The exact sums are
-//  555.408 / 612.882 / 681.724 / 549.557 s, so the |sum − literal| deltas are
-//  0.008 / 0.018 / 0.024 / 0.043 — small but non-zero, recorded here so a
+//  555.4 / 612.9 / 681.7 / 580.6. The exact sums are
+//  555.408 / 612.882 / 681.724 / 580.572 s, so the |sum − literal| deltas are
+//  0.008 / 0.018 / 0.024 / 0.028 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -67,7 +68,7 @@
 //  declared/exempt/per-category counts below. A new method's median comes
 //  from a calibration measurement: the first green attempt-1 run after the
 //  change, whose run id is appended to `_provenance.runs`. Removals are
-//  additionally caught by the literal 88-method count and the per-class
+//  additionally caught by the literal 91-method count and the per-class
 //  counts below, which are asserted so an existing method cannot be dropped
 //  coherently from the fixture and the lists at once.
 //
@@ -146,15 +147,16 @@ struct WorkflowShardSplitPinsTests {
     private static let fixturePath = "scripts/ci/shard-split-medians.json"
     private static let uiTestsDirectory = "VVTermUITests"
 
-    /// 88 = the four lists' total; the last `only-testing` change is #236.
-    private static let expectedMethodCount = 88
+    /// 91 = the four lists' total; #277 scheduled the three
+    /// TeleportPhaseTransitionUITests methods in shard-3.
+    private static let expectedMethodCount = 91
 
     /// The four `only-testing` list lengths.
     private static let expectedEntriesPerShard: [String: Int] = [
         "shard-0": 20,
         "shard-1": 24,
         "shard-2": 24,
-        "shard-3": 20,
+        "shard-3": 23,
     ]
 
     /// The recorded per-bin median sums, 1 dp (the NAMED rounding rule).
@@ -162,7 +164,7 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.4,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 549.6,
+        "shard-3": 580.6,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
@@ -171,7 +173,7 @@ struct WorkflowShardSplitPinsTests {
         "shard-0": 555.408,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 549.557,
+        "shard-3": 580.572,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
@@ -190,6 +192,7 @@ struct WorkflowShardSplitPinsTests {
         "StatsCardsLayoutUITests": 3,
         "StatsStorageUITests": 1,
         "TeleportFormUITests": 2,
+        "TeleportPhaseTransitionUITests": 3,
         "TeleportReadinessIOSUITests": 6,
         "TeleportReadinessUITests": 5,
         "TeleportUITests": 24,
@@ -238,8 +241,8 @@ struct WorkflowShardSplitPinsTests {
         }
     }
 
-    /// Assertion 2 — partition + coverage. The four lists total 88 entries,
-    /// per-list 20/24/24/20, all unique; their union equals the fixture key
+    /// Assertion 2 — partition + coverage. The four lists total 91 entries,
+    /// per-list 20/24/24/23, all unique; their union equals the fixture key
     /// set exactly; and the per-class scheduled counts match, so an existing
     /// method cannot be dropped coherently from both the fixture and the
     /// lists.
@@ -289,7 +292,7 @@ struct WorkflowShardSplitPinsTests {
 
     /// Assertion 3 — existence. Every `Target/Class/method` resolves to a
     /// `func <method>(` inside that class body, with the class located
-    /// recursively under `VVTermUITests/` (37 of the 88 live under
+    /// recursively under `VVTermUITests/` (40 of the 91 live under
     /// `Features/Teleport/`), comments stripped first so a commented-out
     /// `func` cannot false-green.
     @Test
@@ -459,15 +462,14 @@ struct WorkflowShardSplitPinsTests {
     /// 125 = the declared universe at d98e3aa3 (18 `XCTestCase` classes).
     private static let expectedDeclaredMethodCount = 125
 
-    /// 37 = the exemption ledger (pre-existing never-scheduled debt only).
-    private static let expectedExemptionCount = 37
+    /// 34 = the exemption ledger (pre-existing never-scheduled debt only).
+    private static let expectedExemptionCount = 34
 
-    /// The eight categories and their pinned counts (issue #362).
+    /// The seven categories and their pinned counts (issue #362).
     private static let expectedExemptionCountsByCategory: [String: Int] = [
         "quarantined": 14,
         "ciQuarantined": 5,
         "capabilityGated": 1,
-        "issueGated": 3,
         "reproOnly": 3,
         "launchPerf": 3,
         "platformGated": 1,
@@ -478,7 +480,6 @@ struct WorkflowShardSplitPinsTests {
     private static let trackerRequiredCategories: Set<String> = [
         "quarantined",
         "ciQuarantined",
-        "issueGated",
         "capabilityGated",
         "unscheduled",
     ]
@@ -486,7 +487,7 @@ struct WorkflowShardSplitPinsTests {
     /// Live trackers only (open at filing, 2026-10-04). The pin cannot query
     /// GitHub: a closed tracker must name its successor here and in its
     /// reason, or assertion 8 reds.
-    private static let liveTrackers: Set<Int> = [92, 257, 277, 364]
+    private static let liveTrackers: Set<Int> = [92, 257, 364]
 
     /// The 8 never-scheduled methods (7 `unscheduled` + 1 `capabilityGated`),
     /// frozen as exact `(id, category)` pairs so a category swap between

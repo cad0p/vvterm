@@ -1,8 +1,8 @@
 {
   "_provenance": {
-    "date": "2026-10-04",
+    "date": "2026-10-05",
     "issue": 362,
-    "source": "first-hand census at d98e3aa3"
+    "source": "first-hand census at d98e3aa3; the three #277 TeleportPhaseTransitionUITests rows were removed when the class was scheduled in shard-3"
   },
   "exemptions": [
     {
@@ -124,24 +124,6 @@
       "category": "capabilityGated",
       "reason": "skips only when the simulator suppresses the software keyboard or lacks the native dock/redock gesture; never scheduled - decision tracked in #364",
       "tracker": 364
-    },
-    {
-      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_doesNotReRunBootstrap",
-      "category": "issueGated",
-      "reason": "no in-code gate; bootstrap-mock race measured on #277 - never scheduled until its exit criteria land",
-      "tracker": 277
-    },
-    {
-      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase1BootstrapSuccess_transitionsToRegistrationSheet",
-      "category": "issueGated",
-      "reason": "no in-code gate; deterministic AX query failure measured on #277 (readiness pill is Other, not StaticText) - never scheduled",
-      "tracker": 277
-    },
-    {
-      "id": "VVTermUITests/TeleportPhaseTransitionUITests/testPhase2RegistrationSuccess_transitionsToLoginSheet",
-      "category": "issueGated",
-      "reason": "no in-code gate; class-level gate on #277 (not individually measured) - never scheduled until the phase-transition repairs land",
-      "tracker": 277
     },
     {
       "id": "VVTermUITests/ZmxScrollbackReloadUITests/testKeyboardCloseDoesNotReloadScrollback",
