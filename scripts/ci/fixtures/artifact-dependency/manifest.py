@@ -7073,7 +7073,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-sed-sflag-address-alt-delimiter.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
+            "reject-runid-github-env-write-sed-sflag-address-alt-delimiter.yml:31: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)",
         ],
     },
     {

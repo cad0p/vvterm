@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Fixture: the GNU alternate-delimiter address `\,x,` before the
 # substitution (issue #350d re-lens N1). base ACCEPT -> head REFUSE,
-# runtime FLIP on both tested seds.
+# runtime CLOBBER on both tested seds (the `w` flag truncates the env file
+# at parse time even though the address never matches).
 name: reject-runid-github-env-write-sed-sflag-address-alt-delimiter
 on: [workflow_dispatch]
 jobs:

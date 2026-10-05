@@ -932,18 +932,27 @@ the close (`pre$'a\''post`), the assignment RHS (`v=$'a\''`), the
 unterminated `$'…` at EOL (extent unchanged, text differs), and `$'…'`
 reached through `_substitution_bodies` inner tokenization; the unchanged
 contexts are inside double quotes, after an escaped `\\$`, and a `'` not
-immediately after `$`. The lexer is not refusal-monotone: over the defined
-corpus union (F ∪ G ∪ H ∪ the restored 108-root comparator ∪ the preserved
-672-cell ANSI-C fuzz generator ∪ the 792-case fixture corpus ∪ the
-preserved #350c 7848-cell battery) every base-REFUSE→head-ACCEPT cell is
-enumerated and runtime-classified: 42 cells, all either benign modelled
-env writes (18 cells, runtime NOFLIP) or `_is_parseint_literal` policy
-accepts (24 cells; 18 runtime-FLIP, 6 NOFLIP because the
-`SOURCE_RUN_ID=0` literal leaves the seeded line in place); 0 removals of
-an unproven-value write. The two boundary fixtures
+immediately after `$`. The fold is not refusal-monotone: over the defined
+corpus union (F ∪ G ∪ H ∪ the reconstructed 108-root comparator — the
+plan's original 106-root generator was not preserved, so this is the
+restored equivalent — ∪ the preserved 672-cell ANSI-C fuzz generator ∪
+the 794-case fixture corpus ∪ the preserved #350c 7848-cell battery)
+every base-REFUSE→head-ACCEPT cell is enumerated; the pinned generator
+body-classifies each cell and asserts its class's runtime verdict
+(per-cell rows in the preserved `battery350d-head.out` and
+`ansic-fuzz-at-350d.out` evidence): 45 cell instances — the 42 generator
+cells (family F 12, the reconstructed comparator 24, the preserved fuzz
+6) plus the three boundary fixtures — collapsing to 31 distinct removal
+bodies (the 12 family-F removals are byte-identical to 12 of the
+comparator's): 12 benign modelled env writes (runtime NOFLIP), 18
+`_is_parseint_literal` policy accepts (12 runtime-FLIP, 6 NOFLIP because
+the `SOURCE_RUN_ID=0` literal leaves the seeded line in place) and the one
+malformed `;;` shape (bash parse error, nothing executes; runtime NOFLIP);
+0 removals of an unproven-value write. The three boundary fixtures
 (`accept-runid-github-env-write-ansic-benign-env-tail`,
-`accept-runid-github-env-write-ansic-parseint-tail`) carry `base_exit: 1`
-and are the only ids in `A17_BASE_REFUSAL_REMOVALS`.
+`accept-runid-github-env-write-ansic-parseint-tail`,
+`accept-runid-github-env-write-subst-case-separator-outside-case`) carry
+`base_exit: 1` and are the only ids in `A17_BASE_REFUSAL_REMOVALS`.
 (ix-b) inner-target relevance propagation: `_substitution_body_relevant_names`
 descends into every `$(…)`/backtick body (bounded by the
 substitution depth limit) and re-adds each inner argv write target's base
@@ -968,8 +977,8 @@ unseeded and the gate ACCEPTs — bash rejects `;;` outside `case` at parse
 time (exit 2; nothing executes), so the removal is safe; pinned by
 `accept-runid-github-env-write-subst-case-separator-outside-case` and
 enumerated in the removals accounting below. (ix-e) the sed `s///w file`
-flag: `_SED_SUBST_W_FLAG_RE`
-mirrors `_SED_WRITE_COMMAND_RE`'s command position (start/`;`/script line
+flag: `_SED_SUBST_W_FLAG_RE` mirrors `_SED_WRITE_COMMAND_RE`'s command
+position (start/`;`/script line
 start, the reused `_SED_ADDRESS` before the `s`, an optional `!` and `{`)
 and extracts the first `w`'s filename tail from the flags region; the
 target stops at newline/`;` (an env path suffixed with `;…` is a
@@ -979,20 +988,23 @@ target), and the extraction composes with `--expression=`/`--e=`/`--ex=`/
 attached `-e`, the attached `w<target>` command and the multi-line
 `_joined_sed_segments`. The address-prefixed `1s/…`, `1,1s/…`, `1 s/…`
 and `/x/s/…` spellings are closed through the reused address grammar; the
-`/x/` spelling is a runtime clobber (the flag truncates the env file at
-parse time). Both macOS FreeBSD sed and GNU sed 4.10 write via all tested
-spellings; `--expression=`/`--e=` are GNU-only at runtime (FreeBSD sed
-rejects the option), which is recorded, not claimed. Measured at A17: the
-fixture corpus is 794/794 cases (363 declare `base_exit`); the fold adds
+`/x/` and `\\,x,` spellings are runtime clobbers (the flag truncates the
+env file at parse time even though the address never matches). Both seds
+write via the `w`-flag spellings available to them — the attached, spaced,
+`gw`, alt-delimiter and address-prefixed forms all write on macOS FreeBSD
+sed and GNU sed 4.10; `--expression=`/`--e=` are GNU-only at runtime
+(FreeBSD sed rejects the option with exit 1), which is recorded, not
+claimed. Measured at A17: the fixture corpus is 794/794 cases (363 declare
+`base_exit`); the fold adds
 38 fixtures (27 rejects including 2 documented over-refusals and 11
 boundary accepts) and moves the former
 `accept-runid-github-env-write-array-element-cmdsub-continuation` pin to
 the reject set (a 39th corpus change); the generated families F (50 cells)
-+ G (43) + H (140) + FC (108 restored comparator) report 341 cells, 0
-family-expected mismatches, 170 base-ACCEPT→head-REFUSE additions and the
++ G (43) + H (141) + FC (108 reconstructed comparator) report 342 cells, 0
+family-expected mismatches, 171 base-ACCEPT→head-REFUSE additions and the
 36 family removals above (F 12 + FC 24); the preserved 672-cell ANSI-C
-fuzz reports 6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts; the
-preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
+fuzz reports 6 base-REFUSE→head-ACCEPT cells, all parseInt policy accepts;
+the preserved #350c 7848-cell battery reports 0 REFUSE→ACCEPT and 0
 ACCEPT→REFUSE against `cf1b75af`; the mutant matrix re-runs the 12 #350c
 mutants with patch-application assertions (12/12 applied; the red sets are
 byte-identical except `reject-runid-github-env-write-subst-nested-parens`
@@ -4762,9 +4774,10 @@ def _env_file_target_kind(
 # runtime (fold lens-1 MAJOR-2, round 3 MAJOR-4). The tokenizer keeps an
 # escaped `\$` from a double-quoted operand, so the address may carry that
 # backslash (`"\$w file"` passes `$w file` to sed). The `s///w file`
-# substitution flag is left as a named residual: the prefix is anchored at
-# a command position (start/`;`/line start), so it cannot start inside a
-# substitution. The extracted target is tested with the same narrow
+# substitution flag — the pre-A17 residual for this command-position anchor
+# (it cannot start inside a substitution) — is closed by the sibling
+# `_SED_SUBST_W_FLAG_RE` below (A17, #350 item 13 residual). The extracted
+# target is tested with the same narrow
 # predicate as the file operands, and a broader match can only add targets,
 # so the direction is fail-closed. The alternate-delimiter address term is
 # the general GNU `\cREc` form; it accepts both the raw single-backslash
@@ -5038,9 +5051,9 @@ def _scan_continuation_quote_state(
     `$'a\\` + newline + `b'` keeps the backslash and the newline), so it is
     not a continuation; inside double quotes bash still removes the
     `\\`+newline pair. This is a fail-closed subset, not a shell: it does
-    not model command substitutions, heredocs, or the same-line
-    `$'…\'…'` tokenizer gap in `_shell_tokens` (named residual — #350
-    item 17, fold round 2 lens-1 MAJOR-1)."""
+    not model command substitutions or heredocs; the same-line
+    `$'…\'…'` tokenizer gap is modelled by `_shell_tokens` since A17
+    (#350 item 17, fold round 1)."""
     index = 0
     end = len(line)
     escaped_until = -1
