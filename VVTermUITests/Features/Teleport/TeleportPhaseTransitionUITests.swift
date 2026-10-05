@@ -98,6 +98,32 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         app.descendants(matching: .any)["vvterm.serverRow.00000000-0000-0000-0000-000000000001"]
     }
 
+    /// Bounded hittability wait, so a mounted-but-untappable control during
+    /// the sheet presentation cannot false-red the assertion (the
+    /// NoticePresentationUITests / ServerNavigationUITests idiom).
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Bounded poll for a counters/readiness label substring. The label
+    /// re-renders on the parent-owned coordinator's `@Published` state, so
+    /// this is a signal wait whose timeout only bounds a genuine failure.
+    private func waitForLabel(
+        _ needle: String,
+        in element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", needle),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
     // MARK: - Phase 1 → Phase 2 transition (the bug)
 
     /// Tapping a `needsBootstrap` server row opens the bootstrap sheet; the
@@ -129,7 +155,7 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
             releaseControl.waitForExistence(timeout: 5),
             "bootstrap gate's release control should appear in .awaitingApproval"
         )
-        XCTAssertTrue(releaseControl.isHittable, "release control must be hittable")
+        XCTAssertTrue(waitForHittable(releaseControl), "release control must be hittable")
 
         let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
         XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5), "bootstrap sheet header should appear after tapping a needsBootstrap row")
@@ -139,7 +165,7 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // Persistence proof: after the header read the gate is still held, so
         // the header was not caught by luck.
         XCTAssertTrue(
-            releaseControl.exists && releaseControl.isHittable,
+            releaseControl.exists && waitForHittable(releaseControl),
             "the gate must still hold after the header read"
         )
 
@@ -188,13 +214,13 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // the mock is parked in `.awaitingApproval` (issue #277).
         let releaseControl = app.buttons["vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"]
         XCTAssertTrue(releaseControl.waitForExistence(timeout: 5))
-        XCTAssertTrue(releaseControl.isHittable)
+        XCTAssertTrue(waitForHittable(releaseControl))
 
         let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
         XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5))
 
         // Persistence proof: the gate is still holding after the header read.
-        XCTAssertTrue(releaseControl.exists && releaseControl.isHittable)
+        XCTAssertTrue(releaseControl.exists && waitForHittable(releaseControl))
 
         tapWhenHittable(releaseControl)
 
@@ -207,12 +233,18 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
             bootstrapHeader.exists,
             "bootstrap header should NOT reappear — the needsRegistration path must present registration, not re-run bootstrap"
         )
-        // A second (fallback) bootstrap would re-present the gate's release
-        // control, so its absence is the reachable no-re-run marker on the
-        // success path.
-        XCTAssertFalse(
-            releaseControl.exists,
-            "release control should NOT reappear — a second bootstrap would re-present it"
+        // The namesake no-re-run property: the parent-owned coordinator counts
+        // `begin` calls and the harness renders the count outside the sheet, so
+        // it survives the bootstrap → registration swap. A second (fallback)
+        // bootstrap would increment it to 2.
+        let readiness = app.staticTexts["vvterm.teleport.phaseChainHarness.readiness"]
+        XCTAssertTrue(
+            readiness.waitForExistence(timeout: 5),
+            "the harness readiness label should be visible after the transition"
+        )
+        XCTAssertTrue(
+            waitForLabel("bootstrapBegins: 1", in: readiness),
+            "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count; readiness label was \(readiness.label)"
         )
 
         attachScreenshot(app, named: "phaseChain-no-bootstrap-rerun")
@@ -231,7 +263,7 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // — its presence is this test's bootstrap-phase proof.
         let releaseControl = app.buttons["vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"]
         XCTAssertTrue(releaseControl.waitForExistence(timeout: 5), "bootstrap gate's release control should appear")
-        XCTAssertTrue(releaseControl.isHittable)
+        XCTAssertTrue(waitForHittable(releaseControl))
         tapWhenHittable(releaseControl)
 
         // Wait for the registration sheet (phase 1 succeeds after release).

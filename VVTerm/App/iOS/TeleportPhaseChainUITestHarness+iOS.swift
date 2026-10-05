@@ -42,6 +42,19 @@ struct TeleportPhaseChainUITestHarness: View {
     @State private var readiness: TeleportDeviceReadiness = .needsBootstrap
     @State private var bootstrapResult: TeleportBootstrapCoordinator.BootstrapResult?
 
+    /// Parent-owned bootstrap coordinator (issue #277): the harness owns the
+    /// single instance so its `beginCallCount` survives the phase-1 → phase-2
+    /// sheet swap and the no-re-run assertion can read it. Mirrors the
+    /// parent-owned pattern in `TeleportIOSServerListUITestHarness+iOS.swift`.
+    @StateObject private var bootstrapCoordinator: MockTeleportBootstrapCoordinator
+
+    @MainActor
+    init() {
+        _bootstrapCoordinator = StateObject(
+            wrappedValue: MockTeleportBootstrapCoordinator(scenario: .happyPath, holdsForApproval: true)
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ServerRow(
@@ -65,7 +78,9 @@ struct TeleportPhaseChainUITestHarness: View {
 
             // A status marker that reflects the current readiness so the
             // test can assert the chain progressed (not just dismissed).
-            Text("readiness: \(readinessLabel)")
+            // The parent-owned coordinator's begin count is included so the
+            // no-re-run assertion survives the sheet swap (issue #277).
+            Text("readiness: \(readinessLabel) bootstrapBegins: \(bootstrapCoordinator.beginCallCount)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.readiness")
@@ -120,7 +135,10 @@ struct TeleportPhaseChainUITestHarness: View {
         let cluster = makeCluster()
         switch readiness {
         case .needsBootstrap:
-            PhaseChainBootstrapSheet(cluster: cluster) { result in
+            PhaseChainBootstrapSheet(
+                cluster: cluster,
+                coordinator: bootstrapCoordinator
+            ) { result in
                 // Phase 1 → Phase 2: hold the result, flip readiness.
                 bootstrapResult = result
                 readiness = .needsRegistration
@@ -142,7 +160,10 @@ struct TeleportPhaseChainUITestHarness: View {
                 }
             } else {
                 // No in-memory result — re-bootstrap (matches production fallback).
-                PhaseChainBootstrapSheet(cluster: cluster) { result in
+                PhaseChainBootstrapSheet(
+                    cluster: cluster,
+                    coordinator: bootstrapCoordinator
+                ) { result in
                     bootstrapResult = result
                     readiness = .needsRegistration
                 } onCancel: {
@@ -178,33 +199,33 @@ struct TeleportPhaseChainUITestHarness: View {
 
 // MARK: - Phase wrapper sheets
 //
-// Each phase's coordinator is held in `@StateObject` so SwiftUI creates it
-// once and preserves it across body re-evaluations (mirrors the pattern in
-// TeleportUITestHarness+iOS.swift).
+// The registration/login coordinators are held in `@StateObject` so SwiftUI
+// creates them once and preserves them across body re-evaluations (mirrors
+// the pattern in TeleportUITestHarness+iOS.swift). The bootstrap coordinator
+// is instead owned by the harness (the parent) so its `beginCallCount`
+// survives the phase-1 → phase-2 sheet swap and the no-re-run assertion can
+// read it (issue #277).
 
 private struct PhaseChainBootstrapSheet: View {
     let cluster: TeleportCluster
     let onSuccess: (TeleportBootstrapCoordinator.BootstrapResult) -> Void
     let onCancel: () -> Void
 
-    @StateObject private var coordinator: MockTeleportBootstrapCoordinator
+    /// Parent-owned (not `@StateObject`): the harness owns the single
+    /// instance so `beginCallCount` survives the sheet swap (issue #277).
+    @ObservedObject var coordinator: MockTeleportBootstrapCoordinator
 
     @MainActor
     init(
         cluster: TeleportCluster,
+        coordinator: MockTeleportBootstrapCoordinator,
         onSuccess: @escaping (TeleportBootstrapCoordinator.BootstrapResult) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.cluster = cluster
+        self.coordinator = coordinator
         self.onSuccess = onSuccess
         self.onCancel = onCancel
-        // happyPath → success (cert + TLS keypair in hand), but held in
-        // `.awaitingApproval` until the UI test taps the release control, so
-        // the test observes a stable gate instead of the ~150 ms transient
-        // happyPath window (issue #277).
-        _coordinator = StateObject(
-            wrappedValue: MockTeleportBootstrapCoordinator(scenario: .happyPath, holdsForApproval: true)
-        )
     }
 
     var body: some View {
