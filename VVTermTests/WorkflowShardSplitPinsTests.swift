@@ -11,7 +11,7 @@
 //  documents where they came from. The fixture is
 //  `scripts/ci/shard-split-medians.json`: the 88 per-method medians over the
 //  41-run qualifying population plus the #277 CI-calibration medians and the
-//  four #364 dispatch-seeded medians, with provenance. Without this pin, a list
+//  four #364 CI-calibrated medians, with provenance. Without this pin, a list
 //  that silently drops a method, names a method that no longer exists, splits
 //  the #227 pair, or drifts away from the recorded fixture is invisible —
 //  the workflow is prose the compiler cannot check.
@@ -31,9 +31,9 @@
 //  stores the per-method medians at 3 dp. The pin computes each bin sum from
 //  those values at FULL precision and asserts the NAMED 1 dp rounding rule:
 //  `(sum * 10).rounded() / 10` equals the recorded literals
-//  617.2 / 612.9 / 681.7 / 613.9. The exact sums are
-//  617.169 / 612.882 / 681.724 / 613.896 s, so the |sum − literal| deltas are
-//  0.031 / 0.018 / 0.024 / 0.004 — small but non-zero, recorded here so a
+//  611.0 / 612.9 / 681.7 / 615.7. The exact sums are
+//  610.956 / 612.882 / 681.724 / 615.662 s, so the |sum − literal| deltas are
+//  0.044 / 0.018 / 0.024 / 0.038 — small but non-zero, recorded here so a
 //  future refresh sees the margin instead of re-deriving it. A sum that moves
 //  by more than 0.05 s from its literal is red (the tolerance is deliberately
 //  wider than the current deltas so a calibration refresh has room, and
@@ -167,23 +167,23 @@ struct WorkflowShardSplitPinsTests {
 
     /// The recorded per-bin median sums, 1 dp (the NAMED rounding rule).
     private static let expectedBinSums1dp: [String: Double] = [
-        "shard-0": 617.2,
+        "shard-0": 611.0,
         "shard-1": 612.9,
         "shard-2": 681.7,
-        "shard-3": 613.9,
+        "shard-3": 615.7,
     ]
 
     /// The same sums at the fixture's full precision (recorded for the
     /// refresh path; deltas to the 1 dp literals are in the header).
     private static let exactBinSums: [String: Double] = [
-        "shard-0": 617.169,
+        "shard-0": 610.956,
         "shard-1": 612.882,
         "shard-2": 681.724,
-        "shard-3": 613.896,
+        "shard-3": 615.662,
     ]
 
     /// Tolerance around the 1 dp literal; wider than the current deltas
-    /// (≤0.031 s) so a refresh has room, narrower than any real method move.
+    /// (≤0.044 s) so a refresh has room, narrower than any real method move.
     private static let binSumTolerance = 0.05
 
     /// The acceptance's structural rebalance threshold (`> ~1.3`). Recorded
