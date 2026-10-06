@@ -51,7 +51,7 @@ struct GhosttyGeneratedConfigLintTests {
     /// mechanically extracted from the builder template (14 literal keys + 3
     /// dynamic keys). `scrollback-limit-bytes` is deliberately NOT here: it is
     /// a real core key with byte semantics, while the app's semantic is lines
-    /// (`scrollback-limit-lines`); `deniedAliases` carries the units message.
+    /// (`scrollback-limit-lines`); `deniedKeys` carries the units message.
     static let acceptedKeys: Set<String> = [
         "font-family",
         "font-size",
@@ -74,14 +74,16 @@ struct GhosttyGeneratedConfigLintTests {
 
     /// List-valued keys where repetition is the intended semantic (verified
     /// against vendored core e77b2309: `font-family: RepeatableString`
-    /// Config.zig:173 / parseCLI :6079-6107; `keybind: Keybinds` :1937). All
-    /// other emitted keys are scalars/optionals/enums without list semantics.
+    /// Config.zig:173 / RepeatableString :6079 / parseCLI :6090-6107;
+    /// `keybind: Keybinds` :1937). All other emitted keys are
+    /// scalars/optionals/enums without list semantics.
     static let repeatableKeys: Set<String> = ["font-family", "keybind"]
 
-    /// Silent aliases the core accepts with different semantics. Grows at a
-    /// bump; `acceptedKeys` deliberately omits both so the inventory itself
-    /// cannot bless the alias.
-    static let deniedAliases: [String: String] = [
+    /// Keys the builder must never emit: silent aliases the core accepts with
+    /// different semantics, plus a real core key the app deliberately does not
+    /// use. Grows at a bump; `acceptedKeys` deliberately omits both so the
+    /// inventory itself cannot bless them.
+    static let deniedKeys: [String: String] = [
         "scrollback-limit": "the core maps it to `scrollback-limit-bytes` (bytes, not lines); emit `scrollback-limit-lines`",
         "scrollback-limit-bytes": "a real core key, but the app's semantic is lines; emit `scrollback-limit-lines`",
     ]
@@ -202,7 +204,7 @@ struct GhosttyGeneratedConfigLintTests {
         let value: String
     }
 
-    enum ParseFailure: Error, CustomStringConvertible {
+    enum ParseFailure: Error, CustomStringConvertible, Equatable {
         case missingSeparator(lineNumber: Int, rawLine: String)
         case invalidKey(lineNumber: Int, rawLine: String, key: String)
         case carriageReturn(lineNumber: Int, rawLine: String)
@@ -219,20 +221,21 @@ struct GhosttyGeneratedConfigLintTests {
         }
     }
 
-    /// Parses the builder output into directives. Fail-closed: blanks and
-    /// `#`-comments are skipped after trimming `.whitespaces` only (so a CRLF
-    /// line is rejected, never silently accepted), and any other line must be
-    /// exactly `key = value` with the key full-matching `^[a-z0-9-]+$`.
+    /// Parses the builder output into directives. Fail-closed: after
+    /// `.whitespaces` trimming, any line containing a CR is rejected before
+    /// blanks and `#`-comments are skipped (so a CRLF line can never be
+    /// silently accepted), and every remaining line must be exactly
+    /// `key = value` with the key full-matching `^[a-z0-9-]+$`.
     static func parsedDirectives(in content: String) throws -> [ParsedDirective] {
         var directives: [ParsedDirective] = []
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
         for (index, rawLine) in lines.enumerated() {
             let lineNumber = index + 1
             let line = String(rawLine).trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") { continue }
             if line.unicodeScalars.contains("\r") {
                 throw ParseFailure.carriageReturn(lineNumber: lineNumber, rawLine: line)
             }
+            if line.isEmpty || line.hasPrefix("#") { continue }
             guard let separator = line.range(of: " = ") else {
                 throw ParseFailure.missingSeparator(lineNumber: lineNumber, rawLine: line)
             }
@@ -263,7 +266,9 @@ struct GhosttyGeneratedConfigLintTests {
     @Test
     func parserReadsDirectivesAndSkipsBlanksAndComments() throws {
         let directives = try Self.parsedDirectives(in: "# a comment\nfont-size = 13\n\n  cursor-style = block  \n")
-        #expect(directives.count == 2)
+        // `#require`, not `#expect`: the subscripts below must not trap on a
+        // count regression (Swift Testing's `#expect` records and continues).
+        try #require(directives.count == 2)
         #expect(directives[0] == Self.ParsedDirective(lineNumber: 2, key: "font-size", value: "13"))
         #expect(directives[1] == Self.ParsedDirective(lineNumber: 4, key: "cursor-style", value: "block"))
     }
@@ -275,18 +280,22 @@ struct GhosttyGeneratedConfigLintTests {
     @Test
     func parserSplitsOnTheFirstSeparatorSoValuesMayContainEquals() throws {
         let directives = try Self.parsedDirectives(in: "theme = \"A = B\"\n")
-        #expect(directives.count == 1)
+        try #require(directives.count == 1)
         #expect(directives[0].key == "theme")
         #expect(directives[0].value == "\"A = B\"")
 
         let multi = try Self.parsedDirectives(in: "theme = \"A = B = C\"\n")
+        try #require(!multi.isEmpty)
         #expect(multi[0].value == "\"A = B = C\"")
     }
 
     @Test
     func parserFailsLoudlyWithoutASeparator() {
         let failure = Self.parseFailure(in: "font-size 13\n")
-        #expect(failure != nil, "a non-comment line without ' = ' must fail loudly, not be skipped")
+        #expect(
+            failure == .missingSeparator(lineNumber: 1, rawLine: "font-size 13"),
+            "a non-comment line without ' = ' must fail loudly with .missingSeparator, not be skipped or misclassified"
+        )
         #expect(failure?.description.contains("line 1") == true)
         #expect(failure?.description.contains("font-size 13") == true)
     }
@@ -296,7 +305,10 @@ struct GhosttyGeneratedConfigLintTests {
     @Test
     func parserFailsLoudlyOnANonMatchingKey() {
         let failure = Self.parseFailure(in: "font size = 13\n")
-        #expect(failure != nil, "a key that does not full-match ^[a-z0-9-]+$ must fail loudly")
+        #expect(
+            failure == .invalidKey(lineNumber: 1, rawLine: "font size = 13", key: "font size"),
+            "a key that does not full-match ^[a-z0-9-]+$ must fail loudly with .invalidKey, not be skipped or reported as a missing separator"
+        )
         #expect(failure?.description.contains("font size = 13") == true)
     }
 
@@ -350,7 +362,7 @@ struct GhosttyGeneratedConfigLintTests {
         for variant in Self.variants {
             let directives = try Self.parsedDirectives(in: variant.content)
             for directive in directives {
-                if let rationale = Self.deniedAliases[directive.key] {
+                if let rationale = Self.deniedKeys[directive.key] {
                     Issue.record(
                         "A2 — \(variant.variant.displayName): line \(directive.lineNumber) emits the denied alias '\(directive.key)' — \(rationale). See issue #382 for the core-side class"
                     )
@@ -432,6 +444,14 @@ struct GhosttyGeneratedConfigLintTests {
     /// semantics are pinned for both branches.
     @Test
     func fontFamilyMultiplicityMatchesTheInputs() throws {
+        // A7's `1 + macOSFallbackFontFamilies.count` formula assumes the
+        // canonical primary is not also in the fallback list: the builder's
+        // `sanitizedFontFamilies` dedupes, so a collision would make the
+        // expected count overcount by one.
+        try #require(
+            !TerminalDefaults.macOSFallbackFontFamilies.contains(Self.canonicalPrimaryFontFamily),
+            "A7 — the canonical primary '\(Self.canonicalPrimaryFontFamily)' must not appear in macOSFallbackFontFamilies \(TerminalDefaults.macOSFallbackFontFamilies); the `1 + count` expectation assumes a dedupe collision cannot happen"
+        )
         for variant in Self.variants {
             let count = try Self.parsedDirectives(in: variant.content).filter { $0.key == "font-family" }.count
             #expect(
