@@ -30,23 +30,44 @@ import XCTest
 //   re-tap would cancel it.
 //
 // The DEBUG-only harness (`TerminalScreenAwakeUITestHarness+iOS.swift`)
-// carries the reproducing fault mode used by the counterfactual runs
-// (`--vvterm-ui-test-screen-awake-drop-toggle-writes N`; never in the CI
-// path).
+// carries the reproducing fault modes used by the counterfactual runs
+// (`--vvterm-ui-test-screen-awake-drop-toggle-writes N` for the lost tap;
+// `--vvterm-ui-test-screen-awake-skip-idle-sync N` for "the preference flips,
+// the idle timer does not"; never in the CI path).
 //
-// Allowance arithmetic (documented, not a bound): launch 15–90 s (observed)
-// + 3 activations × ≤3 attempts × (existence ≤5 s + tap + 8 s read-back +
-// one confirmation query-pair) + the post-background single-shot 8 s label
-// wait + 2 app-state waits × 30 s (#387 family budget) can approach ~4 min on
-// a maximally degraded host; `continueAfterFailure = false` keeps it to one
+// Allowance arithmetic (documented; a lower bound because the per-attempt
+// label reads can stall — the #387 red measured 22.557 s): launch 15–90 s
+// (observed) + the initial 10 s diagnostics existence wait + 3 activations ×
+// ≤3 attempts × (hittability ≤5 s + existence ≤5 s + tap + 8 s read-back +
+// one 0.5 s confirmation) + ≤3 preference-at-target guard windows (3 s pair
+// wait + 0.5 s confirmation) + the post-background single-shot 8 s label wait
+// + 2 app-state waits × 30 s (#387 family budget) crosses the 300 s allowance
+// on a maximally degraded host; `continueAfterFailure = false` keeps it to one
 // expiry per run. Stop
 // rule: any run of this method > 250 s, or an allowance kill → reopen #264
 // and shrink the budgets; a post-fix red at the read-back with `attempts=3`
 // is a different mechanism (reopen). Record runtimes on #248, reds on #257.
+//
+// Masking, precisely: CF-D bounds a *persistently* dropping toggle fault
+// (three attempts red). An always-drops-the-first-tap product defect still
+// recovers on attempt 2 — inherent to any re-assert and accepted (the #126
+// `rotate()` precedent). The sibling hole is closed by the preference-at-
+// target guard: a preference that flips while the idle half does not fails
+// terminally with `reason=preference-at-target-idle-missing` instead of
+// reporting attempt-2 success (the CF-E vs CF-F pair).
 // Related: #387 (app-state family budget), #349 (query-bounded re-assert),
 // #126 (`rotate()` re-assert precedent).
 
 final class TerminalScreenAwakeUITests: XCTestCase {
+    /// The bounded re-tap budget; the loop bound and the exhaustion payload
+    /// both use it (no hardcoded `attempts=3`).
+    private static let maxAttempts = 3
+
+    /// The bounded pair window for the preference-at-target guard: the idle
+    /// half must catch up within this window or the toggle→coordinator path
+    /// is broken (terminal failure, no re-tap).
+    private static let idlePairGuardWait: TimeInterval = 3
+
     /// The app-state wait budget (issue #387): 30 s is the #232 device-state
     /// family budget (90/45/30), and the #387 red measured a 22.557 s AX
     /// observation stall — the old 8 s waits were right-censored by that
@@ -103,11 +124,16 @@ final class TerminalScreenAwakeUITests: XCTestCase {
     }
 
     /// Flips the screen-awake toggle to `target` with a bounded,
-    /// state-verified re-tap (max 3 attempts) and returns the attempt index
-    /// that reached the target (1 on a healthy host). Per attempt:
+    /// state-verified re-tap (max `Self.maxAttempts`) and returns the attempt
+    /// index that reached the target (1 on a healthy host). Per attempt:
     ///
-    /// 1. re-read the diagnostics label; already at the target preference →
-    ///    return immediately (the old branch's gate);
+    /// 1. re-read the diagnostics label. A preference already at the target is
+    ///    never re-tapped (a `Toggle` is stateful — another tap flips it
+    ///    away): wait boundedly for the full `expected` pair, then one 0.5 s
+    ///    confirmation read. A preference at target with the idle half still
+    ///    missing fails terminally here (`reason=preference-at-target-idle-
+    ///    missing`) — the exact hole the old preference-only early return
+    ///    masked;
     /// 2. bounded hittability wait, then a fresh query and the trailing-switch
     ///    coordinate tap (the #47 remedy);
     /// 3. bounded (8 s), non-failing read-back of the full preference +
@@ -115,11 +141,14 @@ final class TerminalScreenAwakeUITests: XCTestCase {
     /// 4. one confirmation read after a short settle before the attempt is
     ///    counted lost. A `Toggle` is stateful, unlike #126's idempotent
     ///    `rotate()`: a delayed first tap must not be answered with a blind
-    ///    re-tap that would cancel it.
+    ///    re-tap that would cancel it;
+    /// 5. if the tap moved the preference to the target but the idle half
+    ///    never followed, that is the same terminal condition as step 1: fail
+    ///    without looping into a no-re-tap attempt.
     ///
-    /// Exhausting all three attempts is a hard failure with the full payload
-    /// (`target=`/`attempts=`/`elapsed=`/`labelReadMs=`/label/`app state=`) so
-    /// a systematic product failure is not masked.
+    /// Exhausting every attempt with no preference movement is a hard failure
+    /// with the full payload (`target=`/`attempts=`/`elapsed=`/`labelReadMs=`/
+    /// label/`app state=`) so a systematic product failure is not masked.
     @discardableResult
     @MainActor
     private func setKeepScreenAwake(
@@ -133,14 +162,30 @@ final class TerminalScreenAwakeUITests: XCTestCase {
             ? "preference=true idleTimerDisabled=true"
             : "preference=false idleTimerDisabled=false"
 
-        for attempt in 1...3 {
+        for attempt in 1...Self.maxAttempts {
             var reachedTarget = false
-            XCTContext.runActivity(named: "keepScreenAwake=\(target) attempt \(attempt)/3") { _ in
-                // 1. Re-read: never re-tap a `Toggle` that is already at the
-                //    target preference (also covers launch, where the
-                //    preference renders before the idle pair catches up).
-                if diagnostics.exists, diagnostics.label.contains(targetToken) {
-                    reachedTarget = true
+            var preferenceAtTargetIdleMissing = false
+            XCTContext.runActivity(
+                named: "keepScreenAwake=\(target) attempt \(attempt)/\(Self.maxAttempts)"
+            ) { _ in
+                // 1. The preference is already at the target: the old
+                //    early-return. Never re-tap; wait boundedly for the idle
+                //    half to catch up, then confirm.
+                if isPreferenceAtTarget(diagnostics, targetToken: targetToken) {
+                    if waitForDiagnostics(
+                        diagnostics,
+                        containing: expected,
+                        timeout: Self.idlePairGuardWait
+                    ) {
+                        reachedTarget = true
+                        return
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                    if hasExpectedPair(diagnostics, expected: expected) {
+                        reachedTarget = true
+                        return
+                    }
+                    preferenceAtTargetIdleMissing = true
                     return
                 }
 
@@ -151,7 +196,7 @@ final class TerminalScreenAwakeUITests: XCTestCase {
                 tapTrailingSwitch(in: toggle)
 
                 // 3. Bounded read-back of the full expectation.
-                if waitForDiagnostics(diagnostics, containing: expected, app: app) {
+                if waitForDiagnostics(diagnostics, containing: expected) {
                     reachedTarget = true
                     return
                 }
@@ -159,25 +204,85 @@ final class TerminalScreenAwakeUITests: XCTestCase {
                 // 4. One confirmation read after a short settle before the
                 //    attempt is counted lost.
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-                if diagnostics.exists, diagnostics.label.contains(expected) {
+                if hasExpectedPair(diagnostics, expected: expected) {
                     reachedTarget = true
+                    return
+                }
+
+                // 5. The preference moved but the idle half did not: the
+                //    terminal condition step 1 guards. Do not loop (the next
+                //    attempt would take the no-re-tap guard anyway) and do
+                //    not report success.
+                if isPreferenceAtTarget(diagnostics, targetToken: targetToken) {
+                    preferenceAtTargetIdleMissing = true
                 }
             }
             if reachedTarget {
                 return attempt
             }
+            if preferenceAtTargetIdleMissing {
+                failKeepScreenAwake(
+                    target,
+                    reason: "preference-at-target-idle-missing",
+                    attempts: attempt,
+                    started: started,
+                    diagnostics: diagnostics,
+                    app: app
+                )
+                return attempt
+            }
         }
 
+        failKeepScreenAwake(
+            target,
+            reason: nil,
+            attempts: Self.maxAttempts,
+            started: started,
+            diagnostics: diagnostics,
+            app: app
+        )
+        return Self.maxAttempts
+    }
+
+    /// The old early return's condition, isolated for the two guard sites.
+    @MainActor
+    private func isPreferenceAtTarget(
+        _ diagnostics: XCUIElement,
+        targetToken: String
+    ) -> Bool {
+        diagnostics.exists && diagnostics.label.contains(targetToken)
+    }
+
+    /// The full preference + idle-timer pair.
+    @MainActor
+    private func hasExpectedPair(_ diagnostics: XCUIElement, expected: String) -> Bool {
+        diagnostics.exists && diagnostics.label.contains(expected)
+    }
+
+    /// The shared terminal payload. `reason` distinguishes the guard failure
+    /// (the preference is at target, the idle half is not) from a tap that
+    /// never landed (every attempt spent).
+    @MainActor
+    private func failKeepScreenAwake(
+        _ target: Bool,
+        reason: String?,
+        attempts: Int,
+        started: Date,
+        diagnostics: XCUIElement,
+        app: XCUIApplication
+    ) {
         let labelReadStarted = Date()
         let observedLabel = diagnostics.exists ? diagnostics.label : "<missing>"
         let labelReadMs = Date().timeIntervalSince(labelReadStarted) * 1000
-        XCTFail(
-            "keepScreenAwake target=\(target) attempts=3"
-                + " elapsed=\(String(format: "%.2f", Date().timeIntervalSince(started)))s"
-                + " labelReadMs=\(String(format: "%.0f", labelReadMs))"
-                + " label='\(observedLabel)' app state=\(app.state.rawValue)"
-        )
-        return 3
+        var message = "keepScreenAwake target=\(target)"
+        if let reason {
+            message += " reason=\(reason)"
+        }
+        message += " attempts=\(attempts)"
+        message += " elapsed=\(String(format: "%.2f", Date().timeIntervalSince(started)))s"
+        message += " labelReadMs=\(String(format: "%.0f", labelReadMs))"
+        message += " label='\(observedLabel)' app state=\(app.state.rawValue)"
+        XCTFail(message)
     }
 
     /// The screen-awake toggle, re-queried per attempt: a captured
@@ -223,14 +328,12 @@ final class TerminalScreenAwakeUITests: XCTestCase {
     /// Bounded `RunLoop` poll for the diagnostics label; never fails. The
     /// label is read only when the element exists; the label read is the one
     /// that can stall behind an AX rebuild on a degraded host (the #387 red
-    /// measured a 22.557 s observation). `app` is accepted for symmetry with
-    /// `assertDiagnostics`, the payload-carrying wrapper.
+    /// measured a 22.557 s observation).
     @MainActor
     private func waitForDiagnostics(
         _ diagnostics: XCUIElement,
         containing expected: String,
-        timeout: TimeInterval = 8,
-        app: XCUIApplication
+        timeout: TimeInterval = 8
     ) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -256,8 +359,7 @@ final class TerminalScreenAwakeUITests: XCTestCase {
         let matched = waitForDiagnostics(
             diagnostics,
             containing: expected,
-            timeout: timeout,
-            app: app
+            timeout: timeout
         )
         guard !matched else { return }
         let waited = Date().timeIntervalSince(started)
