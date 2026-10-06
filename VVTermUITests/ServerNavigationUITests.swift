@@ -121,7 +121,20 @@ final class ServerNavigationUITests: XCTestCase {
         XCTAssertTrue(list.waitForExistence(timeout: 10))
         scrollToVisible(activeRow, in: list, app: app)
         tapVisible(activeRow)
-        wait(for: diagnostics, containing: "state=connected", timeout: 45, app: app)
+        // #232: this pre-background connect wait carries the worst measured
+        // host-state AX stall: 45 s budget against slippages of ~64.4 / ~54.0 /
+        // 82.661 / ~75.8 s across four CI instances (max 82.661 s, which
+        // reproduces exactly; the other three are wall-clock deltas within
+        // 0.5 s). 90 s is the largest defensible budget — ~7.3 s above that
+        // tail — but it does NOT bound the stacked-success path: the three
+        // calibrated budgets alone can stall ~89 + ~44 + ~29 ≈ 162 s on top of
+        // a ~100-170 s happy path (~262-332 s, plan §3), and this method's
+        // 12 waits alone budget 278 s. That allowance risk is what Arm C must
+        // settle (shrink the pair above ~280 s). `setUpWithError` sets
+        // `continueAfterFailure = false`, so a budget expiry aborts the test
+        // body instead of stacking failures; a stall beyond the 90 s budget
+        // can still red here and stays on #257 (plan §2).
+        wait(for: diagnostics, containing: "state=connected", timeout: 90, app: app)
 
         let terminal = productionTerminal(in: app)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
@@ -138,14 +151,26 @@ final class ServerNavigationUITests: XCTestCase {
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
 
-        wait(for: diagnostics, containing: "state=connected", timeout: 10, app: app)
+        // #232: measured slippage for the post-background wait is ~22.2 s
+        // (n=1, job 111071659829) against the old 10 s budget; 45 s leaves
+        // ~22.7 s above that sample. The stacked-success allowance arithmetic
+        // (~262-332 s) is documented at the pre-background site above and is
+        // the unmeasured risk Arm C must settle (plan §3).
+        wait(for: diagnostics, containing: "state=connected", timeout: 45, app: app)
         XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalId)
         XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellId)
         XCTAssertFalse(
             app.staticTexts["Reconnecting…"].exists,
             "Backgrounding unnecessarily disconnected the live terminal. \(diagnosticText(in: app))"
         )
-        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 8, app: app)
+        // #232: measured slippage here is ~8.7 s (n=1, job 108860967255)
+        // against the old 8 s budget; 30 s leaves ~21 s of room. Same-trip
+        // rule: the uncalibrated 8 s waits near the keyboard labels — the
+        // pre-background `keyboardVisible=true` label wait and the two
+        // `app.keyboards.firstMatch.waitForExistence` waits — plus the shared
+        // helper's 10 s default are left alone; if any of them reds, calibrate
+        // it on its own measured evidence in the same trip.
+        wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 30, app: app)
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForExistence(timeout: 8),
             "The native software keyboard session was not preserved. \(diagnosticText(in: app))"
@@ -472,10 +497,19 @@ final class ServerNavigationUITests: XCTestCase {
     ) {
         let predicate = NSPredicate(format: "label CONTAINS %@", expected)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        let started = Date()
+        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
+        // #232: measured before the diagnostic payload is collected, so
+        // `elapsed` is the wait clock alone (the census's wait-start →
+        // failure-print convention minus the payload cost); `budget` makes a
+        // future red self-contained.
+        let waited = Date().timeIntervalSince(started)
         XCTAssertEqual(
-            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            result,
             .completed,
-            "Timed out waiting for \(expected). \(diagnosticText(in: app))"
+            "Timed out waiting for \(expected). budget=\(String(format: "%.0f", timeout))s"
+                + " elapsed=\(String(format: "%.2f", waited))s"
+                + " \(diagnosticText(in: app))"
         )
     }
 
