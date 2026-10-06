@@ -279,13 +279,21 @@ final class StatsCardsLayoutUITests: XCTestCase {
     /// Recursive walk of the snapshot subtree; the first node carrying a given
     /// identifier wins, matching the `firstMatch` semantics of the direct card
     /// query (parity-verified live in phase 1 before later phases trust it).
+    /// Keys are the BARE card names (`cpu`) — the same vocabulary every caller
+    /// and the direct `card(_:)` query use — so the snapshot's raw
+    /// `vvterm.stats.card.<name>` identifier is normalized here. (CI run
+    /// 37460691271 caught the unnormalized version redding phase 1 in both
+    /// StatsCards shards: missing `["cpu", …]` vs unexpected
+    /// `["vvterm.stats.card.cpu", …]`.)
     private func collectCardFrames(
         from snapshot: XCUIElementSnapshot,
         into cardFrames: inout [String: CGRect]
     ) {
-        if snapshot.identifier.hasPrefix(Self.cardIdentifierPrefix),
-           cardFrames[snapshot.identifier] == nil {
-            cardFrames[snapshot.identifier] = snapshot.frame
+        if snapshot.identifier.hasPrefix(Self.cardIdentifierPrefix) {
+            let name = String(snapshot.identifier.dropFirst(Self.cardIdentifierPrefix.count))
+            if cardFrames[name] == nil {
+                cardFrames[name] = snapshot.frame
+            }
         }
         for child in snapshot.children {
             collectCardFrames(from: child, into: &cardFrames)
