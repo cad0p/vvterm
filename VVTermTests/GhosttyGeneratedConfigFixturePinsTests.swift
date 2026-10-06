@@ -453,6 +453,15 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         // drift. Shell comments are stripped first (the YAML stripper's
         // `#`-outside-quotes semantics match this script), so a
         // `#`-commented assignment cannot satisfy the pin.
+        //
+        // Closure lens N1: exactly ONE live assignment. `controlledKeysAssignment`
+        // reads the first match, so a later re-assignment would override the
+        // loop list while this pin still validated the first one.
+        let controlledKeysAssignmentCount = script.components(separatedBy: "controlled_keys=\"").count - 1
+        #expect(
+            controlledKeysAssignmentCount == 1,
+            "the check script must keep exactly one live `controlled_keys=\"…\"` assignment (issue #382) — a later re-assignment would override the loop list while this pin still validates the first one; found \(controlledKeysAssignmentCount)"
+        )
         guard let assignedKeys = Self.controlledKeysAssignment(in: script) else {
             Issue.record(
                 "the check script must keep a `controlled_keys=\"…\"` assignment (issue #382) — the pin cannot tie the probe and script key lists together without it"
@@ -466,8 +475,8 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         // `shell-integration-features` is asserted by its own presence-only
         // block, not by `controlled_keys`.
         #expect(
-            script.contains("readback shell-integration-features ok=1 value="),
-            "the check script must keep the presence-only `shell-integration-features` block (issue #382)"
+            script.contains("\"readback shell-integration-features ok=1 value=\"*)"),
+            "the check script must keep the presence-only `shell-integration-features` case pattern (issue #382) — the bare value literal is also satisfied by the value-extraction guard line, so the case pattern itself must be pinned"
         )
         #expect(
             script.contains("grep \"^readback ${key} ok=\""),
