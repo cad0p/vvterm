@@ -5591,6 +5591,85 @@ CASES = [
         "excluded": 1,
         "diagnostics": []
     },
+    # #350e: the continuation-bound fold. The former `>8` continuation
+    # fail-open is closed fail-closed: chains up to 64 physical lines join
+    # (and are caught by the existing write detection), and a longer chain
+    # is refused by `_run_id_continuation_bound_refusal`. Every case is
+    # mention-bearing and device-bearing; all seven declare `base_exit: 0`.
+    {
+        "id": "reject-runid-github-env-write-continuation-chain-over-old-bound",
+        "files": [
+            "reject-runid-github-env-write-continuation-chain-over-old-bound.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-chain-over-old-bound.yml:35: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job writes `arr` through `read`, which the extractor does not model (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-continuation-chain-over-analysis-bound",
+        "files": [
+            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-chain-benign-at-analysis-bound",
+        "files": [
+            "accept-runid-github-env-write-continuation-chain-benign-at-analysis-bound.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml:92: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-chain-benign-mid-range",
+        "files": [
+            "accept-runid-github-env-write-continuation-chain-benign-mid-range.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-continuation-chain-benign-at-analysis-bound-eof",
+        "files": [
+            "accept-runid-github-env-write-continuation-chain-benign-at-analysis-bound-eof.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
     # #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote
     # family. A single quote opened on an earlier body line and closed on
     # the line that ends in `\` used to make the per-line predicate read

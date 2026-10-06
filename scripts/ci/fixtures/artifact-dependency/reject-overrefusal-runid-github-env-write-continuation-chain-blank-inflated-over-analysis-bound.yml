@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a blank-inflated chain whose bash span exceeds the bound while the raw span does not
+# #350e pins the bash arm of the counting rule (a literal blank ends bash's logical line); base ACCEPT -> shipped REFUSE, runtime cross-run.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" > pf
+          read -a arr < pf
+          cp payload \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          \
+          "${arr[0]}"
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
