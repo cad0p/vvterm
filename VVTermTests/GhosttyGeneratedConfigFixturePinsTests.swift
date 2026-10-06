@@ -394,12 +394,12 @@ struct GhosttyGeneratedConfigFixturePinsTests {
 
     // MARK: - Core read-back control pins (#382)
 
-    /// The controlled read-back keys (issue #382): the probe reads each back
-    /// through `ghostty_config_get`, the check script value-asserts the ones
-    /// the fixture emits, and `shell-integration-features` is presence-only.
-    /// Kept in sync with the script's `controlled_keys` + bitfield block by
-    /// `coreReadbackControlsArePinned`.
-    private static let controlledReadbackKeys = [
+    /// The controlled VALUE keys (issue #382): the nine keys the probe reads
+    /// back through `ghostty_config_get` and the check script asserts against
+    /// the fixture text via its `controlled_keys` assignment. The exact set is
+    /// pinned by `coreReadbackControlsArePinned`, so a key cannot be dropped
+    /// from the script's assertion loop silently.
+    private static let controlledValueKeys = [
         "font-size",
         "window-inherit-font-size",
         "cursor-style-blink",
@@ -409,8 +409,14 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         "clipboard-read",
         "shell-integration",
         "macos-option-as-alt",
-        "shell-integration-features",
     ]
+
+    /// The full controlled read-back list (issue #382): the nine value keys
+    /// plus `shell-integration-features`, which the probe reads but the script
+    /// asserts presence-only in its own block. Kept in sync with the probe by
+    /// `coreReadbackControlsArePinned`.
+    private static let controlledReadbackKeys =
+        controlledValueKeys + ["shell-integration-features"]
 
     /// Issue #382: the probe must keep reading every controlled key back
     /// through `ghostty_config_get`, and the check script must keep both
@@ -436,13 +442,33 @@ struct GhosttyGeneratedConfigFixturePinsTests {
             )
         }
 
-        let script = try Self.swiftSource("scripts/ci/check-ghostty-config.sh")
-        for key in Self.controlledReadbackKeys {
-            #expect(
-                script.contains(key),
-                "the check script must keep '\(key)' in its controlled key set (issue #382) — the probe and the script key lists must not drift"
+        let script = Self.normalized(
+            Self.strippingYAMLComments(
+                try Self.swiftSource("scripts/ci/check-ghostty-config.sh")
             )
+        )
+        // The script's controlled VALUE keys are an explicit bounded-word
+        // list: pin exact (order-insensitive) equality so neither a dropped
+        // key (silently losing its value assertion) nor an added one can
+        // drift. Shell comments are stripped first (the YAML stripper's
+        // `#`-outside-quotes semantics match this script), so a
+        // `#`-commented assignment cannot satisfy the pin.
+        guard let assignedKeys = Self.controlledKeysAssignment(in: script) else {
+            Issue.record(
+                "the check script must keep a `controlled_keys=\"…\"` assignment (issue #382) — the pin cannot tie the probe and script key lists together without it"
+            )
+            return
         }
+        #expect(
+            assignedKeys.sorted() == Self.controlledValueKeys.sorted(),
+            "the check script's `controlled_keys` must stay exactly the controlled value keys (issue #382) — a key dropped from the assignment silently drops its value assertion; got [\(assignedKeys.joined(separator: " "))]"
+        )
+        // `shell-integration-features` is asserted by its own presence-only
+        // block, not by `controlled_keys`.
+        #expect(
+            script.contains("readback shell-integration-features ok=1 value="),
+            "the check script must keep the presence-only `shell-integration-features` block (issue #382)"
+        )
         #expect(
             script.contains("grep \"^readback ${key} ok=\""),
             "the check script must extract the anchored per-key read-back line (issue #382)"
@@ -455,6 +481,19 @@ struct GhosttyGeneratedConfigFixturePinsTests {
             script.contains("readback ${key} ok=0 value="),
             "the check script must fail a controlled key that becomes unreadable (ok=0) (issue #382)"
         )
+    }
+
+    /// The bounded words of the check script's `controlled_keys="…"`
+    /// assignment, or nil when the assignment is absent. Callers pass
+    /// comment-stripped, normalized script text, so a `#`-commented
+    /// assignment is not seen as live.
+    private static func controlledKeysAssignment(in script: String) -> [String]? {
+        guard let start = script.range(of: "controlled_keys=\"") else { return nil }
+        let remainder = script[start.upperBound...]
+        guard let end = remainder.firstIndex(of: "\"") else { return nil }
+        return remainder[..<end]
+            .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+            .map(String.init)
     }
 
     // MARK: - Filesystem helpers
