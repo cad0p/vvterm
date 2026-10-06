@@ -122,6 +122,8 @@ struct GhosttyConfigBuilderTests {
         #expect(content.contains("cursor-style-blink = true"))
         // `scrollback-limit` is a deprecated alias for `scrollback-limit-bytes`
         // (bytes, not lines), so the generated config must use the line-based key.
+        // This value-level pin stays; the structural inventory/duplicate/alias
+        // lint lives in `GhosttyGeneratedConfigLintTests` (issue #381).
         #expect(content.contains("scrollback-limit-lines = 10000"))
         #expect(!content.contains("scrollback-limit = 10000"))
         // `audible-bell` was removed upstream; emitting it as a directive is an

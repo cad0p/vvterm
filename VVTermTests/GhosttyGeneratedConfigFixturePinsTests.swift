@@ -22,10 +22,15 @@
 //  then validates the fixtures through the vendored core (issue #247 impl
 //  lens 2 M3 / lens 3 F3).
 //
-//  Oracle boundary (F8): the checked-in probe catches keys the core rejects;
-//  the canonical tuple below is the only input the fixture pins observe, and
-//  silent aliases / duplicate keys are accepted by the core. The semantic
-//  drift class is tracked in issue #381 and is NOT claimed as covered here.
+//  Oracle boundary (F8, #381): the checked-in probe catches keys the core
+//  rejects; the core still accepts silent compatibility renames
+//  (`scrollback-limit`) and duplicate scalar keys (last wins; list-valued keys
+//  such as `font-family`/`keybind` accumulate), so that class is covered at
+//  the builder boundary by `GhosttyGeneratedConfigLintTests` (inventory /
+//  duplicates / known aliases) — the value-level pin in
+//  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays. A
+//  core-side meaning change of a non-C-readable key (`Limit`) has no exposed
+//  oracle and is tracked in issue #382; #381 is the parent.
 //
 //  The iOS fixture deliberately ends in `\n\n\n` (the builder's iOS template
 //  emits trailing blank lines); never trim it — `git diff --check` flags it,
