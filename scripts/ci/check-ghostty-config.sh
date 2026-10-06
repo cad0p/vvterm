@@ -31,6 +31,12 @@
 # reds the required `build` job, naming the key and the vendored core commit
 # (`Vendor/libghostty/VERSION`). Every read-back failure cites that commit.
 #
+# Caveats (the #382 waiver ledger): a core transform that preserves the
+# printed value is invisible to this check — a 1:1 unit change, or a semantic
+# change that maps to the same f32 (e.g. pt vs px). The bool sink also cannot
+# distinguish a correct 1-byte `false` from a wrong-width 4-byte
+# `0x00000000` write: both print `false`.
+#
 # Seven emitted keys (the `window-padding-x`/`window-padding-y` pair is two keys)
 # are deliberately waived: they have no C-readable cval and
 # read `ok=0` at every sink, measured at
@@ -46,8 +52,10 @@
 # the new `Vendor/libghostty/VERSION` — two synthetic configs per key, one
 # value changed — then either add the key to the controlled set (probe call +
 # script assertion) and re-green, or record it in the waiver ledger on issue
-# #382 with the new core commit, the measured table and the reason. Trigger:
-# any bump-PR diff that touches config key names or types under the core's
+# #382 with the new core commit, the measured table and the reason. This PR
+# carries `(closes #382)`, so a re-waiver reopens #382 or opens a follow-up
+# issue labeled `ghostty-patch` and links the new waiver there. Trigger: any
+# bump-PR diff that touches config key names or types under the core's
 # `Config`/`src/config`.
 #
 # Usage: scripts/ci/check-ghostty-config.sh <config> [<config> ...]
@@ -212,12 +220,13 @@ if [ "$probe_status" -ne 0 ]; then
   fail "self-test B: a config with an absolute-path theme must load cleanly: $probe_output"
 fi
 
-# Self-test C (issue #382 positive control): fixture-foreign values, so a
-# probe that hardcodes the fixtures' values cannot pass, and the exit status
-# is asserted (a reporter that exits non-zero on a clean config must not read
-# as green).
+# Self-test C (issue #382 positive control): fixture-foreign values for
+# every read-back shape family — f32, bool and all six enum keys — so a probe
+# that hardcodes either fixture's text cannot pass, and the exit status is
+# asserted (a reporter that exits non-zero on a clean config must not read as
+# green).
 selftest_readback_config="$work/self-test-readback.config"
-printf 'font-size = 17\nwindow-inherit-font-size = true\ncursor-style-blink = false\n' > "$selftest_readback_config"
+printf 'font-size = 17\nwindow-inherit-font-size = true\ncursor-style-blink = false\ncursor-style = bar\nwindow-padding-balance = true\nwindow-padding-color = background\nclipboard-read = allow\nshell-integration = fish\nmacos-option-as-alt = right\n' > "$selftest_readback_config"
 run_probe "$selftest_readback_config"
 if [ "$probe_status" -ne 0 ]; then
   fail "self-test C: a clean synthetic config must exit 0 (got $probe_status) — core ${core_commit}: $probe_output"
@@ -225,6 +234,12 @@ fi
 assert_readback "$probe_output" "self-test C" "font-size" "17"
 assert_readback "$probe_output" "self-test C" "window-inherit-font-size" "true"
 assert_readback "$probe_output" "self-test C" "cursor-style-blink" "false"
+assert_readback "$probe_output" "self-test C" "cursor-style" "bar"
+assert_readback "$probe_output" "self-test C" "window-padding-balance" "true"
+assert_readback "$probe_output" "self-test C" "window-padding-color" "background"
+assert_readback "$probe_output" "self-test C" "clipboard-read" "allow"
+assert_readback "$probe_output" "self-test C" "shell-integration" "fish"
+assert_readback "$probe_output" "self-test C" "macos-option-as-alt" "right"
 
 status=0
 for config_path in "$@"; do
@@ -254,7 +269,7 @@ for config_path in "$@"; do
     # lands anywhere else. Those are infrastructure failures, not core
     # diagnostics, and must not be reported as a rejected config (issue #247,
     # impl lens 1 finding 5).
-    fail "the probe failed to run for $absolute_path (exit $probe_status) — this is an infrastructure failure, not a core diagnostic: $probe_output"
+    fail "the probe failed to run for $absolute_path (exit $probe_status) — this is an infrastructure failure, not a core diagnostic (possible probe crash from a changed key type/width): $probe_output"
   fi
 
   # Read-back positive controls (issue #382): every controlled key the
@@ -325,7 +340,12 @@ for config_path in "$@"; do
     fail "the probe printed ${bitfield_count} anchored read-back lines for 'shell-integration-features' (expected exactly one) — core ${core_commit}"
   fi
   case "$bitfield_lines" in
-    "readback shell-integration-features ok=1 value="*) : ;;
+    "readback shell-integration-features ok=1 value="*)
+      bitfield_value="${bitfield_lines#readback shell-integration-features ok=1 value=}"
+      if [ -z "$bitfield_value" ]; then
+        fail "the probe printed an empty read-back value for 'shell-integration-features' on $absolute_path — core ${core_commit}"
+      fi
+      ;;
     "readback shell-integration-features ok=0 value="*)
       fail "core ${core_commit} no longer gives 'shell-integration-features' a C-readable value (ok=0) for $absolute_path; re-measure and update the waiver ledger on issue #382"
       ;;

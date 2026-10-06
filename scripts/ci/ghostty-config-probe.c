@@ -99,8 +99,10 @@ static void readback_bool(ghostty_config_t config, const char *key) {
 
 static void readback_enum(ghostty_config_t config, const char *key) {
     /* Enum values come back as a pointer to the core's tag-name string.
-     * 0x1 is the untouched sentinel; NULL and implausible low values are
-     * reported as sentinels so the probe never dereferences a non-pointer. */
+     * 0x1 is the untouched sentinel; NULL and plausible-looking low values
+     * are reported as sentinels. This guard cannot prove pointer validity: a
+     * wrong-width write can still land an address the probe dereferences;
+     * the script reds either way. */
     const char *sink = (const char *)0x1;
     if (!ghostty_config_get(config, &sink, key, (uintptr_t)strlen(key))) {
         print_unreadable(key);
