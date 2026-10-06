@@ -130,9 +130,15 @@ final class ServerNavigationUITests: XCTestCase {
         // in-body waits before `popTerminal` budget 280 s, + the final 8 s
         // discard = 288 s, + `popTerminal`'s 8+15+5 = 316 s; #387's pair
         // calibration (8→30 twice) adds exactly +44 s → 324/332/360 s. Worst
-        // single expiry: a near-deadline pre-background success plus one 30 s
-        // app-state expiry lands ~272 s, still under the 300 s allowance, and
-        // `continueAfterFailure = false` keeps it to one expiry per run.
+        // single expiry at the pair, composed from measured extrema: 122.85 s
+        // max observed pre-background wait start + 90 s + ≤26 s (terminal 10 +
+        // keyboard label 8 + keyboard element 8) + 30 s + the 22.56 s
+        // failure-path `current=` read + ~1 s ≈ 292 s; margin ~8 s. That read
+        // is unbounded by design, so this is an estimate, not a bound; a
+        // later-calibrated-wait expiry after several near-deadline successes
+        // can exceed 300 s — the stop rule's `elapsed=` ≥250 s trigger is the
+        // catch. `continueAfterFailure = false` keeps it to one expiry per
+        // run.
         // Stacked-success can reach ~306-376 s: that residual predates #387
         // (~262-332 s) and is accepted. Stop rule (home: this comment, plus
         // #387 while open; owner: the next agent touching this method; shrink
@@ -497,18 +503,21 @@ final class ServerNavigationUITests: XCTestCase {
     }
 
     /// The app-state wait budget (issue #387): 30 s is the #232 device-state
-    /// family budget (90/45/30) and ~6.9× the widest non-stalled completion in
-    /// the census (4.35 s, n=8). The red that prompted this was right-censored
-    /// at 8.016 s; the same run measured a 22.55 s AX observation stall, so a
-    /// 20 s budget could still red. Stacked exposure and the stop rule are
-    /// documented at the pre-background wait site above.
+    /// family budget (90/45/30) and ~6.9× the widest non-stalled completion
+    /// upper bound in the extended census (4.35 s, n=15; the plan's n=8 seed
+    /// had the same max). The red that prompted this was right-censored at
+    /// 8.016 s; the same run measured a 22.557 s AX observation stall (22.56 s
+    /// rounded), so a 20 s budget could still red. Stacked exposure and the
+    /// stop rule are documented at the pre-background wait site above.
     private static let appStateWaitBudget: TimeInterval = 30
 
     /// Waits for an `XCUIApplication.State`; on failure reports the wait-clock
-    /// evidence only (`budget=`/`elapsed=`/`current=`). No diagnostics payload:
-    /// this failure path is the degraded-host path, where an AX read is
-    /// unbounded (22.55 s measured in the #387 red run) and the label may be
-    /// stale while backgrounded.
+    /// evidence only (`budget=`/`elapsed=`/`current=`). The dropped diagnostics
+    /// payload is the AX label read (`diagnosticText`): this failure path is
+    /// the degraded-host path, where that read is unbounded (22.557 s measured
+    /// in the #387 red run) and the label may be stale/empty while
+    /// backgrounded. `current=` is a cheap `app.state` query, not an AX tree
+    /// read.
     @MainActor
     private func waitForAppState(
         _ expected: XCUIApplication.State,
