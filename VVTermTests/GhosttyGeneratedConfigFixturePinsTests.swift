@@ -22,15 +22,21 @@
 //  then validates the fixtures through the vendored core (issue #247 impl
 //  lens 2 M3 / lens 3 F3).
 //
-//  Oracle boundary (F8, #381): the checked-in probe catches keys the core
-//  rejects; the core still accepts silent compatibility renames
+//  Oracle boundary (F8, #381; extended by #382): the checked-in probe catches
+//  keys the core rejects; the core still accepts silent compatibility renames
 //  (`scrollback-limit`) and duplicate scalar keys (last wins; list-valued keys
 //  such as `font-family`/`keybind` accumulate), so that class is covered at
 //  the builder boundary by `GhosttyGeneratedConfigLintTests` (inventory /
 //  duplicates / known aliases) — the value-level pin in
-//  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays. A
-//  core-side meaning change of a non-C-readable key (`Limit`) has no exposed
-//  oracle and is tracked in issue #382; #381 is the parent.
+//  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays.
+//  Since #382 the probe also reads the C-readable emitted keys back and the
+//  check script asserts the applied value equals the emitted text, so the
+//  readable subset's core-side alias/meaning class has an oracle too. Six
+//  emitted keys stay waived (`font-family`, `window-padding-x`/`-y`,
+//  `theme`, `scrollback-limit-lines`, `mouse-scroll-multiplier`, `keybind`)
+//  because `ghostty_config_get` has no C-readable cval for their types; the
+//  measured ledger and the re-waiver procedure live on issue #382. #381 is
+//  the parent.
 //
 //  The iOS fixture deliberately ends in `\n\n\n` (the builder's iOS template
 //  emits trailing blank lines); never trim it — `git diff --check` flags it,
@@ -383,6 +389,71 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         #expect(
             checkStepRange.upperBound < prepareStep.lowerBound,
             "the ghostty config check must run before `Prepare Xcode build`/`xcodebuild`: a rejection must fail before the compile, not after it (issue #247)"
+        )
+    }
+
+    // MARK: - Core read-back control pins (#382)
+
+    /// The controlled read-back keys (issue #382): the probe reads each back
+    /// through `ghostty_config_get`, the check script value-asserts the ones
+    /// the fixture emits, and `shell-integration-features` is presence-only.
+    /// Kept in sync with the script's `controlled_keys` + bitfield block by
+    /// `coreReadbackControlsArePinned`.
+    private static let controlledReadbackKeys = [
+        "font-size",
+        "window-inherit-font-size",
+        "cursor-style-blink",
+        "cursor-style",
+        "window-padding-balance",
+        "window-padding-color",
+        "clipboard-read",
+        "shell-integration",
+        "macos-option-as-alt",
+        "shell-integration-features",
+    ]
+
+    /// Issue #382: the probe must keep reading every controlled key back
+    /// through `ghostty_config_get`, and the check script must keep both
+    /// halves of the assertion — the anchored per-key extraction and the
+    /// value comparison. A probe read-back call or the script's comparison
+    /// loop removed reds this pin; the C source is comment-stripped first, so
+    /// a key name left in a comment cannot satisfy it.
+    @Test
+    func coreReadbackControlsArePinned() throws {
+        let probe = Self.normalized(
+            Self.strippingComments(
+                try Self.swiftSource("scripts/ci/ghostty-config-probe.c")
+            )
+        )
+        #expect(
+            probe.contains("ghostty_config_get"),
+            "the config probe must read controlled keys back through `ghostty_config_get` (issue #382) — without it the script cannot tell the core's applied value from the fixture's text"
+        )
+        for key in Self.controlledReadbackKeys {
+            #expect(
+                probe.contains("\"\(key)\""),
+                "the config probe must read '\(key)' back (issue #382) — a removed read-back call would drop the script's actual-side line and red every run, or worse, drift silently"
+            )
+        }
+
+        let script = try Self.swiftSource("scripts/ci/check-ghostty-config.sh")
+        for key in Self.controlledReadbackKeys {
+            #expect(
+                script.contains(key),
+                "the check script must keep '\(key)' in its controlled key set (issue #382) — the probe and the script key lists must not drift"
+            )
+        }
+        #expect(
+            script.contains("grep \"^readback ${key} ok=\""),
+            "the check script must extract the anchored per-key read-back line (issue #382)"
+        )
+        #expect(
+            script.contains("\"$actual_value\" != \"$expected_value\""),
+            "the check script must compare the read-back value against the fixture text (issue #382) — extraction without comparison is not an oracle"
+        )
+        #expect(
+            script.contains("readback ${key} ok=0 value="),
+            "the check script must fail a controlled key that becomes unreadable (ok=0) (issue #382)"
         )
     }
 
