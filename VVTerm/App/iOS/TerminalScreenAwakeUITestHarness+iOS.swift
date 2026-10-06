@@ -5,17 +5,57 @@ import UIKit
 struct TerminalScreenAwakeUITestHarness: View {
     private static let routeID = UUID(uuidString: "B166D8E5-E32E-44B8-BB0D-91145D4F7200")!
 
+    /// Fault mode for issue #389 (the scoped `:92` lost-tap fix under #264):
+    /// `--vvterm-ui-test-screen-awake-drop-toggle-writes N` (separated or `=N`)
+    /// makes the harness swallow the first `N` Keep Screen Awake writes, with
+    /// the production row's own identifier, so the measured signature —
+    /// "the tap synthesized, the preference never flipped" — reproduces
+    /// deterministically. Absent in the CI path (the arg is only passed by the
+    /// counterfactual runs).
+    ///
+    /// A `static let` (not `init`) because SwiftUI can rebuild the root view
+    /// value when `VVTermApp`'s `@StateObject`s publish: a `static let` runs at
+    /// most once per process, so the fixture reset below and the drop count
+    /// cannot be re-applied mid-test. The reset is required because a previous
+    /// run may have left the preference flipped; the `-terminalKeepScreenAwake
+    /// YES` launch-arg form is NOT usable — measured: `NSArgumentDomain` shadows
+    /// writes, so `UserDefaults.standard.set(false, …)` still reads back `true`.
+    private static let faultWritesToDrop: Int = {
+        let dropped = dropToggleWrites(from: Foundation.ProcessInfo.processInfo.arguments)
+        if dropped > 0 {
+            UserDefaults.standard.set(
+                TerminalDefaults.defaultKeepScreenAwake,
+                forKey: TerminalDefaults.keepScreenAwakeKey
+            )
+        }
+        return dropped
+    }()
+
     @EnvironmentObject private var screenAwakeCoordinator: TerminalScreenAwakeCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(TerminalDefaults.keepScreenAwakeKey) private var keepScreenAwakeEnabled = TerminalDefaults.defaultKeepScreenAwake
     @State private var idleTimerDisabled = false
     @State private var backgroundReleaseObserved = false
+    /// The fault-mode writes still to drop (0 in the normal path). Seeded from
+    /// the once-per-process static; SwiftUI keeps the first `@State` value
+    /// across root-view rebuilds.
+    @State private var remainingDroppedWrites = TerminalScreenAwakeUITestHarness.faultWritesToDrop
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TerminalScreenAwakeSettingRow()
+                    if TerminalScreenAwakeUITestHarness.faultWritesToDrop > 0 {
+                        // The fault-only row: same label + identifier as the
+                        // production `TerminalScreenAwakeSettingRow`, but the
+                        // setter drops the first N writes instead of writing.
+                        // The getter reads the harness's `@AppStorage` the same
+                        // way the production row does.
+                        Toggle("Keep screen awake", isOn: faultToggleBinding)
+                            .accessibilityIdentifier("vvterm.settings.terminal.keepScreenAwake")
+                    } else {
+                        TerminalScreenAwakeSettingRow()
+                    }
                 } header: {
                     Text("Terminal Behavior")
                 }
@@ -43,6 +83,24 @@ struct TerminalScreenAwakeUITestHarness: View {
         .onDisappear {
             screenAwakeCoordinator.update(isRequested: false, for: Self.routeID)
         }
+    }
+
+    /// The fault-mode binding: drops the first `remainingDroppedWrites` changes
+    /// (no write, no `onChange`, no animation) and writes normally afterwards.
+    /// A write-then-revert in `onChange` was rejected: it leaves a live
+    /// transient value and a second write, so the red counterfactual could race
+    /// green.
+    private var faultToggleBinding: Binding<Bool> {
+        Binding(
+            get: { keepScreenAwakeEnabled },
+            set: { newValue in
+                guard remainingDroppedWrites == 0 else {
+                    remainingDroppedWrites -= 1
+                    return
+                }
+                keepScreenAwakeEnabled = newValue
+            }
+        )
     }
 
     private var diagnostics: String {
@@ -75,6 +133,25 @@ struct TerminalScreenAwakeUITestHarness: View {
         @unknown default:
             true
         }
+    }
+
+    /// Parses `--vvterm-ui-test-screen-awake-drop-toggle-writes N` in either the
+    /// separated or the `=N` form. Returns 0 (the normal path) when absent or
+    /// unparsable.
+    private static func dropToggleWrites(from arguments: [String]) -> Int {
+        let flag = "--vvterm-ui-test-screen-awake-drop-toggle-writes"
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            let argument = arguments[index]
+            if argument == flag, arguments.index(after: index) < arguments.endIndex {
+                return max(0, Int(arguments[arguments.index(after: index)]) ?? 0)
+            }
+            if argument.hasPrefix(flag + "=") {
+                return max(0, Int(argument.dropFirst(flag.count + 1)) ?? 0)
+            }
+            index = arguments.index(after: index)
+        }
+        return 0
     }
 }
 #endif
