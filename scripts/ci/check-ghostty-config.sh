@@ -31,7 +31,8 @@
 # reds the required `build` job, naming the key and the vendored core commit
 # (`Vendor/libghostty/VERSION`). Every read-back failure cites that commit.
 #
-# Six emitted keys are deliberately waived: they have no C-readable cval and
+# Seven emitted keys (the `window-padding-x`/`window-padding-y` pair is two keys)
+# are deliberately waived: they have no C-readable cval and
 # read `ok=0` at every sink, measured at
 # `e77b2309fca3a27db1123a4f904b7fb432ee7162` — `font-family` (list),
 # `window-padding-x` / `window-padding-y` (`WindowPadding` structs), `theme`,

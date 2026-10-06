@@ -31,7 +31,7 @@
 //  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays.
 //  Since #382 the probe also reads the C-readable emitted keys back and the
 //  check script asserts the applied value equals the emitted text, so the
-//  readable subset's core-side alias/meaning class has an oracle too. Six
+//  readable subset's core-side alias/meaning class has an oracle too. Seven
 //  emitted keys stay waived (`font-family`, `window-padding-x`/`-y`,
 //  `theme`, `scrollback-limit-lines`, `mouse-scroll-multiplier`, `keybind`)
 //  because `ghostty_config_get` has no C-readable cval for their types; the

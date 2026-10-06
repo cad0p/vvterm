@@ -24,7 +24,7 @@
 //  also reads the C-readable emitted keys back and
 //  `scripts/ci/check-ghostty-config.sh` asserts the applied value equals the
 //  emitted text, so the readable subset's core-side alias/meaning class is
-//  caught. Six emitted keys stay waived (no C-readable cval: `font-family`,
+//  caught. Seven emitted keys stay waived (no C-readable cval: `font-family`,
 //  `window-padding-x`/`-y`, `theme`, `scrollback-limit-lines`,
 //  `mouse-scroll-multiplier`, `keybind`) with the measured ledger on #382.
 //
