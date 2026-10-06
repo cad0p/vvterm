@@ -37,11 +37,12 @@ import XCTest
 //
 // Residuals (#257): the ~60 s stall itself is XCTest-side and cannot be
 // removed from this file. Post-fix floor ≈ launch 13–20 s + 3 body stalls ×
-// 60 s + the phase snapshots ≈ 200 s, ~250 s with the documented slow launch
-// (the old "~50 s" figure on run 30643100567 was launch retries, not grid
-// materialization). A 4th body stall — e.g. a rotate() retry re-setting the
-// orientation — still exceeds the 300 s allowance, and tearDown's
-// app?.terminate() can itself wedge (the #257 "Failed to terminate"
+// 60 s + the phase snapshots ≈ 200 s; the container-only mount poll is not
+// separately budgeted (≤40 s), so the documented worst case is ≈ 270–290 s
+// with the slow launch (the old "~50 s" figure on run 30643100567 was launch
+// retries, not grid materialization). A 4th body stall — e.g. a rotate()
+// retry re-setting the orientation — still exceeds the 300 s allowance, and
+// tearDown's app?.terminate() can itself wedge (the #257 "Failed to terminate"
 // signature), which also counts toward the allowance. Reopen condition: any
 // further allowance kill of these methods.
 final class StatsCardsLayoutUITests: XCTestCase {
