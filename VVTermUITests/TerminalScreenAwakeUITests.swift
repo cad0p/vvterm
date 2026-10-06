@@ -37,8 +37,9 @@ import XCTest
 // Allowance arithmetic (documented, not a bound): launch 15–90 s (observed)
 // + 3 activations × ≤3 attempts × (existence ≤5 s + tap + 8 s read-back +
 // one confirmation query-pair) + the post-background single-shot 8 s label
-// wait + 2 app-state waits × 8 s can approach ~4 min on a maximally degraded
-// host; `continueAfterFailure = false` keeps it to one expiry per run. Stop
+// wait + 2 app-state waits × 30 s (#387 family budget) can approach ~4 min on
+// a maximally degraded host; `continueAfterFailure = false` keeps it to one
+// expiry per run. Stop
 // rule: any run of this method > 250 s, or an allowance kill → reopen #264
 // and shrink the budgets; a post-fix red at the read-back with `attempts=3`
 // is a different mechanism (reopen). Record runtimes on #248, reds on #257.
@@ -46,6 +47,13 @@ import XCTest
 // #126 (`rotate()` re-assert precedent).
 
 final class TerminalScreenAwakeUITests: XCTestCase {
+    /// The app-state wait budget (issue #387): 30 s is the #232 device-state
+    /// family budget (90/45/30), and the #387 red measured a 22.557 s AX
+    /// observation stall — the old 8 s waits were right-censored by that
+    /// stall tail alone. Stacked exposure and the stop rule live in the
+    /// header.
+    private static let appStateWaitBudget: TimeInterval = 30
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -82,10 +90,10 @@ final class TerminalScreenAwakeUITests: XCTestCase {
         print("screenAwake attempts: enable=\(enableAttempt) disable=\(disableAttempt) reenable=\(reenableAttempt)")
 
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(waitForBackgroundState(of: app, timeout: 8), diagnostics.label)
+        waitForBackgroundState(of: app, timeout: Self.appStateWaitBudget)
 
         app.activate()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        waitForAppState(.runningForeground, timeout: Self.appStateWaitBudget, app: app)
 
         assertDiagnostics(
             diagnostics,
@@ -262,18 +270,57 @@ final class TerminalScreenAwakeUITests: XCTestCase {
         )
     }
 
+    /// Waits for the two-state background condition (`.runningBackground` or
+    /// `.runningBackgroundSuspended`); kept local to this class (the #387
+    /// helper is single-state). Failure payload is wait-clock evidence only
+    /// (`budget=`/`elapsed=`/`current=`): the diagnostics label read is
+    /// unbounded on a degraded host (22.557 s measured in the #387 red) and
+    /// is not needed here — `current=` is a cheap `app.state` query.
     @MainActor
     private func waitForBackgroundState(
         of app: XCUIApplication,
         timeout: TimeInterval
-    ) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+    ) {
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
+        var reached = false
         while Date() < deadline {
             if app.state == .runningBackground || app.state == .runningBackgroundSuspended {
-                return true
+                reached = true
+                break
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        return false
+        // Measured before any payload, so `elapsed` is the wait clock alone.
+        let waited = Date().timeIntervalSince(started)
+        XCTAssertTrue(
+            reached,
+            "Timed out waiting for an app background state."
+                + " budget=\(String(format: "%.0f", timeout))s"
+                + " elapsed=\(String(format: "%.2f", waited))s"
+                + " current=\(String(describing: app.state))"
+        )
+    }
+
+    /// Waits for one `XCUIApplication.State` (the #387 shape, a second local
+    /// copy; extract on the third). Failure payload is wait-clock evidence
+    /// only (`budget=`/`elapsed=`/`current=`).
+    @MainActor
+    private func waitForAppState(
+        _ expected: XCUIApplication.State,
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) {
+        let started = Date()
+        let reached = app.wait(for: expected, timeout: timeout)
+        // Measured before any payload, so `elapsed` is the wait clock alone.
+        let waited = Date().timeIntervalSince(started)
+        XCTAssertTrue(
+            reached,
+            "Timed out waiting for app state \(String(describing: expected))."
+                + " budget=\(String(format: "%.0f", timeout))s"
+                + " elapsed=\(String(format: "%.2f", waited))s"
+                + " current=\(String(describing: app.state))"
+        )
     }
 }
