@@ -20,9 +20,13 @@
 //
 //  Oracle boundary, stated honestly: this lint runs over the builder's output
 //  only, so it cannot prove the vendored core still assigns each emitted key
-//  its current meaning. The C probe owns core acceptance; a core-side rename
-//  or meaning change of a non-C-readable key (`Limit`-typed keys have no
-//  `cval`) has no exposed oracle and is tracked in issue #382.
+//  its current meaning. The C probe owns core acceptance; since issue #382 it
+//  also reads the C-readable emitted keys back and
+//  `scripts/ci/check-ghostty-config.sh` asserts the applied value equals the
+//  emitted text, so the readable subset's core-side alias/meaning class is
+//  caught. Seven emitted keys stay waived (no C-readable cval: `font-family`,
+//  `window-padding-x`/`-y`, `theme`, `scrollback-limit-lines`,
+//  `mouse-scroll-multiplier`, `keybind`) with the measured ledger on #382.
 //
 //  Companion coverage (kept, not replaced):
 //  - `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` pins the

@@ -22,15 +22,21 @@
 //  then validates the fixtures through the vendored core (issue #247 impl
 //  lens 2 M3 / lens 3 F3).
 //
-//  Oracle boundary (F8, #381): the checked-in probe catches keys the core
-//  rejects; the core still accepts silent compatibility renames
+//  Oracle boundary (F8, #381; extended by #382): the checked-in probe catches
+//  keys the core rejects; the core still accepts silent compatibility renames
 //  (`scrollback-limit`) and duplicate scalar keys (last wins; list-valued keys
 //  such as `font-family`/`keybind` accumulate), so that class is covered at
 //  the builder boundary by `GhosttyGeneratedConfigLintTests` (inventory /
 //  duplicates / known aliases) — the value-level pin in
-//  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays. A
-//  core-side meaning change of a non-C-readable key (`Limit`) has no exposed
-//  oracle and is tracked in issue #382; #381 is the parent.
+//  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays.
+//  Since #382 the probe also reads the C-readable emitted keys back and the
+//  check script asserts the applied value equals the emitted text, so the
+//  readable subset's core-side alias/meaning class has an oracle too. Seven
+//  emitted keys stay waived (`font-family`, `window-padding-x`/`-y`,
+//  `theme`, `scrollback-limit-lines`, `mouse-scroll-multiplier`, `keybind`)
+//  because `ghostty_config_get` has no C-readable cval for their types; the
+//  measured ledger and the re-waiver procedure live on issue #382. #381 is
+//  the parent.
 //
 //  The iOS fixture deliberately ends in `\n\n\n` (the builder's iOS template
 //  emits trailing blank lines); never trim it — `git diff --check` flags it,
@@ -384,6 +390,119 @@ struct GhosttyGeneratedConfigFixturePinsTests {
             checkStepRange.upperBound < prepareStep.lowerBound,
             "the ghostty config check must run before `Prepare Xcode build`/`xcodebuild`: a rejection must fail before the compile, not after it (issue #247)"
         )
+    }
+
+    // MARK: - Core read-back control pins (#382)
+
+    /// The controlled VALUE keys (issue #382): the nine keys the probe reads
+    /// back through `ghostty_config_get` and the check script asserts against
+    /// the fixture text via its `controlled_keys` assignment. The exact set is
+    /// pinned by `coreReadbackControlsArePinned`, so a key cannot be dropped
+    /// from the script's assertion loop silently.
+    private static let controlledValueKeys = [
+        "font-size",
+        "window-inherit-font-size",
+        "cursor-style-blink",
+        "cursor-style",
+        "window-padding-balance",
+        "window-padding-color",
+        "clipboard-read",
+        "shell-integration",
+        "macos-option-as-alt",
+    ]
+
+    /// The full controlled read-back list (issue #382): the nine value keys
+    /// plus `shell-integration-features`, which the probe reads but the script
+    /// asserts presence-only in its own block. Kept in sync with the probe by
+    /// `coreReadbackControlsArePinned`.
+    private static let controlledReadbackKeys =
+        controlledValueKeys + ["shell-integration-features"]
+
+    /// Issue #382: the probe must keep reading every controlled key back
+    /// through `ghostty_config_get`, and the check script must keep both
+    /// halves of the assertion — the anchored per-key extraction and the
+    /// value comparison. A probe read-back call or the script's comparison
+    /// loop removed reds this pin; the C source is comment-stripped first, so
+    /// a key name left in a comment cannot satisfy it.
+    @Test
+    func coreReadbackControlsArePinned() throws {
+        let probe = Self.normalized(
+            Self.strippingComments(
+                try Self.swiftSource("scripts/ci/ghostty-config-probe.c")
+            )
+        )
+        #expect(
+            probe.contains("ghostty_config_get"),
+            "the config probe must read controlled keys back through `ghostty_config_get` (issue #382) — without it the script cannot tell the core's applied value from the fixture's text"
+        )
+        for key in Self.controlledReadbackKeys {
+            #expect(
+                probe.contains("\"\(key)\""),
+                "the config probe must read '\(key)' back (issue #382) — a removed read-back call would drop the script's actual-side line and red every run, or worse, drift silently"
+            )
+        }
+
+        let script = Self.normalized(
+            Self.strippingYAMLComments(
+                try Self.swiftSource("scripts/ci/check-ghostty-config.sh")
+            )
+        )
+        // The script's controlled VALUE keys are an explicit bounded-word
+        // list: pin exact (order-insensitive) equality so neither a dropped
+        // key (silently losing its value assertion) nor an added one can
+        // drift. Shell comments are stripped first (the YAML stripper's
+        // `#`-outside-quotes semantics match this script), so a
+        // `#`-commented assignment cannot satisfy the pin.
+        //
+        // Closure lens N1: exactly ONE live assignment. `controlledKeysAssignment`
+        // reads the first match, so a later re-assignment would override the
+        // loop list while this pin still validated the first one.
+        let controlledKeysAssignmentCount = script.components(separatedBy: "controlled_keys=\"").count - 1
+        #expect(
+            controlledKeysAssignmentCount == 1,
+            "the check script must keep exactly one live `controlled_keys=\"…\"` assignment (issue #382) — a later re-assignment would override the loop list while this pin still validates the first one; found \(controlledKeysAssignmentCount)"
+        )
+        guard let assignedKeys = Self.controlledKeysAssignment(in: script) else {
+            Issue.record(
+                "the check script must keep a `controlled_keys=\"…\"` assignment (issue #382) — the pin cannot tie the probe and script key lists together without it"
+            )
+            return
+        }
+        #expect(
+            assignedKeys.sorted() == Self.controlledValueKeys.sorted(),
+            "the check script's `controlled_keys` must stay exactly the controlled value keys (issue #382) — a key dropped from the assignment silently drops its value assertion; got [\(assignedKeys.joined(separator: " "))]"
+        )
+        // `shell-integration-features` is asserted by its own presence-only
+        // block, not by `controlled_keys`.
+        #expect(
+            script.contains("\"readback shell-integration-features ok=1 value=\"*)"),
+            "the check script must keep the presence-only `shell-integration-features` case pattern (issue #382) — the bare value literal is also satisfied by the value-extraction guard line, so the case pattern itself must be pinned"
+        )
+        #expect(
+            script.contains("grep \"^readback ${key} ok=\""),
+            "the check script must extract the anchored per-key read-back line (issue #382)"
+        )
+        #expect(
+            script.contains("\"$actual_value\" != \"$expected_value\""),
+            "the check script must compare the read-back value against the fixture text (issue #382) — extraction without comparison is not an oracle"
+        )
+        #expect(
+            script.contains("readback ${key} ok=0 value="),
+            "the check script must fail a controlled key that becomes unreadable (ok=0) (issue #382)"
+        )
+    }
+
+    /// The bounded words of the check script's `controlled_keys="…"`
+    /// assignment, or nil when the assignment is absent. Callers pass
+    /// comment-stripped, normalized script text, so a `#`-commented
+    /// assignment is not seen as live.
+    private static func controlledKeysAssignment(in script: String) -> [String]? {
+        guard let start = script.range(of: "controlled_keys=\"") else { return nil }
+        let remainder = script[start.upperBound...]
+        guard let end = remainder.firstIndex(of: "\"") else { return nil }
+        return remainder[..<end]
+            .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+            .map(String.init)
     }
 
     // MARK: - Filesystem helpers
