@@ -126,14 +126,20 @@ final class ServerNavigationUITests: XCTestCase {
         // 82.661 / ~75.8 s across four CI instances (max 82.661 s, which
         // reproduces exactly; the other three are wall-clock deltas within
         // 0.5 s). 90 s is the largest defensible budget — ~7.3 s above that
-        // tail — but it does NOT bound the stacked-success path: the three
-        // calibrated budgets alone can stall ~89 + ~44 + ~29 ≈ 162 s on top of
-        // a ~100-170 s happy path (~262-332 s, plan §3), and this method's
-        // 12 waits alone budget 278 s. That allowance risk is what Arm C must
-        // settle (shrink the pair above ~280 s). `setUpWithError` sets
-        // `continueAfterFailure = false`, so a budget expiry aborts the test
-        // body instead of stacking failures; a stall beyond the 90 s budget
-        // can still red here and stays on #257 (plan §2).
+        // tail. Allowance arithmetic (enumerated scopes, pre-#387): the 12
+        // in-body waits before `popTerminal` budget 280 s, + the final 8 s
+        // discard = 288 s, + `popTerminal`'s 8+15+5 = 316 s; #387's pair
+        // calibration (8→30 twice) adds exactly +44 s → 324/332/360 s. Worst
+        // single expiry: a near-deadline pre-background success plus one 30 s
+        // app-state expiry lands ~272 s, still under the 300 s allowance, and
+        // `continueAfterFailure = false` keeps it to one expiry per run.
+        // Stacked-success can reach ~306-376 s: that residual predates #387
+        // (~262-332 s) and is accepted. Stop rule (home: this comment, plus
+        // #387 while open; owner: the next agent touching this method; shrink
+        // target: 15-20 s waits or a fail-fast guard): any shard-3 run of this
+        // method >250 s, any `elapsed=` ≥250 s, or an allowance kill →
+        // reopen #387 and shrink; record runtimes on #248 and reds on #257. A
+        // stall beyond a budget can still red here and stays on #257.
         wait(for: diagnostics, containing: "state=connected", timeout: 90, app: app)
 
         let terminal = productionTerminal(in: app)
@@ -146,16 +152,16 @@ final class ServerNavigationUITests: XCTestCase {
         let shellId = try XCTUnwrap(diagnosticValue("shellId", in: diagnostics))
 
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 8))
+        waitForAppState(.runningBackground, timeout: Self.appStateWaitBudget, app: app)
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         app.activate()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        waitForAppState(.runningForeground, timeout: Self.appStateWaitBudget, app: app)
 
         // #232: measured slippage for the post-background wait is ~22.2 s
         // (n=1, job 111071659829) against the old 10 s budget; 45 s leaves
         // ~22.7 s above that sample. The stacked-success allowance arithmetic
-        // (~262-332 s) is documented at the pre-background site above and is
-        // the unmeasured risk Arm C must settle (plan §3).
+        // (~306-376 s after #387) is documented at the pre-background site
+        // above; the residual is accepted there via the stop rule.
         wait(for: diagnostics, containing: "state=connected", timeout: 45, app: app)
         XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalId)
         XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellId)
@@ -165,8 +171,10 @@ final class ServerNavigationUITests: XCTestCase {
         )
         // #232: measured slippage here is ~8.7 s (n=1, job 108860967255)
         // against the old 8 s budget; 30 s leaves ~21 s of room. Same-trip
-        // rule: the uncalibrated 8 s waits near the keyboard labels — the
-        // pre-background `keyboardVisible=true` label wait and the two
+        // rule (the `runningBackground`/`runningForeground` pair left this set
+        // when #387 calibrated it via `appStateWaitBudget`): the uncalibrated
+        // 8 s waits near the keyboard labels — the pre-background
+        // `keyboardVisible=true` label wait and the two
         // `app.keyboards.firstMatch.waitForExistence` waits — plus the shared
         // helper's 10 s default are left alone; if any of them reds, calibrate
         // it on its own measured evidence in the same trip.
@@ -486,6 +494,38 @@ final class ServerNavigationUITests: XCTestCase {
         wait(for: diagnostics, containing: "setup=ready state=connected", app: app)
         XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalID)
         XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellID)
+    }
+
+    /// The app-state wait budget (issue #387): 30 s is the #232 device-state
+    /// family budget (90/45/30) and ~6.9× the widest non-stalled completion in
+    /// the census (4.35 s, n=8). The red that prompted this was right-censored
+    /// at 8.016 s; the same run measured a 22.55 s AX observation stall, so a
+    /// 20 s budget could still red. Stacked exposure and the stop rule are
+    /// documented at the pre-background wait site above.
+    private static let appStateWaitBudget: TimeInterval = 30
+
+    /// Waits for an `XCUIApplication.State`; on failure reports the wait-clock
+    /// evidence only (`budget=`/`elapsed=`/`current=`). No diagnostics payload:
+    /// this failure path is the degraded-host path, where an AX read is
+    /// unbounded (22.55 s measured in the #387 red run) and the label may be
+    /// stale while backgrounded.
+    @MainActor
+    private func waitForAppState(
+        _ expected: XCUIApplication.State,
+        timeout: TimeInterval,
+        app: XCUIApplication
+    ) {
+        let started = Date()
+        let reached = app.wait(for: expected, timeout: timeout)
+        // Measured before any payload, so `elapsed` is the wait clock alone.
+        let waited = Date().timeIntervalSince(started)
+        XCTAssertTrue(
+            reached,
+            "Timed out waiting for app state \(String(describing: expected))."
+                + " budget=\(String(format: "%.0f", timeout))s"
+                + " elapsed=\(String(format: "%.2f", waited))s"
+                + " current=\(String(describing: app.state))"
+        )
     }
 
     @MainActor
