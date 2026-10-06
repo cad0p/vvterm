@@ -12,30 +12,38 @@ import XCTest
 //    animations complete notification not received"): one after each rotation
 //    and one inside tearDownWithError's unconditional `.portrait` reset
 //    (shard-1 teardown t=347.5→408.3, after the kill). The compact body ended
-//    at t=248.12 s and the allowance fired at t=300.06 s during that teardown
-//    stall — teardown time counts toward the allowance, so the reset alone can
-//    kill an otherwise-passing test.
-// 2. Query volume: the detailed run's body carried 128 query lines at 1–5 s
-//    each on the loaded shard-1 host (phase 2 ≈ 62 s, phase 3 ≈ 108 s).
-//    Compact (160 query lines) ran on a healthy host (0.04–0.13 s/query), so
-//    compact was stall-dominated while detailed was stall + query bound.
+//    at t=248.12 s and the allowance fired at ≈300 s during that teardown
+//    stall (xcresult duration 300 s; wall delta 299.77 s) — teardown time
+//    counts toward the allowance, so the reset alone can kill an
+//    otherwise-passing test.
+// 2. Query volume: the detailed run's full method section carried 166 query
+//    lines (90 Find the + 41 Checking existence + 35 Waiting, including the
+//    mount waits; `Build/issue349-evidence/count-metrics.sh` is the single
+//    definition) on the loaded shard-1 host. Its phase-2 and phase-3 query
+//    windows took ≈63 s and ≈48 s for 42 lines each (≈1.2–1.5 s per line).
+//    Compact (160 query lines) ran on a healthy host (0.04–0.13 s per
+//    query), so compact was stall-dominated while detailed was stall + query
+//    bound.
 //
 // Fix (two levers, test-only):
 // - tearDownWithError terminates the app before the orientation reset, so the
-//   reset targets springboard (measured ~0.2 s at t=0.09 in setUp) instead of
-//   paying the stall.
-// - Each phase reads one `container.snapshot()` (a single AX round trip)
-//   instead of per-card waits/finds. Phase 1 additionally reads the direct
-//   card frames and asserts snapshot-vs-direct parity within 1 pt, so the
-//   snapshot path stays measured rather than assumed; phases 2–4 are
-//   snapshot-only.
+//   reset targets springboard (measured ≈0.1 s: setter t=0.09 → orientation
+//   notification t=0.19 in the compact run) instead of paying the stall.
+// - Each phase reads the container subtree via `snapshotCardFrames()` instead
+//   of per-card waits/finds. Phase 1 first polls only until the grid container
+//   is mounted, then cross-checks snapshot-vs-direct frames within 1 pt;
+//   every phase asserts the exact card-identifier set first and tolerates a
+//   mid-rebuild snapshot with up to 3 samples, 0.5 s apart.
 //
-// Residual (#257): the ~60 s stall itself is XCTest-side and cannot be removed
-// from this file. Post-fix floor ≈ launch 13–20 s + 3 body stalls × 60 s +
-// 4 snapshots ≈ 200 s, ~250 s with the documented slow mount, so a 4th body
-// stall (e.g. a rotate() retry re-setting the orientation) still exceeds the
-// 300 s allowance. Reopen condition: any further allowance kill of these
-// methods.
+// Residuals (#257): the ~60 s stall itself is XCTest-side and cannot be
+// removed from this file. Post-fix floor ≈ launch 13–20 s + 3 body stalls ×
+// 60 s + the phase snapshots ≈ 200 s, ~250 s with the documented slow launch
+// (the old "~50 s" figure on run 30643100567 was launch retries, not grid
+// materialization). A 4th body stall — e.g. a rotate() retry re-setting the
+// orientation — still exceeds the 300 s allowance, and tearDown's
+// app?.terminate() can itself wedge (the #257 "Failed to terminate"
+// signature), which also counts toward the allowance. Reopen condition: any
+// further allowance kill of these methods.
 final class StatsCardsLayoutUITests: XCTestCase {
     private static let cardIdentifierPrefix = "vvterm.stats.card."
     private static let cardIdentifiers = [
@@ -61,9 +69,12 @@ final class StatsCardsLayoutUITests: XCTestCase {
         // Terminate BEFORE the orientation reset (#349): with the app still
         // running, the reset's idle wait paid a measured 60 s XCTest stall in
         // the killed run. With no app running the reset targets springboard
-        // and costs ~0.2 s. `terminate()` is not new work — the next test's
+        // and costs ≈0.1 s. `terminate()` is not new work — the next test's
         // launch already terminates the previous instance; this only moves it
-        // where it makes the reset cheap.
+        // where it makes the reset cheap. Risk (#257): a wedged terminate is
+        // the "Failed to terminate" signature and also counts toward the
+        // allowance; accepted as strictly better than the guaranteed 60 s
+        // reset stall.
         app?.terminate()
         app = nil
         layoutConfiguration = nil
@@ -129,7 +140,7 @@ final class StatsCardsLayoutUITests: XCTestCase {
         _ = launchForTest(app)
         // The mount wait lives in `mountedFrames(phaseName:)` on phase 1: it
         // replaces the old 20 s container + 10 s + 10 s card existence waits
-        // (#349) with one bounded ≥40 s snapshot poll.
+        // (#349) with one bounded ≥40 s container-only snapshot poll.
     }
 
     @MainActor
