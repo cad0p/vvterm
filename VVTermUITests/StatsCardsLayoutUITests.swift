@@ -74,45 +74,45 @@ final class StatsCardsLayoutUITests: XCTestCase {
     func testDetailedCardsRemainContainedAcrossWideNarrowAndWideTransitions() throws {
         layoutConfiguration = .detailed
         launch()
-        try assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
+        assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
 
-        try rotate(to: .landscapeLeft)
-        try assertPhase(named: "phase 2: landscapeLeft")
+        rotate(to: .landscapeLeft, phaseName: "phase 2: landscapeLeft")
+        assertPhase(named: "phase 2: landscapeLeft")
 
-        try rotate(to: .portrait)
-        try assertPhase(named: "phase 3: portrait")
+        rotate(to: .portrait, phaseName: "phase 3: portrait")
+        assertPhase(named: "phase 3: portrait")
 
-        try rotate(to: .landscapeRight)
-        try assertPhase(named: "phase 4: landscapeRight")
+        rotate(to: .landscapeRight, phaseName: "phase 4: landscapeRight")
+        assertPhase(named: "phase 4: landscapeRight")
     }
 
     @MainActor
     func testCompactCardsRemainContainedAcrossWideNarrowAndWideTransitions() throws {
         layoutConfiguration = .compact
         launch(extraArguments: ["--vvterm-ui-test-stats-cards-compact"])
-        try assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
+        assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
 
-        try rotate(to: .landscapeLeft)
-        try assertPhase(named: "phase 2: landscapeLeft")
+        rotate(to: .landscapeLeft, phaseName: "phase 2: landscapeLeft")
+        assertPhase(named: "phase 2: landscapeLeft")
 
-        try rotate(to: .portrait)
-        try assertPhase(named: "phase 3: portrait")
+        rotate(to: .portrait, phaseName: "phase 3: portrait")
+        assertPhase(named: "phase 3: portrait")
 
-        try rotate(to: .landscapeRight)
-        try assertPhase(named: "phase 4: landscapeRight")
+        rotate(to: .landscapeRight, phaseName: "phase 4: landscapeRight")
+        assertPhase(named: "phase 4: landscapeRight")
     }
 
     @MainActor
     func testLockedDockerCardRemainsContainedAfterRepeatedRotation() throws {
         layoutConfiguration = .lockedDockerDetailed
         launch(extraArguments: ["--vvterm-ui-test-stats-cards-locked-docker"])
-        try assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
+        assertPhase(named: "phase 1: portrait", readsDirectFramesForParity: true)
 
-        try rotate(to: .landscapeLeft)
-        try assertPhase(named: "phase 2: landscapeLeft")
+        rotate(to: .landscapeLeft, phaseName: "phase 2: landscapeLeft")
+        assertPhase(named: "phase 2: landscapeLeft")
 
-        try rotate(to: .portrait)
-        try assertPhase(named: "phase 3: portrait")
+        rotate(to: .portrait, phaseName: "phase 3: portrait")
+        assertPhase(named: "phase 3: portrait")
     }
 
     @MainActor
@@ -133,89 +133,120 @@ final class StatsCardsLayoutUITests: XCTestCase {
     }
 
     @MainActor
-    private func rotate(to orientation: UIDeviceOrientation) throws {
-        let oldWidth = container.frame.width
+    private func rotate(to orientation: UIDeviceOrientation, phaseName: String) {
+        XCTContext.runActivity(named: "rotate to \(orientation.rawValue) (\(phaseName))") { _ in
+            let oldWidth = container.frame.width
 
-        let expectsWiderLayout = orientation == .landscapeLeft || orientation == .landscapeRight
-        // Issue #126: on loaded runners the simulator can drop or stall an
-        // orientation change, so frame propagation can lag past the first
-        // sample. Re-asserting the orientation re-drives the rotation; retry
-        // up to 3 times.
-        //
-        // Hardening (#349), not a measured defect fix — the killed runs showed
-        // no re-assert; the stall is in the orientation setter's idle wait.
-        // The old XCTNSPredicateExpectation polled `container.frame`
-        // unboundedly inside a 5 s waiter and every poll is a query that can
-        // stall behind an AX rebuild. Cap each attempt at 3 width samples
-        // (0.5 s apart) so one rotation costs at most 9 width reads.
-        var lastWidth = oldWidth
-        for _ in 1...3 {
-            XCUIDevice.shared.orientation = orientation
-
+            let expectsWiderLayout = orientation == .landscapeLeft || orientation == .landscapeRight
+            // Issue #126: on loaded runners the simulator can drop or stall an
+            // orientation change, so frame propagation can lag past the first
+            // sample. Re-asserting the orientation re-drives the rotation; retry
+            // up to 3 times.
+            //
+            // Hardening (#349), not a measured defect fix — the killed runs showed
+            // no re-assert; the stall is in the orientation setter's idle wait.
+            // The old XCTNSPredicateExpectation polled `container.frame`
+            // unboundedly inside a 5 s waiter and every poll is a query that can
+            // stall behind an AX rebuild. Cap each attempt at 3 width samples
+            // (0.5 s apart) so one rotation costs at most 10 width reads
+            // (1 pre-loop baseline + 3 attempts × 3 samples).
+            var lastWidth = oldWidth
             for _ in 1...3 {
-                lastWidth = container.frame.width
-                if expectsWiderLayout ? lastWidth > oldWidth : lastWidth < oldWidth {
-                    return
+                XCUIDevice.shared.orientation = orientation
+
+                for _ in 1...3 {
+                    lastWidth = container.frame.width
+                    if expectsWiderLayout ? lastWidth > oldWidth : lastWidth < oldWidth {
+                        return
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
                 }
-                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
             }
+            XCTFail(
+                "\(phaseName): container width never \(expectsWiderLayout ? "grew" : "shrank") from \(oldWidth) "
+                    + "after 3 rotation attempts to \(orientation.rawValue) (last sample \(lastWidth))"
+            )
         }
-        XCTFail(
-            "Container width never \(expectsWiderLayout ? "grew" : "shrank") from \(oldWidth) "
-                + "after 3 rotation attempts to \(orientation.rawValue) (last sample \(lastWidth))"
-        )
     }
 
     /// Reads the phase's geometry and runs the same containment/column
-    /// assertions for every phase. Phase 1 uses the bounded mount poll and
-    /// cross-checks it against direct per-card frame reads; later phases use a
-    /// single snapshot each.
+    /// assertions for every phase. Phase 1 additionally waits for the grid to
+    /// mount (container-only poll) and cross-checks the snapshot against direct
+    /// per-card frame reads. Every phase first asserts the exact card-identifier
+    /// set, so a missing/misnamed card reds there before any geometry is
+    /// interpreted (and does not get masked by the mount wait).
     @MainActor
     private func assertPhase(
         named phaseName: String,
         readsDirectFramesForParity: Bool = false
-    ) throws {
-        try XCTContext.runActivity(named: phaseName) { _ in
-            let phase: PhaseFrames
+    ) {
+        XCTContext.runActivity(named: phaseName) { _ in
             if readsDirectFramesForParity {
-                phase = try mountedFrames(phaseName: phaseName)
-                assertMountedFramesMatchDirectReads(phase, phaseName: phaseName)
-            } else if let snapshot = snapshotCardFrames() {
-                phase = snapshot
-            } else {
-                XCTFail("\(phaseName): container snapshot could not be read")
+                guard mountedFrames(phaseName: phaseName) else { return }
+            }
+            guard let phase = stableSnapshot() else {
+                XCTFail("\(phaseName): container snapshot could not be read after 3 samples, 0.5 s apart")
                 return
             }
-            try assertExpectedColumnsAndContainment(phase: phase, phaseName: phaseName)
+            assertExpectedCardIdentifiers(phase: phase, phaseName: phaseName)
+            if readsDirectFramesForParity {
+                assertMountedFramesMatchDirectReads(phase, phaseName: phaseName)
+            }
+            assertExpectedColumnsAndContainment(phase: phase, phaseName: phaseName)
         }
     }
 
-    /// Waits for the harness grid to mount all 8 cards, polling one container
-    /// snapshot every ~0.5 s. This replaces the old 20 s + 10 s + 10 s
-    /// existence tolerances (#349): the harness can take far longer than 40 s
-    /// to materialize on a degraded runner (observed ~50 s on run
-    /// 30643100567). Snapshot throws are absorbed into the poll — a transient
-    /// AX miss while the grid is building is not a test failure; only the
-    /// exhausted timeout reds.
+    /// Waits for the harness grid's container to mount: polls one container
+    /// snapshot every ~0.5 s until the container frame is non-empty, then hands
+    /// off. This replaces the old 20 s + 10 s + 10 s existence tolerances
+    /// (#349); 40 s is 2× the old container wait (the old "~50 s" figure on run
+    /// 30643100567 was launch retries, not grid materialization). Only the
+    /// container is required here — the card set is asserted per phase after
+    /// the bounded re-snapshot tolerance in `stableSnapshot`. Snapshot throws
+    /// are absorbed into the poll; only the exhausted timeout reds.
     @MainActor
-    private func mountedFrames(phaseName: String, timeout: TimeInterval = 40) throws -> PhaseFrames {
+    private func mountedFrames(phaseName: String, timeout: TimeInterval = 40) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
-        var observedCardCount = 0
-        repeat {
+        var lastSnapshot: PhaseFrames?
+        while Date() < deadline {
             if let snapshot = snapshotCardFrames() {
-                observedCardCount = snapshot.cardFrames.count
-                if observedCardCount == Self.cardIdentifiers.count {
-                    return snapshot
+                lastSnapshot = snapshot
+                if !snapshot.containerFrame.isEmpty {
+                    return true
                 }
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-        } while Date() < deadline
+        }
 
         XCTFail(
-            "\(phaseName): stats cards did not mount within \(Int(timeout))s "
-                + "(last snapshot had \(observedCardCount)/\(Self.cardIdentifiers.count) cards)"
+            "\(phaseName): stats grid container did not mount within \(Int(timeout))s "
+                + "(last container frame \(lastSnapshot?.containerFrame ?? .zero), "
+                + "\(lastSnapshot?.cardFrames.count ?? 0)/\(Self.cardIdentifiers.count) cards)"
         )
-        return PhaseFrames(containerFrame: .zero, cardFrames: [:])
+        return false
+    }
+
+    /// Bounded transient tolerance for one phase's snapshot: a rotation or a
+    /// mid-rebuild AX tree can leave the container unresolvable or the card set
+    /// incomplete for a moment, so sample up to 3 times, 0.5 s apart. Returns
+    /// the first complete sample; if none is complete, returns the last non-nil
+    /// sample so `assertExpectedCardIdentifiers` (the single authority on the
+    /// card set) reports exactly what was missing instead of a generic timeout.
+    @MainActor
+    private func stableSnapshot(samples: Int = 3) -> PhaseFrames? {
+        var lastSnapshot: PhaseFrames?
+        for sample in 1...samples {
+            if let snapshot = snapshotCardFrames() {
+                lastSnapshot = snapshot
+                if Set(snapshot.cardFrames.keys) == Set(Self.cardIdentifiers) {
+                    return snapshot
+                }
+            }
+            if sample < samples {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            }
+        }
+        return lastSnapshot
     }
 
     /// One AX round trip: the whole container subtree as a snapshot. Returns
@@ -298,16 +329,16 @@ final class StatsCardsLayoutUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertExpectedColumnsAndContainment(phase: PhaseFrames, phaseName: String) throws {
-        assertExpectedCardIdentifiers(phase: phase, phaseName: phaseName)
+    private func assertExpectedColumnsAndContainment(phase: PhaseFrames, phaseName: String) {
         assertCardsAreHorizontallyContained(phase: phase, phaseName: phaseName)
 
         let containerWidth = phase.containerFrame.width
         guard let systemFrame = phase.cardFrames["system"],
               let cpuFrame = phase.cardFrames["cpu"],
               let memoryFrame = phase.cardFrames["memory"] else {
-            // The identifier-set assertion above already failed; do not pile
-            // duplicate failures on top of it.
+            // Unreachable after the identifier-set assertion under
+            // `continueAfterFailure = false`; kept so a flipped flag cannot
+            // cascade duplicate failures.
             return
         }
         let firstRowY = systemFrame.minY
