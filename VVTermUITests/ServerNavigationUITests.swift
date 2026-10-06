@@ -129,7 +129,7 @@ final class ServerNavigationUITests: XCTestCase {
         // tail — but it does NOT bound the stacked-success path: the three
         // calibrated budgets alone can stall ~89 + ~44 + ~29 ≈ 162 s on top of
         // a ~100-170 s happy path (~262-332 s, plan §3), and this method's
-        // waits alone budget 270 s. That allowance risk is what Arm C must
+        // 12 waits alone budget 278 s. That allowance risk is what Arm C must
         // settle (shrink the pair above ~280 s). `setUpWithError` sets
         // `continueAfterFailure = false`, so a budget expiry aborts the test
         // body instead of stacking failures; a stall beyond the 90 s budget
