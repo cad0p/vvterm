@@ -13,7 +13,8 @@
 //
 //  Origin: #247 measured that `scripts/ci/check-ghostty-config.sh` is a
 //  *diagnostics* oracle — it catches every key the core rejects, but the core
-//  silently accepts compatibility renames and duplicate keys (last wins).
+//  silently accepts compatibility renames and duplicate scalar keys (last
+//  wins; list-valued keys accumulate).
 //  This suite closes that class at the builder boundary, where a deliberate
 //  key-set change is visible and reviewable in the same PR.
 //

@@ -24,8 +24,9 @@
 //
 //  Oracle boundary (F8, #381): the checked-in probe catches keys the core
 //  rejects; the core still accepts silent compatibility renames
-//  (`scrollback-limit`) and duplicate keys, so that class is covered at the
-//  builder boundary by `GhosttyGeneratedConfigLintTests` (inventory /
+//  (`scrollback-limit`) and duplicate scalar keys (last wins; list-valued keys
+//  such as `font-family`/`keybind` accumulate), so that class is covered at
+//  the builder boundary by `GhosttyGeneratedConfigLintTests` (inventory /
 //  duplicates / known aliases) — the value-level pin in
 //  `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable` stays. A
 //  core-side meaning change of a non-C-readable key (`Limit`) has no exposed

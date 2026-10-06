@@ -11,14 +11,16 @@
 #
 # Oracle boundary (issue #381): the probe is a diagnostics oracle only. The
 # core silently accepts compatibility renames (`scrollback-limit` is mapped to
-# `scrollback-limit-bytes` — bytes, not lines), duplicate keys (last wins) and
-# key meaning changes, so a config can pass this check while its semantics
+# `scrollback-limit-bytes` — bytes, not lines), duplicate scalar keys (last
+# wins; list-valued keys such as `font-family`/`keybind` accumulate) and key
+# meaning changes, so a config can pass this check while its semantics
 # drift. The alias/duplicate class is covered at the builder boundary by
 # `VVTermTests/GhosttyGeneratedConfigLintTests` (inventory / duplicates /
 # known aliases), in addition to the existing value-level pin in
 # `GhosttyConfigBuilderTests.configContentKeepsNonFontLinesStable`. Keys whose
 # type is not C-readable (`Limit`) cannot be read back, so a read-back cannot
-# cover the meaning class; that half is tracked in issue #382.
+# cover the meaning class for those `Limit`-typed keys; that half is tracked in
+# issue #382.
 #
 # Usage: scripts/ci/check-ghostty-config.sh <config> [<config> ...]
 #
