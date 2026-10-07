@@ -70,9 +70,12 @@
 //  cannot prove exactly one step-level key; the pipeline cut is quote-unaware,
 //  so a `|` inside a quoted argument reds every flag assertion (fail-closed
 //  false red); and control flow is not modelled, so a pre-invocation `exit`
-//  with a computed status is invisible to the anchored re-exit assertion (a
-//  literal `exit 0` is rejected outright, because it would end the shard green
-//  with zero tests run).
+//  with a computed status, an arithmetic spelling (`exit +0`), or a
+//  zero-looking `exit` inside a data-heredoc body is invisible to the
+//  anchored re-exit assertion (a bare `exit` with a literal zero argument in
+//  the common spellings — `0`, `00`, `"0"`, `'0'`, `0;` — is rejected
+//  outright, because it would end the shard green with zero tests run; a
+//  zero-looking line inside a heredoc body false-reds, fail-closed).
 //
 //  The script corpus reuses the same YAML-comment stripper, and the two
 //  languages' quoting rules diverge: the stripper does not model bash
@@ -370,20 +373,22 @@ struct WorkflowXcodebuildFlagPinsTests {
             "\(scriptPath) must re-exit with xcodebuild's captured status exactly once (`exit $XC_EXIT` or `exit \"$XC_EXIT\"`), found \(exitLines.count) matching statement(s) — re-derive this pin (issue #249)"
         )
 
-        // Closure lens (fold round 1, finding 2): a pre-invocation `exit 0`
-        // ends the shard green with zero tests run, and the anchored re-exit
-        // assertion above cannot see it — this is a text pin with no
-        // control-flow model. The script's only literal exits are the two
-        // non-zero argument-validation exits and the re-exit, so reject a
-        // literal zero exit anywhere (a computed pre-invocation exit remains
-        // a named residual bound in the header).
+        // Closure lens (fold round 1, finding 2; re-lens fold-2 finding 1): a
+        // pre-invocation `exit 0` ends the shard green with zero tests run,
+        // and the anchored re-exit assertion above cannot see it — this is a
+        // text pin with no control-flow model. Reject a bare `exit` whose
+        // argument is a literal zero in the common bash-zero spellings
+        // (`exit 0`, `exit 00`, `exit "0"`, `exit '0'`, `exit 0;`); a computed
+        // pre-invocation exit, an arithmetic spelling (`exit +0`), and a
+        // zero-looking `exit` inside a data-heredoc body remain named
+        // residual bounds in the header.
         let zeroExitLines = scriptLines.enumerated().filter {
             $0.element.trimmingCharacters(in: .whitespaces)
-                .range(of: #"^exit\s+0$"#, options: .regularExpression) != nil
+                .range(of: #"^exit\s+['"]?0+['"]?\s*;?\s*$"#, options: .regularExpression) != nil
         }
         #expect(
             zeroExitLines.isEmpty,
-            "\(scriptPath) must not contain a literal `exit 0` (found at line(s) \(zeroExitLines.map { String($0.offset + 1) }.joined(separator: ", "))): an early zero exit ends the shard green without running tests, and the anchored re-exit assertion cannot see it — re-derive this pin (issue #249)"
+            "\(scriptPath) must not contain a bare zero exit in a common spelling (found at line(s) \(zeroExitLines.map { String($0.offset + 1) }.joined(separator: ", "))): an early zero exit ends the shard green without running tests, and the anchored re-exit assertion cannot see it — re-derive this pin (issue #249)"
         )
 
         // The plist injection is the extraction's silent-break surface: an
