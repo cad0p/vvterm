@@ -1120,7 +1120,10 @@ shape as a downloader flips the pinned
 
 The delegation model scans EVERY word token of EVERY segment (not
 `_argv_operand_words`, which drops redirect targets and would miss
-`bash < scripts/ci/x.sh`). Each word is quote-stripped and normalized with
+`bash < scripts/ci/x.sh`). Each word is ANSI-C-decoded first (fold round 3,
+N12: symmetric with the token model, so `bash $'\x73cripts/ci/x.sh'` names
+the executed path instead of an invisible spelling), then quote-stripped
+and normalized with
 `posixpath.normpath`, then every match of the case-insensitive,
 right-anchored `(?:/|[A-Za-z0-9_.-]+/)*scripts/ci/[A-Za-z0-9_.-]+\\.sh`
 candidate is resolved as the path the shell would execute, so
@@ -1138,14 +1141,25 @@ rather than reading it as the root (N3). A `cd` word ANYWHERE in a segment
 is a cwd change, not just the first word (N1): `if cd`, `while cd`,
 `{ cd`, `! cd`, `( cd`, `FOO=1 cd`, `command cd`, `time cd` and
 `builtin cd` all refuse a later delegation, while a `cd` inside a `$(…)`
-substitution is deliberately not the word `cd` (the tokenizer keeps the
+substitution is not the OUTER shell's `cd` (the tokenizer keeps the
 substitution in one word; `teleport-server.sh:114` and
-`check-ghostty-config.sh:80-81,256` rely on it). The rule is order-aware —
+`check-ghostty-config.sh:80-81,256` rely on it) — but a delegation inside
+that same substitution refuses when the substitution itself contains a
+modeled `cd` (fold round 3, N11), because the substitution's own shell has
+already changed cwd. The rule is order-aware —
 a delegation that precedes the body's `cd` is not refused by it (the live
-`check-license-headers.sh` `SELF=` mention sits before its own `cd`) — but
-a delegation candidate at or after a function definition refuses when the
+`check-license-headers.sh` `SELF=` mention sits before its own `cd`) — and
+a candidate at or after a function definition refuses when the
 body also contains a `cd`, because a bash function body executes at call
-time and its effective cwd is then unprovable (N1c). Nested
+time and its effective cwd is then unprovable (N1c). A candidate inside a
+`trap` action is deferred the same way: the action executes at EXIT/ERR
+time, so a `cd` anywhere in the body or in the action itself refuses (fold
+round 3, N10). A candidate sourced via `.`/`source` from a `scripts/ci/*.sh`
+whose body contains a modeled `cd` refuses at the source (fold round 3,
+N13), because the sourced script shares the caller's shell. The definition
+scan reads the bash-faithful join as well as the physical line, so a
+`f \\` + newline + `()` name/`()` split is the definition too (fold round
+3, N14). Nested
 delegations recurse with a visited set of canonical paths and a depth cap
 of 4; beyond the cap refuses without counting the target as resolved. A
 finding is anchored at the delegating run body's `run:` line and names
@@ -1169,7 +1183,8 @@ missing target refuses), non-`.sh` wrappers, and orphan scripts.
 Delegations under a non-root `working-directory:` or after a modeled `cd`
 are refused, not resolved; a cwd change the tokenizer cannot see — inside
 an interpreter payload (`bash -c 'cd sub; …'`), through an assembled
-command (`CMD=cd; $CMD sub`), or spelled `pushd`/`popd` — is a named
+command (`CMD=cd; $CMD sub`), through a dynamic `.`/`source` target, or
+spelled `pushd`/`popd` — is a named
 residual. The whole
 attribute-to-the-delegating-job arm (scanning a delegated downloader under
 the existing transitive-`needs:` rule) is declined by design: an executable
