@@ -31,6 +31,19 @@
 # its `JSON` terminator MUST stay at column 0: an indented body would change
 # the payload shape, and a lost or column-shifted terminator would break the
 # API call that creates the verified commit.
+#
+# Non-region deltas versus the former scalar (deliberate, enumerated so the
+# no-behavior-change claim stays falsifiable):
+#   (a) `shell: bash` on the step changes the invocation from the macOS
+#       default `bash -e {0}` to `bash --noprofile --norc -eo pipefail {0}`
+#       — it adds `-o pipefail` and suppresses profile/rc, unobservable for
+#       this body (no pipeline, and the two non-`pipefail` echoes read only
+#       `$RUNNER_TEMP`/expressions);
+#   (b) the 2-arg usage check above is a new defensive early-abort surface
+#       (`exit 2`), unreachable with the runner's `github.repository` and
+#       run-URL arguments;
+#   (c) the step's marker + diagnostic now run before the `REPO`/`RUN_URL`
+#       bindings (here `$1`/`$2`) that they never read.
 
 set -euo pipefail
 

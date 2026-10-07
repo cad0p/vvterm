@@ -260,10 +260,10 @@ diagnostic and the delegation — issue #396):
 5. Canary: the open `ghostty bump in-flight:` issue's number is resolved
    early (issue calls override the app token with
    `GH_TOKEN="$GITHUB_TOKEN"` — the app has no Issues permission); creation
-   is non-fatal and may run before the ref write. The title edit ("now
-   tracking") + trail comment run only AFTER the ref write — a pre-ref
-   failure must never leave the canary claiming to track a sha that has no
-   bump.
+   is non-fatal and deferred until after the ref write succeeds. The title
+   edit ("now tracking") + trail comment run only AFTER the ref write — a
+   pre-ref failure must never leave the canary claiming to track a sha that
+   has no bump.
 6. Ref write: branch exists → fast-forward
    `PATCH /git/refs/heads/chore/ghostty-upstream-bump` (`non_fast_forward`
    on gh-ruleset-all restricts force-updates only, so an FF PATCH is
@@ -307,8 +307,8 @@ restored 2026-08-14 (pi-napkin + vvterm):
   bump commit via `POST /git/commits` (app token, NO custom author/committer/
   signature), which makes **GitHub sign it with its web-flow key and mark it
   Verified** (dependabot mechanism), satisfying `required_signatures` — see the
-  verification gate in `ghostty-upstream-probe.yml` (the "Verified commit via
-  the Git API" step). So the restore is compatible with
+  `Verified commit via the Git API` section in `scripts/ci/ghostty-bump-pr.sh`.
+  So the restore is compatible with
   the live probe; no bypass actors needed. *(Superseded for the bump-completion
   path — see the 2026-08-17 correction below: the scratch blob-upload push was
   broken by the restore.)*
