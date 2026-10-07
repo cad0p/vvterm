@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 816
-    private static let expectedBaseVerdictCases = 385
+    private static let expectedManifestCases = 835
+    private static let expectedBaseVerdictCases = 404
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1049,7 +1049,28 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-shell-run-body-comment-token.yml",
         "accept-shell-benign-delegation.yml",
         "accept-shell-delegation-cycle.yml",
-        "accept-shell-delegation-prefixed-path.yml",
+        "reject-shell-delegation-prefixed-path.yml",
+        // #399 fold round 1: the normalized-phrase, executed-path, cwd,
+        // continuation-bound, lookahead and symlink-escape fixtures.
+        "reject-shell-gh-run-download-double-space.yml",
+        "reject-shell-gh-run-download-tab.yml",
+        "reject-shell-gh-run-download-cmdsub-spaced.yml",
+        "reject-shell-gh-run-download-backtick-spaced.yml",
+        "reject-shell-gh-run-download-repo-flag.yml",
+        "reject-shell-gh-run-download-payload-continuation.yml",
+        "reject-shell-gh-ifs.yml",
+        "reject-shell-delegation-double-slash.yml",
+        "reject-shell-delegation-dot-segment.yml",
+        "reject-shell-delegation-parent-segment.yml",
+        "reject-shell-delegation-case-component.yml",
+        "reject-shell-delegation-case-extension.yml",
+        "reject-shell-delegation-quoted-inner.yml",
+        "reject-shell-delegation-absolute-path.yml",
+        "reject-shell-delegation-working-directory.yml",
+        "reject-shell-delegation-cd-prefix.yml",
+        "reject-shell-continuation-over-bound.yml",
+        "accept-shell-delegation-bak-suffix.yml",
+        "reject-shell-delegation-symlink-escape.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
@@ -1409,6 +1430,13 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             // actionable clause (no generic fragment).
             "(`gh run download`)",
             "cannot resolve the referenced script",
+            // #399 fold round 1: the emitted-path escape, the cwd refusals
+            // and the unresolved-delegation remediation clause.
+            "resolves outside the scanned root",
+            "`working-directory: {working_directory}`",
+            "after a `cd` in the same shell body",
+            "the gate resolves delegations relative to the repository root only",
+            "fix the path, restore the script, or reword the mention",
             "nested-delegation depth cap",
             "delegated-script floor: only",
             "Keep the download in a `uses: actions/download-artifact` step",
