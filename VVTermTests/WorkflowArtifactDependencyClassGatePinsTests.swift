@@ -1076,7 +1076,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
     /// `requiredFixtures` cannot carry them (the YAML set-equality filter
     /// drops `.sh`), so this array pins the shell inventory with the same
-    /// existence, manifest-reference and exact set/count invariants.
+    /// existence, manifest-reference and exact set/count invariants. The
+    /// `manifest.contains(fixture)` reference check is deliberately a
+    /// substring mirror (lens-2 F5, accepted): the structural invariant is
+    /// the `--selftest` orphan check, which requires every on-disk fixture
+    /// (including `extra_files` and `extra_symlinks` sources) to be
+    /// referenced by the manifest.
     private static let requiredScriptFixtures: [String] = [
         "shell-evil.sh",
         "shell-hop-a.sh",
