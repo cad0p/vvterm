@@ -2,7 +2,7 @@
 # Fixture: the quote-closure refusal runs after block-scalar blanking, so an
 # unbalanced `'` inside a `run: |` shell body is opaque text, not a YAML
 # scalar error (recheck NEW-5; six real-tree witnesses, e.g. the
-# `NEW_COMMIT="$(gh api ...` body lines in scripts/ci/ghostty-bump-pr.sh:149).
+# `NEW_COMMIT="$(gh api ...` body lines in scripts/ci/ghostty-bump-pr.sh).
 # The gate scans only `.github/workflows`: run bodies extracted into
 # `scripts/ci/*.sh` (the #249/#396 pattern) are outside its scan — the
 # pre-existing script-indirection blind spot, tracked by a follow-up issue.
