@@ -1150,6 +1150,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import posixpath
 import re
 import shutil
@@ -8645,6 +8646,60 @@ def _load_manifest():
     return module
 
 
+def _confine_fixture_destination(tempdir: Path, destination: str) -> str | None:
+    """Issue #399 fold round 1 (lens-2 F3): every fixture destination must
+    stay inside the case's tempdir. An absolute path, a `..` component, or a
+    path that resolves outside the tempdir fails the case instead of writing
+    outside the sandbox; returns the failure suffix, or None."""
+    path = Path(destination)
+    if path.is_absolute() or ".." in path.parts:
+        return f"fixture destination escapes the case tempdir: {destination}"
+    if not (tempdir / path).resolve().is_relative_to(tempdir.resolve()):
+        return f"fixture destination escapes the case tempdir: {destination}"
+    return None
+
+
+def _materialize_extra_files(case: dict, tempdir: Path) -> str | None:
+    """Copy a case's `extra_files` (`{destination: fixture}`) into the case
+    tempdir, parents created; returns the failure suffix, or None. The
+    destination is confined to the tempdir first (lens-2 F3)."""
+    for destination, filename in case.get("extra_files", {}).items():
+        destination_error = _confine_fixture_destination(tempdir, destination)
+        if destination_error is not None:
+            return destination_error
+        source = FIXTURES_DIR / filename
+        if not source.is_file():
+            return f"fixture file missing: {filename}"
+        target = tempdir / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    return None
+
+
+def _materialize_extra_symlinks(case: dict, tempdir: Path, outside: Path) -> str | None:
+    """Issue #399 fold round 1 (lens-2 F4): a case may declare
+    `extra_symlinks` (`{destination: fixture}`); the fixture is materialized
+    OUTSIDE the scanned root (in the sibling `<tempdir>.outside` directory)
+    and a symlink at `<tempdir>/<destination>` points at it, so the
+    root-containment guard has a rerunnable escape fixture. A missing source
+    or an escaping destination fails the case; returns the failure suffix,
+    or None."""
+    for destination, filename in case.get("extra_symlinks", {}).items():
+        destination_error = _confine_fixture_destination(tempdir, destination)
+        if destination_error is not None:
+            return destination_error
+        source = FIXTURES_DIR / filename
+        if not source.is_file():
+            return f"fixture file missing: {filename}"
+        outside.mkdir(parents=True, exist_ok=True)
+        target = outside / filename
+        shutil.copyfile(source, target)
+        link = tempdir / destination
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, link)
+    return None
+
+
 def run_selftest() -> int:
     manifest = _load_manifest()
     cases = list(manifest.CASES)
@@ -8687,9 +8742,11 @@ def run_selftest() -> int:
     referenced: set[str] = set()
     for case in cases:
         referenced.update(case["files"])
-        # Issue #399: `extra_files` sources are fixtures too, so an orphan or
-        # deleted `.sh` fixture is visible to the orphan check.
+        # Issue #399: `extra_files` sources and `extra_symlinks` targets are
+        # fixtures too, so an orphan or deleted `.sh` fixture is visible to
+        # the orphan check.
         referenced.update(case.get("extra_files", {}).values())
+        referenced.update(case.get("extra_symlinks", {}).values())
     on_disk = {
         p.name
         for pattern in ("*.yml", "*.yaml", "*.sh")
@@ -8704,30 +8761,23 @@ def run_selftest() -> int:
     for case in cases:
         case_id = case["id"]
         tempdir = Path(tempfile.mkdtemp(prefix="artifact-dependency-selftest."))
+        outside = Path(str(tempdir) + ".outside")
         try:
             workflows = tempdir / WORKFLOWS_RELPATH
             workflows.mkdir(parents=True)
-            missing_fixture: str | None = None
+            case_error: str | None = None
             for filename in case["files"]:
                 source = FIXTURES_DIR / filename
                 if not source.is_file():
-                    missing_fixture = filename
+                    case_error = f"fixture file missing: {filename}"
                     break
                 shutil.copyfile(source, workflows / filename)
-            if missing_fixture is None:
-                # Issue #399: `extra_files` copies `{"scripts/ci/foo.sh":
-                # "<fixture>.sh"}` into `<tempdir>/<dest>` (parents created)
-                # so a delegated-script fixture is visible to the pass.
-                for destination, filename in case.get("extra_files", {}).items():
-                    source = FIXTURES_DIR / filename
-                    if not source.is_file():
-                        missing_fixture = filename
-                        break
-                    target = tempdir / destination
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, target)
-            if missing_fixture is not None:
-                failures.append(f"{case_id}: fixture file missing: {missing_fixture}")
+            if case_error is None:
+                case_error = _materialize_extra_files(case, tempdir)
+            if case_error is None and case.get("extra_symlinks"):
+                case_error = _materialize_extra_symlinks(case, tempdir, outside)
+            if case_error is not None:
+                failures.append(f"{case_id}: {case_error}")
             else:
                 scan = scan_root(tempdir, enforce_floor=case.get("floor", False))
                 actual_lines = list(scan.diagnostics)
@@ -8762,6 +8812,7 @@ def run_selftest() -> int:
                     )
         finally:
             shutil.rmtree(tempdir, ignore_errors=True)
+            shutil.rmtree(outside, ignore_errors=True)
     elapsed = time.monotonic() - started
     if failures:
         for failure in failures:
