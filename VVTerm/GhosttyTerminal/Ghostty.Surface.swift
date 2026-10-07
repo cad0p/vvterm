@@ -38,6 +38,28 @@ extension Ghostty {
             self.callbackContext = callbackContext
         }
 
+        /// #329: release every in-flight clipboard-confirmation request as the
+        /// documented deny completion immediately before the surface is freed.
+        ///
+        /// Empty data + `confirmed: true` is the deny form: for `.paste` the
+        /// core returns in `Surface.zig` before any renderer or callback work,
+        /// then destroys the request state (`embedded.zig:751`). The loop drains
+        /// the registry under the context lock and only then calls back into
+        /// the core, so no lock is held across the C call; the helper is static
+        /// so the deferred `deinit` block does not capture `self`.
+        private static func drainPendingClipboardRequests(
+            surface: ghostty_surface_t,
+            context: Ghostty.SurfaceCallbackContext
+        ) {
+            for pending in context.drainPendingClipboardRequests() {
+                #if DEBUG
+                GhosttyClipboardConfirmDebug.noteCompletion(kind: pending.kind, byteLength: 0, confirmed: true)
+                GhosttyClipboardConfirmDebug.noteTeardownDrain(kind: pending.kind)
+                #endif
+                ghostty_surface_complete_clipboard_request(surface, "", pending.state, true)
+            }
+        }
+
         /// Explicitly free the surface. Call this from cleanup() on main actor.
         /// This is preferred over relying on deinit since Task.detached may not run.
         @MainActor
@@ -55,7 +77,11 @@ extension Ghostty {
             // (this wrapper holds it, and the view holds it until it goes away),
             // so the userdata pointer remains valid while the free joins the
             // renderer and IO threads.
+            // #329: release any in-flight clipboard confirmation first — the
+            // surface handle is still valid here and the deny completion is the
+            // only release route the vendored core exports.
             callbackContext.invalidate()
+            Self.drainPendingClipboardRequests(surface: surf, context: callbackContext)
             ghostty_surface_free(surf)
         }
 
@@ -74,6 +100,9 @@ extension Ghostty {
             // context alive across the deferred free. Without the retain the
             // window would only move: the surface's userdata would dangle on a
             // freed context instead of a freed view.
+            // #329: the deferred drain still releases pending clipboard
+            // requests even though the context is invalid (the drain ignores
+            // `isValid` by design).
             callbackContext.invalidate()
             let context = callbackContext
 
@@ -82,6 +111,7 @@ extension Ghostty {
             // MainActor.run used to avoid Sendable warning on raw pointer
             DispatchQueue.main.async {
                 withExtendedLifetime(context) {
+                    Self.drainPendingClipboardRequests(surface: surf, context: context)
                     ghostty_surface_free(surf)
                 }
             }
