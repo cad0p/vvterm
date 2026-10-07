@@ -30,6 +30,12 @@
 //      that fires during the free resolves to nil instead of a dying view;
 //    - captured by the deferred free block, so the raw userdata pointer stays
 //      valid until the free has run;
+//    - the owner of the #329 pending-clipboard-request registry: an in-flight
+//      confirmation is registered under the lock, the completion claims
+//      (removes) its own entry before completing, and every
+//      `ghostty_surface_free` path drains what remains as the deny completion.
+//      `invalidate()` never clears the registry: the deferred `deinit` drain
+//      still owes each entry's release;
 //    - thread-safe: the write callback runs on the termio IO thread,
 //      `Ghostty.App.action` may run off the main actor, and the main actor
 //      invalidates it, so every access goes through `OSAllocatedUnfairLock`.
@@ -61,6 +67,12 @@ extension Ghostty {
             /// Set under the lock before `ghostty_surface_free`. Once false,
             /// `resolve()` returns nil for good (invalidation is one-way).
             var isValid = true
+            /// #329: request states whose confirm callback has not completed
+            /// yet, keyed by the core's request pointer, valued by the request
+            /// kind. The teardown drain releases every remaining entry as a
+            /// deny completion; the completion path claims its own entry so a
+            /// later drain cannot re-complete an already-destroyed state.
+            var pendingClipboardRequests: [UnsafeMutableRawPointer: ghostty_clipboard_request_e] = [:]
         }
 
         private let state = OSAllocatedUnfairLock(initialState: State())
@@ -102,11 +114,62 @@ extension Ghostty {
             }
         }
 
-        /// Suppress every future resolution. Runs on the main actor before
-        /// `ghostty_surface_free` on both free paths, so a callback that fires
-        /// during the free cannot reach a dying view.
+        /// Suppress every future resolution. The synchronous `free()` path runs
+        /// this on the main actor; the `deinit` path runs it on the deinit
+        /// thread and defers only the drain + `ghostty_surface_free` to the
+        /// main queue. Either way, a callback that fires during the free cannot
+        /// reach a dying view.
+        ///
+        /// #329: this flips only `isValid` — the pending clipboard requests
+        /// stay registered so `drainPendingClipboardRequests()` can still
+        /// release them from the deferred `deinit` drain.
         func invalidate() {
             state.withLock { $0.isValid = false }
+        }
+
+        /// Registers one in-flight clipboard-confirmation request (#329).
+        ///
+        /// Returns false without registering when the context was already
+        /// invalidated: a late registrant must not add an entry that no free
+        /// path can drain. A false return therefore means "context invalidated;
+        /// the request cannot be drained" — it is left to the window-(a)
+        /// residual (#329). The validity check and the insertion share the
+        /// lock's critical section.
+        @discardableResult
+        func registerPendingClipboardRequest(
+            state requestState: UnsafeMutableRawPointer,
+            kind: ghostty_clipboard_request_e
+        ) -> Bool {
+            self.state.withLock { state in
+                guard state.isValid else { return false }
+                state.pendingClipboardRequests[requestState] = kind
+                return true
+            }
+        }
+
+        /// Removes the entry and returns true iff it was still pending — the
+        /// exactly-once claim the completion path performs before it hands the
+        /// request state back to the core (#329).
+        func claimPendingClipboardRequest(_ requestState: UnsafeMutableRawPointer) -> Bool {
+            state.withLock { state in
+                state.pendingClipboardRequests.removeValue(forKey: requestState) != nil
+            }
+        }
+
+        /// Removes and returns every pending clipboard-confirmation request
+        /// (#329). The surface teardown drain calls this immediately before
+        /// `ghostty_surface_free` and releases each entry as a deny completion.
+        ///
+        /// MUST ignore `isValid`: the `deinit` path invalidates the context
+        /// before its deferred drain runs, and the drain is exactly what makes
+        /// that invalidated window safe. It is also why `invalidate()` must not
+        /// clear the registry.
+        func drainPendingClipboardRequests() -> [(state: UnsafeMutableRawPointer, kind: ghostty_clipboard_request_e)] {
+            state.withLock { state in
+                let pending = state.pendingClipboardRequests
+                state.pendingClipboardRequests.removeAll()
+                return pending.map { (state: $0.key, kind: $0.value) }
+            }
         }
     }
 }

@@ -901,22 +901,29 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(collector.combinedString.isEmpty)
     }
 
-    /// #327 completion-time gate: if the surface dies while the confirmation
-    /// request is in flight, the completion must be skipped. The seam runs in
-    /// the `Task` *after* the callback-frame resolve guard, so freeing the
-    /// surface there is the only place a test can invalidate the captured
-    /// handle post-capture: `cleanup()` invalidates the context and nils the
-    /// view's surface before the gate runs. Without the gate the completion
-    /// would run against the freed surface handle.
+    /// #329: completion-time gate + teardown drain. If the surface dies while
+    /// the confirmation request is in flight, the drain added to
+    /// `Ghostty.Surface.free()` releases the request as the documented deny
+    /// completion exactly once, and the completion gate must not issue a
+    /// second completion afterwards.
     ///
-    /// What this proves: the gate as a whole is load-bearing (deleting it
-    /// crashes the test host on the freed handle). It does NOT independently
-    /// discriminate the `unsafeCValue == surface` half: `cleanup()` invalidates
-    /// the context first, so a mutation that keeps the resolve but deletes the
-    /// comparison stays green here — that half is pinned structurally by P-G in
-    /// `GhosttySurfaceUserdataLifetimePinsTests`.
+    /// WHAT THIS CONSTRUCTION IS. The seam runs inside the completion `Task`
+    /// *after* the callback-frame resolve guard, so freeing the surface there
+    /// is the only place a test can invalidate the captured handle
+    /// post-capture: `cleanup()` invalidates the context, drains the registry
+    /// and nils the view's surface before the Task's gate runs. It is a
+    /// state-machine reproduction (register → free-path drain → invalidate →
+    /// Task gate); it does NOT simulate an interleaving across the presentation
+    /// await — the seam is synchronous inside the Task and every path here is
+    /// main-serialized.
+    ///
+    /// What this proves: the drain releases the in-flight request exactly once
+    /// in the deny shape (`byteLength == 0`, `confirmed == true`), the drain is
+    /// labelled as such by `teardownDrains`, the Task does not complete it
+    /// again, and the registry ends empty. The registry-emptiness assertion is
+    /// the direct "no retained state" observation.
     @Test
-    func surfaceDeathDuringTheConfirmationSeamSkipsTheCompletion() async throws {
+    func surfaceDeathDuringTheConfirmationSeamReleasesTheRequestAsADeny() async throws {
         let app = Ghostty.App()
         defer { app.cleanup() }
         let appHandle = try #require(app.app)
@@ -961,29 +968,113 @@ struct GhosttySurfaceCallbackRoutingTests {
             "positive control: the seam must have freed the surface's context"
         )
 
-        // The gate runs synchronously right after the seam returns, so the
-        // skip decision has already run once the seam consult is observable.
-        // Wait a bounded while anyway so a broken gate that completes on a
-        // later hop cannot escape the assertion.
-        let completed = await Self.waitUntil(timeout: 0.5) {
-            #if DEBUG
-            !GhosttyClipboardConfirmDebug.completions.isEmpty
-            #else
-            false
-            #endif
-        }
-        #expect(completed == false, "a completion into a surface freed during the prompt must be skipped")
         #if DEBUG
+        // The drain runs synchronously inside `cleanup()`, so by the time the
+        // seam consult is observable the release has already happened. Wait a
+        // bounded while anyway so a broken gate that completes on a later hop
+        // cannot escape the assertions below.
+        let released = await Self.waitUntil(timeout: 5.0) {
+            !GhosttyClipboardConfirmDebug.teardownDrains.isEmpty
+        }
+        #expect(released, "the free-path drain must release the in-flight request")
+        _ = await Self.waitUntil(timeout: 0.5) { false }
+        let completions = GhosttyClipboardConfirmDebug.completions
+        #expect(completions.count == 1, "the teardown drain must issue exactly one completion")
+        #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(completions.first?.byteLength == 0, "the drain's deny form completes with empty data")
+        #expect(completions.first?.confirmed == true)
         #expect(
-            GhosttyClipboardConfirmDebug.completions.isEmpty,
-            "no completion may land after the surface died in the seam"
+            GhosttyClipboardConfirmDebug.teardownDrains == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
+            "the completion must be labelled as a teardown drain, not a completion-path one"
         )
         #expect(
             GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
             "the callback kind is recorded before the surface dies"
         )
         #endif
-        #expect(collector.combinedString.isEmpty, "no completion means nothing may be written to the terminal")
+        #expect(
+            surface.callbackContext.drainPendingClipboardRequests().isEmpty,
+            "no retained request state may survive the teardown drain"
+        )
+        #expect(collector.combinedString.isEmpty, "the deny completion means nothing may be written to the terminal")
+    }
+
+    /// #329 claim discipline: an allowed paste claims and completes its
+    /// request, so the later teardown drain finds nothing and must not issue a
+    /// second completion against the core's already-destroyed request state.
+    /// This is the discriminator for a completion path that forgets to claim
+    /// (the registry entry would survive and the drain would re-complete it).
+    @Test
+    func teardownDrainDoesNotDoubleCompleteAfterAnAllowedPaste() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-no-double")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#329-double-complete-\(UUID().uuidString)\nsecond-line"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the multi-line payload must be seeded before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            return true
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        let encodedPayload = payload.replacingOccurrences(of: "\n", with: "\r")
+        let delivered = await Self.waitUntil(timeout: 5.0) {
+            collector.combinedString.contains(encodedPayload)
+        }
+        #expect(delivered, "the allowed paste must be delivered before teardown")
+        #expect(seamConsultations.invocationCount == 1, "the seam must be consulted exactly once")
+
+        #if DEBUG
+        #expect(
+            GhosttyClipboardConfirmDebug.completions.count == 1,
+            "positive control: the allowed paste must complete exactly once before teardown"
+        )
+        #endif
+
+        // #329: the claim must have removed the entry directly. Assert before
+        // `cleanup()`: the free-path drain empties the registry regardless of
+        // whether the completion ever claimed.
+        #expect(
+            surface.callbackContext.drainPendingClipboardRequests().isEmpty,
+            "the completion's claim must have removed the registry entry"
+        )
+
+        terminal.cleanup()
+
+        #if DEBUG
+        #expect(
+            GhosttyClipboardConfirmDebug.teardownDrains.isEmpty,
+            "an allowed paste's claimed request must not be drained at teardown"
+        )
+        #expect(
+            GhosttyClipboardConfirmDebug.completions.count == 1,
+            "teardown must not re-complete the already-completed request"
+        )
+        #endif
+        #expect(
+            surface.callbackContext.drainPendingClipboardRequests().isEmpty,
+            "no retained request state may survive teardown"
+        )
     }
 
     /// #327 control: a safe (single-line) paste is pasted without consulting

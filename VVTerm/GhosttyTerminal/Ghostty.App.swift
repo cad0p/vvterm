@@ -116,6 +116,7 @@ nonisolated enum GhosttyClipboardConfirmDebug {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var recordedCallbackKinds: [ghostty_clipboard_request_e] = []
     nonisolated(unsafe) private static var recordedCompletions: [Completion] = []
+    nonisolated(unsafe) private static var recordedTeardownDrains: [ghostty_clipboard_request_e] = []
 
     /// Every `confirmReadClipboard` invocation's kind.
     static var callbackKinds: [ghostty_clipboard_request_e] {
@@ -123,10 +124,20 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         return recordedCallbackKinds
     }
 
-    /// Every completion routed through `complete(...)`.
+    /// Every completion routed through `complete(...)` — including the deny
+    /// completions a surface-teardown drain issues (#329).
     static var completions: [Completion] {
         lock.lock(); defer { lock.unlock() }
         return recordedCompletions
+    }
+
+    /// Every request released by a surface-teardown drain (#329), in
+    /// registry-drain order — unspecified across multiple entries, of which
+    /// only `.paste` is reachable today. The origin label that separates a
+    /// drain completion from a completion-path one in `completions`.
+    static var teardownDrains: [ghostty_clipboard_request_e] {
+        lock.lock(); defer { lock.unlock() }
+        return recordedTeardownDrains
     }
 
     static func noteCallback(kind: ghostty_clipboard_request_e) {
@@ -139,10 +150,16 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         recordedCompletions.append(Completion(kind: kind, byteLength: byteLength, confirmed: confirmed))
     }
 
+    static func noteTeardownDrain(kind: ghostty_clipboard_request_e) {
+        lock.lock(); defer { lock.unlock() }
+        recordedTeardownDrains.append(kind)
+    }
+
     static func reset() {
         lock.lock(); defer { lock.unlock() }
         recordedCallbackKinds.removeAll()
         recordedCompletions.removeAll()
+        recordedTeardownDrains.removeAll()
     }
 }
 #endif
@@ -1283,19 +1300,20 @@ extension Ghostty {
                     Ghostty.logger.warning("clipboard request deny skipped: dead surface kind=\(request.rawValue)")
                     return
                 }
+                // #329: register the request before completing it so the
+                // completion's claim consumes the entry it just added; a
+                // deniable request must never leave a registry entry behind.
+                if let state {
+                    context.registerPendingClipboardRequest(state: state, kind: request)
+                }
                 // Empty data is the deny form: for `.paste` the core returns
                 // before pasting (`Surface.zig:5918`); for `.osc_52_read` it
                 // replies with an empty OSC 52 payload (`:6006-6027`). Either
                 // way the completion destroys the request state
                 // (`embedded.zig:751`).
-                complete(surface: surface, payload: "", state: state, confirmed: true, kind: request)
+                complete(surface: surface, payload: "", state: state, confirmed: true, kind: request, context: context)
                 return
             }
-
-            // Copy NOW: `string` points at the core's request state and is only
-            // valid for the duration of this callback frame (the confirm route
-            // forwards `str.ptr` without copying — `embedded.zig:736-744`).
-            let payload = string.map { String(cString: $0) } ?? ""
 
             // `userdata` is unretained (`Ghostty.SurfaceCallbackContext.swift`)
             // and only valid inside this frame, so the completion closure must
@@ -1308,9 +1326,23 @@ extension Ghostty {
                 // Accepted residual: the surface is gone, so there is no live
                 // handle to complete on (the core exports no cancel route).
                 // Reachable only from a user-driven paste on a surface that died
-                // during this call — never from remote input.
+                // during this call — never from remote input. The resolve guard
+                // sits above the payload copy so this path never copies
+                // clipboard content it cannot deliver.
                 Ghostty.logger.warning("clipboard confirmation skipped: dead surface")
                 return
+            }
+
+            // Copy NOW: `string` points at the core's request state and is only
+            // valid for the duration of this callback frame (the confirm route
+            // forwards `str.ptr` without copying — `embedded.zig:736-744`).
+            let payload = string.map { String(cString: $0) } ?? ""
+
+            // #329: register the in-flight request so a surface free while the
+            // prompt is open releases it as a deny completion instead of
+            // retaining the core's allocation for the surface's lifetime.
+            if let state {
+                context.registerPendingClipboardRequest(state: state, kind: request)
             }
 
             // Keep the alert off the binding stack: this frame returns before
@@ -1341,7 +1373,8 @@ extension Ghostty {
                     payload: allow ? payload : "",
                     state: state,
                     confirmed: true,
-                    kind: request
+                    kind: request,
+                    context: context
                 )
             }
         }
@@ -1352,15 +1385,31 @@ extension Ghostty {
         /// (`apprt/embedded.zig:1998-2010`) — so every exit path of
         /// `confirmReadClipboard` routes through here and the DEBUG telemetry
         /// records each call, making "at most once" checkable in one place.
+        ///
+        /// #329: the completion first claims its registered request from the
+        /// context. The claim removes the registry entry so a later teardown
+        /// drain cannot re-complete an already-destroyed request state; a claim
+        /// that fails means the request was already released, already claimed,
+        /// or never registered, and the completion must not run. The `context`
+        /// parameter is deliberately non-optional: a `nil` context would bypass
+        /// the claim entirely. The order inside this body is load-bearing:
+        /// nil-state guard, then claim, then telemetry, then the C call.
         private static func complete(
             surface: ghostty_surface_t,
             payload: String,
             state: UnsafeMutableRawPointer?,
             confirmed: Bool,
-            kind: ghostty_clipboard_request_e
+            kind: ghostty_clipboard_request_e,
+            context: Ghostty.SurfaceCallbackContext
         ) {
             guard let state else {
                 Ghostty.logger.warning("clipboard completion skipped: no request state kind=\(kind.rawValue)")
+                return
+            }
+            guard context.claimPendingClipboardRequest(state) else {
+                Ghostty.logger.warning(
+                    "clipboard completion skipped: request not pending (teardown-drained, already claimed, or never registered) kind=\(kind.rawValue)"
+                )
                 return
             }
             #if DEBUG
