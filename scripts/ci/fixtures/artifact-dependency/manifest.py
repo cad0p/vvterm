@@ -7637,7 +7637,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-if",
         "files": ["reject-shell-delegation-cd-if.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7647,7 +7650,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-while",
         "files": ["reject-shell-delegation-cd-while.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7657,7 +7663,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-brace",
         "files": ["reject-shell-delegation-cd-brace.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7667,7 +7676,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-bang",
         "files": ["reject-shell-delegation-cd-bang.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7677,7 +7689,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-paren-space",
         "files": ["reject-shell-delegation-cd-paren-space.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7687,7 +7702,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-assignment-prefix",
         "files": ["reject-shell-delegation-cd-assignment-prefix.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7697,7 +7715,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-command",
         "files": ["reject-shell-delegation-cd-command.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7707,7 +7728,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-time",
         "files": ["reject-shell-delegation-cd-time.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7717,7 +7741,10 @@ CASES = [
     {
         "id": "reject-shell-delegation-cd-deferred-function",
         "files": ["reject-shell-delegation-cd-deferred-function.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
@@ -7741,7 +7768,10 @@ CASES = [
     {
         "id": "reject-shell-working-directory-indented-scalar",
         "files": ["reject-shell-working-directory-indented-scalar.yml"],
-        "extra_files": {"scripts/ci/shell-evil.sh": "shell-benign.sh"},
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
