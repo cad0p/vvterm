@@ -1349,6 +1349,12 @@ class ArtifactStep:
     run_line: int | None = None
     run_body_text: str = ""
     run_mentions_github_env: bool = False
+    # Issue #399 fold round 1: the step's `working-directory:` value and key
+    # line, so the shell-downloader pass can refuse a `scripts/ci/*.sh`
+    # delegation whose executed path is cwd-relative (the gate resolves
+    # delegations relative to the repository root only).
+    working_directory: str | None = None
+    working_directory_line: int | None = None
 
 
 @dataclass
@@ -1372,6 +1378,11 @@ class RunBody:
     # continuation join. `body_text` stays byte-identical for every existing
     # predicate.
     scalar_content_indent: int = 0
+    # Issue #399 fold round 1: the enclosing step's `working-directory:` value
+    # and key line, carried so the shell-downloader pass refuses a
+    # `scripts/ci/*.sh` delegation that is cwd-relative.
+    working_directory: str | None = None
+    working_directory_line: int | None = None
 
 
 @dataclass
@@ -2521,6 +2532,8 @@ class WorkflowParser:
                     scalar_content_indent=_scalar_content_indent(
                         self.lines, step.run_line, step.run_body_text
                     ),
+                    working_directory=step.working_directory,
+                    working_directory_line=step.working_directory_line,
                 )
             )
         if step.kind:
@@ -2567,6 +2580,13 @@ class WorkflowParser:
         if key == "env":
             end, step.env_range = self._consume_env_block(body, pos, col)
             return end
+        if key == "working-directory":
+            # Issue #399 fold round 1: captured (not refused) here; the
+            # shell-downloader pass refuses a `scripts/ci/*.sh` delegation in
+            # a step whose effective cwd is not the repository root.
+            step.working_directory = decode_scalar(value)
+            step.working_directory_line = index + 1
+            return pos + 1 if value else self._consume_opaque(body, pos, col)
         if key == "run":
             step.run_line = index + 1
             end = pos + 1 if value else self._consume_opaque(body, pos, col)
@@ -7920,6 +7940,18 @@ _SHELL_DELEGATION_ESCAPE_REFUSAL = (
     "(refusing rather than guessing)"
 )
 
+_SHELL_DELEGATION_WORKING_DIR_REFUSAL = (
+    "delegation to `{subpath}`{provenance} in a step with "
+    "`working-directory: {working_directory}` — the gate resolves delegations "
+    "relative to the repository root only (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} after a `cd` in the same shell body — "
+    "the gate resolves delegations relative to the repository root only "
+    "(refusing rather than guessing)"
+)
+
 _SHELL_DELEGATION_DEPTH_REFUSAL = (
     "delegation to `{subpath}`{provenance} exceeds the nested-delegation depth cap "
     f"({_SHELL_DELEGATION_MAX_DEPTH}) — the gate cannot prove the referenced "
@@ -8091,6 +8123,67 @@ def _shell_delegation_escapes_root(subpath: str) -> bool:
     )
 
 
+def _shell_segment_is_cd(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """The #399 cwd predicate over one segment (fold round 1): the verb word
+    is `cd`, or the two words are `builtin cd`. Leading `(`/backslash runs
+    are stripped like the phrase test, so `(cd sub` is a cwd change."""
+    words = [
+        _normalize_shell_word(token[1])
+        for token in segment
+        if token[0] == "word"
+    ]
+    if not words:
+        return False
+    first = words[0].lstrip("(\\")
+    if first == "cd":
+        return True
+    return (
+        len(words) > 1
+        and first == "builtin"
+        and words[1].lstrip("(\\") == "cd"
+    )
+
+
+def _shell_cd_before_lines(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> set[int]:
+    """The #399 cwd predicate's order-aware form (fold round 1): the set of
+    0-based line indices for which a `cd` segment appears strictly earlier
+    in the body, on a physical line or on a continuation join anchored on an
+    earlier line. A delegation on such a line is refused because the
+    effective cwd is no longer the repository root; the live
+    `check-license-headers.sh` body has `SELF=scripts/ci/…` before its own
+    `cd`, so a body-wide rule would refuse a benign self-reference (the
+    brief's primary rule is `cd` BEFORE a delegation). A `cd` in the same
+    segment or line is handled by the caller's in-order walk."""
+    cd_before: set[int] = set()
+    seen_cd = False
+    for index in range(len(lines)):
+        if seen_cd:
+            cd_before.add(index)
+        for segment in _shell_segments(_shell_tokens(lines[index])):
+            if _shell_segment_is_cd(segment):
+                seen_cd = True
+                break
+        if not seen_cd:
+            for segment in _joined_continuation_segments(lines, index):
+                if _shell_segment_is_cd(segment):
+                    seen_cd = True
+                    break
+        if not seen_cd:
+            for segment in _bash_joined_continuation_segments(
+                lines, index, content_indent, pending
+            ):
+                if _shell_segment_is_cd(segment):
+                    seen_cd = True
+                    break
+    return cd_before
+
+
 def _read_delegated_script(
     subpath: str,
     origin: str | None,
@@ -8128,6 +8221,7 @@ def _scan_shell_body(
     lines: list[str],
     content_indent: int,
     origin: str | None,
+    working_directory: str | None,
     scanner: ShellDownloaderScan,
     visited: set[Path],
     depth: int,
@@ -8138,11 +8232,14 @@ def _scan_shell_body(
     subpaths)`. Per-physical-line tokenization is mandated (plan v2 §3.1);
     the additive continuation joins run after it and a chain beyond their
     analysis bound refuses (plan v2 §3.4, mirroring
-    `_run_id_continuation_bound_refusal`)."""
+    `_run_id_continuation_bound_refusal`). `working_directory` is the
+    enclosing step's `working-directory:` value (None for a delegated
+    script): a non-root value refuses every delegation in the body, and a
+    `cd` segment strictly before a delegation refuses too (fold round 1)."""
     referenced: set[str] = set()
 
     def scan_segment(
-        segment: list[tuple[str, str, int, int]], line: int
+        segment: list[tuple[str, str, int, int]], line: int, cwd_unknown: bool
     ) -> str | None:
         if _shell_segment_is_artifact_downloader(segment):
             return _SHELL_DOWNLOADER_REFUSAL.format(
@@ -8153,6 +8250,21 @@ def _scan_shell_body(
                 continue
             for subpath in _shell_delegation_candidates(token[1]):
                 referenced.add(subpath)
+                if working_directory is not None and working_directory not in (
+                    ".",
+                    "./",
+                    "",
+                ):
+                    return _SHELL_DELEGATION_WORKING_DIR_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                        working_directory=working_directory,
+                    )
+                if cwd_unknown:
+                    return _SHELL_DELEGATION_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
                 if _shell_delegation_escapes_root(subpath):
                     return _SHELL_DELEGATION_ESCAPE_REFUSAL.format(
                         subpath=subpath,
@@ -8174,13 +8286,20 @@ def _scan_shell_body(
                 scanner.delegated.add(canonical)
                 visited.add(canonical)
                 nested_message, _nested_referenced = _scan_shell_body(
-                    text.split("\n"), 0, subpath, scanner, visited, depth + 1
+                    text.split("\n"),
+                    0,
+                    subpath,
+                    None,
+                    scanner,
+                    visited,
+                    depth + 1,
                 )
                 if nested_message is not None:
                     return nested_message
         return None
 
     pending = _whole_body_continuation_state(lines, content_indent, set())
+    cd_before_lines = _shell_cd_before_lines(lines, content_indent, pending)
     for index in range(len(lines)):
         if _raw_continuation_bound_exceeded(
             lines, index
@@ -8192,21 +8311,30 @@ def _scan_shell_body(
                 referenced,
             )
     for index, line in enumerate(lines):
+        cwd_unknown = index in cd_before_lines
         for segment in _shell_segments(_shell_tokens(line)):
-            message = scan_segment(segment, index + 1)
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
             if message is not None:
                 return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
     for index in range(len(lines)):
+        cwd_unknown = index in cd_before_lines
         for segment in _joined_continuation_segments(lines, index):
-            message = scan_segment(segment, index + 1)
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
             if message is not None:
                 return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
+        cwd_unknown = index in cd_before_lines
         for segment in _bash_joined_continuation_segments(
             lines, index, content_indent, pending
         ):
-            message = scan_segment(segment, index + 1)
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
             if message is not None:
                 return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
     for index in range(len(lines)):
         # Issue #399 fold round 1: the single-quoted `bash -c` payload join.
         # The whole-body quote state at the line end is `'` exactly when the
@@ -8214,12 +8342,15 @@ def _scan_shell_body(
         # is the next line's start state, i.e. this line's end state.
         if index + 1 >= len(pending) or pending[index + 1][1] != "'":
             continue
+        cwd_unknown = index in cd_before_lines
         for segment in _quoted_payload_joined_segments(
             lines, index, content_indent
         ):
-            message = scan_segment(segment, index + 1)
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
             if message is not None:
                 return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
     return None, referenced
 
 
@@ -8240,6 +8371,7 @@ def _check_shell_artifact_downloaders(
                 body.body_text.split("\n"),
                 body.scalar_content_indent,
                 None,
+                body.working_directory,
                 scan,
                 set(),
                 0,
