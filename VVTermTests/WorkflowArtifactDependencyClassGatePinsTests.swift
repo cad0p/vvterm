@@ -76,9 +76,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 802
-    private static let expectedBaseVerdictCases = 371
+    private static let expectedManifestCases = 816
+    private static let expectedBaseVerdictCases = 385
     private static let expectedWorkflowFloor = 12
+    /// Issue #399: the distinct-canonical-path floor for the delegated
+    /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
+    /// (`MIN_SCANNED_DELEGATED_SCRIPTS` in the gate; the real tree resolves
+    /// 9, so a truncated tree cannot make the delegation scan vacuous).
+    private static let expectedDelegatedScriptFloor = 6
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
     /// job-level condition on the required job can skip the gate while
@@ -1030,6 +1035,39 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-sed-sflag-wg-filename.yml",
         "accept-runid-github-env-write-sed-sflag-block-opener.yml",
         "accept-runid-github-env-write-ansic-octal-name-concat-target.yml",
+        // #399: the shell-downloader inventory (the floor case's file set is
+        // existing accept fixtures, so it adds no file here).
+        "reject-shell-gh-run-download-inline.yml",
+        "reject-shell-gh-run-download-quoted-arg.yml",
+        "reject-shell-gh-run-download-continuation.yml",
+        "reject-shell-delegation-gh-run-download.yml",
+        "reject-shell-delegation-cmdsub.yml",
+        "reject-shell-delegation-stdin-redirect.yml",
+        "reject-shell-delegation-unresolvable.yml",
+        "reject-shell-delegation-transitive.yml",
+        "reject-shell-delegation-depth-cap.yml",
+        "accept-shell-run-body-comment-token.yml",
+        "accept-shell-benign-delegation.yml",
+        "accept-shell-delegation-cycle.yml",
+        "accept-shell-delegation-prefixed-path.yml",
+    ]
+
+    /// Issue #399: the delegated-script fixtures (`extra_files` sources).
+    /// `requiredFixtures` cannot carry them (the YAML set-equality filter
+    /// drops `.sh`), so this array pins the shell inventory with the same
+    /// existence, manifest-reference and exact set/count invariants.
+    private static let requiredScriptFixtures: [String] = [
+        "shell-evil.sh",
+        "shell-hop-a.sh",
+        "shell-hop-b.sh",
+        "shell-chain-1.sh",
+        "shell-chain-2.sh",
+        "shell-chain-3.sh",
+        "shell-chain-4.sh",
+        "shell-chain-5.sh",
+        "shell-benign.sh",
+        "shell-cycle-a.sh",
+        "shell-cycle-b.sh",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -1242,6 +1280,32 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "the fixture directory's YAML files and `requiredFixtures` must match in count, with no duplicate entries — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count), unique required \(Set(Self.requiredFixtures).count) (issue #342)"
         )
 
+        // Issue #399: the delegated-script fixtures are `.sh`, invisible to
+        // the YAML equality above. Exact set equality plus count, the same
+        // invariant `--selftest` enforces through its `*.sh` orphan check,
+        // and every entry must be referenced by the manifest.
+        let scriptFixtureFiles = onDisk.filter { $0.hasSuffix(".sh") }
+        #expect(
+            Set(scriptFixtureFiles) == Set(Self.requiredScriptFixtures),
+            "the fixture directory's shell files must equal `requiredScriptFixtures` exactly — on disk \(scriptFixtureFiles.count), required \(Self.requiredScriptFixtures.count); extra: \(Set(scriptFixtureFiles).subtracting(Self.requiredScriptFixtures).sorted()); missing: \(Set(Self.requiredScriptFixtures).subtracting(scriptFixtureFiles).sorted()) (issue #399)"
+        )
+        #expect(
+            scriptFixtureFiles.count == Self.requiredScriptFixtures.count
+                && Set(Self.requiredScriptFixtures).count == Self.requiredScriptFixtures.count,
+            "the fixture directory's shell files and `requiredScriptFixtures` must match in count, with no duplicate entries — on disk \(scriptFixtureFiles.count), required \(Self.requiredScriptFixtures.count), unique required \(Set(Self.requiredScriptFixtures).count) (issue #399)"
+        )
+        for fixture in Self.requiredScriptFixtures {
+            let url = root.appendingPathComponent(Self.fixturesDirectory).appendingPathComponent(fixture)
+            #expect(
+                FileManager.default.fileExists(atPath: url.path),
+                "required shell fixture missing: \(Self.fixturesDirectory)/\(fixture) (issue #399)"
+            )
+            #expect(
+                manifest.contains(fixture),
+                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` source (issue #399)"
+            )
+        }
+
         // The script must reference the manifest, and carry the stated
         // manifest-length constant that `--selftest` enforces.
         #expect(
@@ -1255,6 +1319,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         #expect(
             script.contains("MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor)"),
             "\(Self.scriptPath) must state MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor) — a stale floor would let a truncated tree pass (issue #316, lens-2 NIT 1)"
+        )
+        #expect(
+            script.contains("MIN_SCANNED_DELEGATED_SCRIPTS = \(Self.expectedDelegatedScriptFloor)"),
+            "\(Self.scriptPath) must state MIN_SCANNED_DELEGATED_SCRIPTS = \(Self.expectedDelegatedScriptFloor) — a stale floor would let a tree with no resolved delegated scripts pass (issue #399)"
         )
         #expect(
             script.contains("EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases)"),
@@ -1335,6 +1403,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
             // refusal above owns the non-ASCII case), so its fragment is no
             // longer a manifest-asserted diagnostic (issue #342, F4).
+            // #399: the shell-downloader pass's distinctive fragments — the
+            // token rendering, the nested provenance, the unresolved
+            // delegation, the depth cap, the delegated floor and the
+            // actionable clause (no generic fragment).
+            "(`gh run download`)",
+            "cannot resolve the referenced script",
+            "nested-delegation depth cap",
+            "delegated-script floor: only",
+            "Keep the download in a `uses: actions/download-artifact` step",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(
