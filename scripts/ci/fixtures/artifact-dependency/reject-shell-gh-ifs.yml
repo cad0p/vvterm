@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): `gh$IFS` word-splits to `gh` at runtime
+# (measured with a PATH logger); `\bgh\b` sees the word boundary before `$`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh$IFS run download 12345 -n vvterm-build

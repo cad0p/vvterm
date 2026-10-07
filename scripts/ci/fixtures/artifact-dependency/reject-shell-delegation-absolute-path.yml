@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): an absolute path is the executed file no
+# matter the cwd, so the gate refuses instead of resolving it under root.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash /tmp/out/scripts/ci/shell-evil.sh

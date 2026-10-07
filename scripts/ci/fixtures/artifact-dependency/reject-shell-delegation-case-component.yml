@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the candidate predicate is case-insensitive,
+# so an uppercase path component still reads as a delegation and refuses
+# when the path does not exist.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash Scripts/ci/shell-evil.sh

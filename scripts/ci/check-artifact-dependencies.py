@@ -1168,7 +1168,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 816
+EXPECTED_MANIFEST_CASES = 835
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1193,7 +1193,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 385
+EXPECTED_BASE_VERDICT_CASES = 404
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign

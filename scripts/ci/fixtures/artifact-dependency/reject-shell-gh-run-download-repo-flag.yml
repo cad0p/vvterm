@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): `gh run -R o/r download` is the same
+# subcommand with a flag between `run` and `download` (resolved by gh
+# 2.101.0); the ordered phrase test matches it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh run -R owner/repo download 12345 -n vvterm-build

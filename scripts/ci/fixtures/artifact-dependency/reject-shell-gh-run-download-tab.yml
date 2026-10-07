@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the payload uses TAB separators (YAML `\t`
+# escapes); whitespace normalization reads it as the downloader phrase.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "bash -c \"gh\trun\tdownload 12345 -n vvterm-build\""
