@@ -8191,6 +8191,25 @@ _SHELL_DELEGATION_DEFERRED_FUNCTION_REFUSAL = (
     "effective cwd (refusing rather than guessing)"
 )
 
+_SHELL_DELEGATION_TRAP_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a `trap` action whose shell "
+    "body or action contains a `cd` — the gate cannot prove the trap's "
+    "effective cwd (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_CMDSUB_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a command substitution that "
+    "also contains a `cd` — the substitution's own shell has already changed "
+    "cwd (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_SOURCED_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} via `.`/`source` of a script whose "
+    "body contains a `cd` — a sourced script shares this shell's cwd, so the "
+    "gate cannot prove later delegations' effective cwd (refusing rather than "
+    "guessing)"
+)
+
 _SHELL_DELEGATION_DEPTH_REFUSAL = (
     "delegation to `{subpath}`{provenance} exceeds the nested-delegation depth cap "
     f"({_SHELL_DELEGATION_MAX_DEPTH}) — the gate cannot prove the referenced "
@@ -8415,11 +8434,14 @@ def _delegation_provenance(origin: str | None, line: int) -> str:
 def _shell_delegation_candidates(word: str) -> list[str]:
     """Every `scripts/ci/*.sh` candidate in one quote-stripped word as the
     normalized path the shell would execute (issue #399 fold round 1). The
-    word is `posixpath.normpath`-normalized BEFORE matching so
+    word is ANSI-C-decoded first (fold round 3, N12), symmetric with
+    `_normalize_shell_word`, so `bash $'\x73cripts/ci/x.sh'` names the
+    executed path instead of an invisible spelling; it is then
+    `posixpath.normpath`-normalized BEFORE matching so
     `scripts/ci//x.sh`, `scripts/./ci/x.sh` and `scripts/ci/../ci/x.sh` all
     read as the executed path; each match is normalized again so a candidate
     found in an unnormalized word (a `$()` payload) is normalized too."""
-    stripped = _shell_strip_quotes(word)
+    stripped = _shell_strip_quotes(_shell_decode_ansi_c(word))
     if not stripped:
         return []
     normalized = posixpath.normpath(stripped)
@@ -8527,15 +8549,149 @@ def _shell_body_has_cd(
     return False
 
 
-def _shell_function_def_lines(lines: list[str]) -> list[int]:
+# A `trap` registration word: exactly `trap`, or a word carrying the `trap`
+# prefix with its payload glued on (the `trap'…'` spelling survives
+# tokenization only as one word).
+_SHELL_TRAP_WORD_RE = re.compile(r"^trap(?:$|[^A-Za-z0-9_])")
+
+
+def _shell_segment_trap_payload(
+    segment: list[tuple[str, str, int, int]], token_index: int
+) -> bool:
+    """True when the word at `token_index` is inside a `trap` action (fold
+    round 3, N10). A trap action executes at EXIT/ERR time, exactly like a
+    function body, so a delegation candidate inside it is deferred and its
+    effective cwd is unprovable. The action is the word after `trap` in the
+    token model (`trap 'bash scripts/ci/x.sh' EXIT`), or the word itself when
+    it carries the `trap` prefix."""
+    for prior in segment[:token_index]:
+        if prior[0] != "word":
+            continue
+        if _normalize_shell_word(prior[1]) == "trap":
+            return True
+    token = segment[token_index]
+    if token[0] != "word":
+        return False
+    return _SHELL_TRAP_WORD_RE.match(_normalize_shell_word(token[1])) is not None
+
+
+def _shell_trap_payload_has_cd(word: str) -> bool:
+    """True when a trap action word's payload contains a modeled `cd` (fold
+    round 3, N10). The payload is one tokenizer word (`trap 'cd sub; bash
+    scripts/ci/x.sh' EXIT`), so its inner `;`/`&&` segments are visible only
+    by re-tokenizing the word text."""
+    for segment in _shell_segments(_shell_tokens(word)):
+        if _shell_segment_is_cd(segment):
+            return True
+    return False
+
+
+def _shell_word_substitution_cd(word: str) -> bool:
+    """True when a top-level `$(…)` or backtick region of one tokenizer word
+    contains a modeled `cd` (fold round 3, N11). `_shell_segment_is_cd`
+    cannot see a `cd` inside a substitution (the tokenizer keeps the whole
+    substitution in one word), which is correct for the OUTER shell but not
+    for a delegation inside that same substitution: its own shell has already
+    changed cwd when the candidate runs."""
+    index = 0
+    while index < len(word):
+        if word.startswith("$(", index):
+            end = _consume_command_substitution(word, index)
+            closed = end > index + 2 and word[end - 1] == ")"
+            body = word[index + 2 : end - 1] if closed else word[index + 2 : end]
+            for segment in _shell_segments(_shell_tokens(body)):
+                if _shell_segment_is_cd(segment):
+                    return True
+            index = end
+            continue
+        if word[index] == "`":
+            end = word.find("`", index + 1)
+            body = word[index + 1 :] if end == -1 else word[index + 1 : end]
+            for segment in _shell_segments(_shell_tokens(body)):
+                if _shell_segment_is_cd(segment):
+                    return True
+            index = len(word) if end == -1 else end + 1
+            continue
+        index += 1
+    return False
+
+
+def _shell_segment_sources_script(
+    segment: list[tuple[str, str, int, int]], token_index: int
+) -> bool:
+    """True when the word at `token_index` is an operand of a `.`/`source`
+    word in the same segment (fold round 3, N13): the sourced script runs in
+    this shell, so unlike `bash scripts/ci/x.sh` its `cd` changes the
+    caller's cwd."""
+    for prior in segment[:token_index]:
+        if prior[0] != "word":
+            continue
+        if _normalize_shell_word(prior[1]).lstrip("\\") in (".", "source"):
+            return True
+    return False
+
+
+def _sourced_script_has_cd(
+    subpath: str,
+    origin: str | None,
+    origin_line: int,
+    root: Path,
+    visited: set[Path],
+) -> bool:
+    """True when a `scripts/ci/*.sh` sourced (`.`/`source`) by a shell body
+    contains a modeled `cd`, directly or through a nested source (fold round
+    3, N13). The helper is read through `_read_delegated_script`, so a
+    missing/unreadable target is false here and the caller's resolution path
+    still refuses it; the visited set bounds a source cycle."""
+    canonical, text, refusal = _read_delegated_script(
+        subpath, origin, origin_line, root
+    )
+    if refusal is not None or text is None or canonical in visited:
+        return False
+    visited.add(canonical)
+    lines = text.split("\n")
+    if _shell_body_has_cd(
+        lines, 0, _whole_body_continuation_state(lines, 0, set())
+    ):
+        return True
+    for line in lines:
+        for segment in _shell_segments(_shell_tokens(line)):
+            words = [token for token in segment if token[0] == "word"]
+            for index, token in enumerate(words):
+                if _normalize_shell_word(token[1]).lstrip("\\") not in (
+                    ".",
+                    "source",
+                ):
+                    continue
+                for nested in words[index + 1 :]:
+                    for nested_subpath in _shell_delegation_candidates(nested[1]):
+                        if _sourced_script_has_cd(
+                            nested_subpath, subpath, 0, root, visited
+                        ):
+                            return True
+    return False
+
+
+def _shell_function_def_lines(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> list[int]:
     """The 0-based line indices carrying a function-definition spelling
     (fold round 2, N1c), ascending. A continuation-split definition is still
     visible on its anchor line (`f() \\` keeps `f()` on the first physical
     line), and a definition whose opener is on an earlier line than a
-    candidate makes every later candidate potentially deferred."""
+    candidate makes every later candidate potentially deferred. The
+    bash-faithful join is scanned too (fold round 3, N14): a name and its
+    `()` split as `f \\` + newline + `()` exist as the definition only after
+    the join removes the backslash-newline pair."""
     found: list[int] = []
     for index in range(len(lines)):
-        for segment in _shell_segments(_shell_tokens(lines[index])):
+        segments = _shell_segments(_shell_tokens(lines[index]))
+        segments += _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        )
+        for segment in segments:
             if _shell_segment_defines_function(segment):
                 found.append(index)
                 break
@@ -8687,7 +8843,12 @@ def _scan_shell_body(
     word in any position of a segment refuses a later delegation in the same
     body (fold round 2, N1), and a candidate at or after a
     function-definition opener refuses when the body also contains a `cd`
-    (N1c: the deferred body's cwd is unprovable)."""
+    (N1c: the deferred body's cwd is unprovable). A candidate inside a
+    `trap` action is deferred the same way (fold round 3, N10); a candidate
+    inside a command substitution that itself contains a `cd` (N11) or
+    sourced via `.`/`source` from a script whose body contains a `cd` (N13)
+    refuses because the substitution's shell, or the sourced script, has
+    already changed cwd."""
     referenced: set[str] = set()
 
     def scan_segment(
@@ -8700,7 +8861,7 @@ def _scan_shell_body(
             return _SHELL_DOWNLOADER_REFUSAL.format(
                 location=_shell_body_location(origin, line)
             )
-        for token in segment:
+        for token_index, token in enumerate(segment):
             if token[0] != "word":
                 continue
             for subpath in _shell_delegation_candidates(token[1]):
@@ -8717,6 +8878,32 @@ def _scan_shell_body(
                     )
                 if cwd_unknown:
                     return _SHELL_DELEGATION_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_segment_trap_payload(segment, token_index) and (
+                    body_has_cd or _shell_trap_payload_has_cd(token[1])
+                ):
+                    # Fold round 3, N10: a trap action executes at EXIT/ERR
+                    # time, so a `cd` anywhere in the body (or in the action
+                    # itself) makes its effective cwd unprovable.
+                    return _SHELL_DELEGATION_TRAP_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_word_substitution_cd(token[1]):
+                    # Fold round 3, N11: the substitution's own shell has
+                    # already changed cwd when this candidate runs.
+                    return _SHELL_DELEGATION_CMDSUB_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_segment_sources_script(segment, token_index) and (
+                    _sourced_script_has_cd(subpath, origin, line, scanner.root, set())
+                ):
+                    # Fold round 3, N13: a sourced script shares this
+                    # shell's cwd, so its `cd` carries into the caller.
+                    return _SHELL_DELEGATION_SOURCED_CD_REFUSAL.format(
                         subpath=subpath,
                         provenance=_delegation_provenance(origin, line),
                     )
@@ -8769,7 +8956,7 @@ def _scan_shell_body(
     pending = _whole_body_continuation_state(lines, content_indent, set())
     cd_before_lines = _shell_cd_before_lines(lines, content_indent, pending)
     body_has_cd = _shell_body_has_cd(lines, content_indent, pending)
-    function_def_lines = _shell_function_def_lines(lines)
+    function_def_lines = _shell_function_def_lines(lines, content_indent, pending)
     for index in range(len(lines)):
         if _raw_continuation_bound_exceeded(
             lines, index
