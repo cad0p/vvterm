@@ -206,72 +206,54 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
 
     /// A browser session whose `start()` returned false can never deliver an
     /// approval, so the ceremony must fail fast with `.safariFailed` instead
-    /// of waiting out the 180 s listener deadline (A7). The run is raced
-    /// against `failFastBudget` so the counterfactual (the guard reverted)
-    /// fails cleanly instead of hanging to the job's execution allowance.
+    /// of waiting out the 180 s listener deadline (A7). The ceremony takes its
+    /// loopback listener through the `makeListener` seam, so this test drives
+    /// the guard with a stub: the stub's `waitForResponse()` throws
+    /// immediately, a reverted guard therefore fails deterministically instead
+    /// of hanging into the job's execution allowance, and no wall clock races
+    /// the product path.
     ///
-    /// Host-state tolerance, not retry machinery: the budget is 30 s, not the
-    /// 2 s this test originally raced with. `BrowserMFACeremony` is
-    /// `@MainActor`, and on a loaded simulator runner its first MainActor hop
-    /// can be delayed far past 2 s — measured 2026-10-01 (PR #326, required
-    /// `unit-tests` job of run 36888810089): the ceremony's own logs show it
-    /// reached the challenge ~16 s after the test started, so the timer won
-    /// and `failedFast` came back false while the guard itself was intact.
-    /// 30 s still discriminates hard against the 180 s listener deadline the
-    /// guard exists to avoid, and the counterfactual still fails cleanly:
-    /// `run.cancel()` is honoured by the ceremony's listener wait, so that
-    /// failure lands at the budget, not at the job's 180 s allowance.
-    /// Escalation (recorded, not implied): if a stall ever survives 30 s, the
-    /// next step is a structural gate on the ceremony's progress, not another
-    /// increase.
+    /// Escalation satisfied (issue #401): #326 raised the old race budget
+    /// 2 s → 30 s and recorded that a stall surviving the budget must be met
+    /// with a structural gate on the ceremony's progress, not another
+    /// increase. Run 37604704636 (job 112742518141) saw this test survive the
+    /// 30 s budget while the listener bind and the challenge had completed
+    /// ~85–100 ms in, so the structural seam (injecting the listener) is the
+    /// recorded next step and the 30 s race is deleted, not extended. The
+    /// stub's `waitCount` is the observable proof that the A7 guard fired
+    /// before the listener wait.
     func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart() async {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
         let presenter = NotStartedBrowserMFAPresenter()
+        let stub = StubBrowserMFAListener()
         let ceremony = BrowserMFACeremony(
             logging: DefaultTeleportLogging(),
-            presenter: presenter
+            presenter: presenter,
+            makeListener: { _ in stub }
         )
 
-        let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
-        let failedFast = await withTaskGroup(of: Bool.self) { group -> Bool in
-            group.addTask {
-                do {
-                    _ = try await run.value
-                    return false
-                } catch let error as BrowserMFACeremonyError {
-                    guard case .safariFailed(let message) = error,
-                          message == "the in-app browser session did not start"
-                    else {
-                        return false
-                    }
-                    return true
-                } catch {
-                    return false
-                }
+        do {
+            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
+            XCTFail("the ceremony must fail fast when the browser session did not start")
+        } catch let error as BrowserMFACeremonyError {
+            guard case .safariFailed(let message) = error,
+                  message == "the in-app browser session did not start" else {
+                XCTFail("expected .safariFailed(\"the in-app browser session did not start\"), got \(error)")
+                return
             }
-            group.addTask {
-                try? await Task.sleep(for: Self.failFastBudget)
-                run.cancel()
-                return false
-            }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
+        } catch {
+            // The A7 guard did not fire: the ceremony reached the injected
+            // listener's wait, which throws immediately (the stub never
+            // suspends).
+            XCTFail("expected .safariFailed, got \(error)")
         }
-        XCTAssertTrue(
-            failedFast,
-            "a browser session that did not start must fail the ceremony fast with .safariFailed"
-        )
-        XCTAssertEqual(
-            presenter.handle?.cancelCount,
-            1,
-            "the ceremony's defer must cancel the not-started session"
-        )
-    }
 
-    /// The host-state-tolerant budget for the fail-fast race above. See that
-    /// test's doc comment for the measurement and the escalation rule.
-    private static let failFastBudget: Duration = .seconds(30)
+        XCTAssertEqual(presenter.handle?.cancelCount, 1, "the defer must cancel the not-started session")
+        XCTAssertEqual(stub.cancelCount, 1, "the defer must cancel the listener")
+        XCTAssertEqual(stub.waitCount, 0, "the A7 guard must fire before the listener wait")
+        XCTAssertEqual(client.capturedRedirectURL, stub.callbackURL,
+                       "the ceremony must drive the injected listener's URL into the challenge call")
+    }
 
     /// The host-state-tolerant wait for the approval-page presentation in
     /// `testCeremony_opensTheServerApprovalPageForTheChallengeRequestID`. See
@@ -282,6 +264,7 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.
     private final class ChallengeReturningGRPCClient: TeleportGRPCClienting {
         let requestID: String
+        private(set) var capturedRedirectURL: String?
 
         init(requestID: String) {
             self.requestID = requestID
@@ -298,6 +281,7 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
         func createAuthenticateChallenge(
             browserMFATSHRedirectURL: String
         ) async throws -> Proto_MFAAuthenticateChallenge {
+            capturedRedirectURL = browserMFATSHRedirectURL
             var challenge = Proto_MFAAuthenticateChallenge()
             var browser = Proto_BrowserMFAChallenge()
             browser.requestID = requestID
@@ -319,3 +303,26 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
         func disconnect() async {}
     }
 }
+
+/// A listener stub for the fail-fast test (issue #401). It returns a fixed
+/// callback URL and its `waitForResponse()` throws immediately, so the
+/// counterfactual (the A7 guard reverted) reds deterministically instead of
+/// hanging into the job's execution allowance. All calls arrive from the
+/// `@MainActor` ceremony, so main-actor serialization is the justification
+/// for `@unchecked Sendable`.
+private final class StubBrowserMFAListener: BrowserMFAListening, @unchecked Sendable {
+    let callbackURL = "http://localhost:54321/callback?secret_key=stub"
+    private(set) var waitCount = 0
+    private(set) var cancelCount = 0
+
+    func start() async throws -> String { callbackURL }
+
+    func waitForResponse() async throws -> Proto_CredentialAssertionResponse {
+        waitCount += 1
+        throw StubBrowserMFAListenerError.waitReached
+    }
+
+    func cancel() { cancelCount += 1 }
+}
+
+private enum StubBrowserMFAListenerError: Error { case waitReached }
