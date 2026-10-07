@@ -30,6 +30,12 @@
 //      that fires during the free resolves to nil instead of a dying view;
 //    - captured by the deferred free block, so the raw userdata pointer stays
 //      valid until the free has run;
+//    - the owner of the #329 pending-clipboard-request registry: an in-flight
+//      confirmation is registered under the lock, the completion claims
+//      (removes) its own entry before completing, and every
+//      `ghostty_surface_free` path drains what remains as the deny completion.
+//      `invalidate()` never clears the registry: the deferred `deinit` drain
+//      still owes each entry's release;
 //    - thread-safe: the write callback runs on the termio IO thread,
 //      `Ghostty.App.action` may run off the main actor, and the main actor
 //      invalidates it, so every access goes through `OSAllocatedUnfairLock`.
@@ -108,9 +114,11 @@ extension Ghostty {
             }
         }
 
-        /// Suppress every future resolution. Runs on the main actor before
-        /// `ghostty_surface_free` on both free paths, so a callback that fires
-        /// during the free cannot reach a dying view.
+        /// Suppress every future resolution. The synchronous `free()` path runs
+        /// this on the main actor; the `deinit` path runs it on the deinit
+        /// thread and defers only the drain + `ghostty_surface_free` to the
+        /// main queue. Either way, a callback that fires during the free cannot
+        /// reach a dying view.
         ///
         /// #329: this flips only `isValid` — the pending clipboard requests
         /// stay registered so `drainPendingClipboardRequests()` can still
@@ -123,7 +131,9 @@ extension Ghostty {
         ///
         /// Returns false without registering when the context was already
         /// invalidated: a late registrant must not add an entry that no free
-        /// path can drain. The validity check and the insertion share the
+        /// path can drain. A false return therefore means "context invalidated;
+        /// the request cannot be drained" — it is left to the window-(a)
+        /// residual (#329). The validity check and the insertion share the
         /// lock's critical section.
         @discardableResult
         func registerPendingClipboardRequest(

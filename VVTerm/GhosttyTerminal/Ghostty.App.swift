@@ -131,9 +131,10 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         return recordedCompletions
     }
 
-    /// Every request released by a surface-teardown drain (#329), in drain
-    /// order. The origin label that separates a drain completion from a
-    /// completion-path one in `completions`.
+    /// Every request released by a surface-teardown drain (#329), in
+    /// registry-drain order — unspecified across multiple entries, of which
+    /// only `.paste` is reachable today. The origin label that separates a
+    /// drain completion from a completion-path one in `completions`.
     static var teardownDrains: [ghostty_clipboard_request_e] {
         lock.lock(); defer { lock.unlock() }
         return recordedTeardownDrains
@@ -1385,32 +1386,31 @@ extension Ghostty {
         /// `confirmReadClipboard` routes through here and the DEBUG telemetry
         /// records each call, making "at most once" checkable in one place.
         ///
-        /// #329: when a context is supplied, the completion first claims its
-        /// registered request. The claim removes the registry entry so a later
-        /// teardown drain cannot re-complete an already-destroyed request
-        /// state; a claim that fails means the drain already released this
-        /// request and the completion must not run. The order inside this body
-        /// is load-bearing: nil-state guard, then claim, then telemetry, then
-        /// the C call.
+        /// #329: the completion first claims its registered request from the
+        /// context. The claim removes the registry entry so a later teardown
+        /// drain cannot re-complete an already-destroyed request state; a claim
+        /// that fails means the request was already released, already claimed,
+        /// or never registered, and the completion must not run. The `context`
+        /// parameter is deliberately non-optional: a `nil` context would bypass
+        /// the claim entirely. The order inside this body is load-bearing:
+        /// nil-state guard, then claim, then telemetry, then the C call.
         private static func complete(
             surface: ghostty_surface_t,
             payload: String,
             state: UnsafeMutableRawPointer?,
             confirmed: Bool,
             kind: ghostty_clipboard_request_e,
-            context: Ghostty.SurfaceCallbackContext?
+            context: Ghostty.SurfaceCallbackContext
         ) {
             guard let state else {
                 Ghostty.logger.warning("clipboard completion skipped: no request state kind=\(kind.rawValue)")
                 return
             }
-            if let context {
-                guard context.claimPendingClipboardRequest(state) else {
-                    Ghostty.logger.warning(
-                        "clipboard completion skipped: request already released by the teardown drain kind=\(kind.rawValue)"
-                    )
-                    return
-                }
+            guard context.claimPendingClipboardRequest(state) else {
+                Ghostty.logger.warning(
+                    "clipboard completion skipped: request not pending (teardown-drained, already claimed, or never registered) kind=\(kind.rawValue)"
+                )
+                return
             }
             #if DEBUG
             GhosttyClipboardConfirmDebug.noteCompletion(
