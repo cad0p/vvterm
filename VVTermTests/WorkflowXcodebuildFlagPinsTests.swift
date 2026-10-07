@@ -39,17 +39,34 @@
 //  lint. Comments are stripped YAML-style before the scan, so a
 //  commented-out `# -collect-test-diagnostics always` is prose, not a flag —
 //  and so the explanatory comments this pin ships with (which quote the
-//  toolchain's error text) do not red it. Defeat list, stated honestly:
+//  toolchain's error text) do not red it. Defeat list, stated honestly
+//  (hardened in fold round 1, impl lens 2):
 //  a value assembled from a shell variable (e.g.
 //  `-collect-test-diagnostics "$DIAG"`) reds the pin deliberately rather than
 //  passing — the pin requires a literal accepted value, so an indirect form
-//  must be re-affirmed here; a non-`-` spelling
-//  (`--collect-test-diagnostics`) is not seen; a flag that appears only in a
-//  comment does not count (the #249 assertions are invocation-scoped after
-//  comment stripping), and a comment-only script reference, a decoy second
-//  step, an inline/folded scalar (`run: >-`, `run: |2`, `run: …`), a
-//  hard-coded indentation or a second `run:` key all red the shape guard
-//  rather than pass.
+//  must be re-affirmed here; a double-dash spelling
+//  (`--collect-test-diagnostics`) is also seen by the unanchored scan and
+//  reds with its following token as the value (fail-closed), so the earlier
+//  "is not seen" claim is dropped; a flag that appears only in a comment does
+//  not count — the #249 assertions are comment-stripped and
+//  invocation-scoped, and the invocation region is comment-cut again line by
+//  line so a stuck YAML stripper cannot satisfy them; a duplicated
+//  load-bearing flag reds (each pinned flag must occur exactly once with its
+//  pinned value, because xcodebuild option parsing is last-wins and a second
+//  `-test-timeouts-enabled NO` / `-parallel-testing-enabled YES` would
+//  silently override the pin); the delegation matrix arguments are checked
+//  inside the call's own comment-stripped continuation, and the flags are
+//  cut at the pipeline's first `|`, so text in a comment or after the `tee`
+//  operand cannot satisfy them; a comment-only script reference, a decoy
+//  second step, an inline/folded scalar (`run: >-`, `run: |2`, `run: …`), a
+//  hard-coded indentation or a second step-level `run:` key all red the shape
+//  guard rather than pass. Residual bounds: the heredoc backstop is textual —
+//  it requires exactly one `<<'PY'` opener, each opener's first non-blank
+//  body line at column 0 and exactly one column-0 `PY` terminator after it —
+//  but it does not `ast.parse` the body or prove the injected marker text is
+//  reachable code; the `run:`/step scanner is a text heuristic that fails
+//  closed with a re-derive message when it cannot prove exactly one
+//  step-level key.
 //
 //  The script corpus reuses the same YAML-comment stripper, and the two
 //  languages' quoting rules diverge: the stripper does not model bash
@@ -58,9 +75,11 @@
 //  inside a `cat <<'EOF'` heredoc body (`:245`) is read as an unterminated
 //  single-quoted scalar, so everything after it is copied verbatim — a
 //  commented-out flag probe there would not be blanked. The failure mode is a
-//  **visible false red**, never a false pass for the literal invocation form:
-//  the `run-ui-tests.sh` scan was measured to see exactly one
-//  `-collect-test-diagnostics never`, at its `xcodebuild` line.
+//  **visible false red**, never a false pass: the invocation region is
+//  comment-cut locally, so the measured stuck-stripper evasion (a
+//  comment-only timeout flag — ev-10) reds the flag assertion as well as the
+//  corpus scan; and the `run-ui-tests.sh` scan was measured to see exactly
+//  one `-collect-test-diagnostics never`, at its `xcodebuild` line.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree (the measured-working form is
@@ -195,7 +214,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         )
         let body = try #require(
             Self.dedentedRunBlockScalar(in: workflow, stepLineIndex: stepLine),
-            "the `Run UI tests` step must stay a `run: |` literal block scalar (not an inline/folded scalar) so #249's size and delegation pins can read it — re-derive this pin"
+            "the `Run UI tests` step must keep exactly one step-level `run:` key and stay a `run: |` literal block scalar (not an inline/folded scalar or a duplicate/decoy `run:` key) so #249's size and delegation pins read the body GitHub actually runs — re-derive this pin"
         )
 
         // The escaped-size recipe from the recorded debugging note: dedent the
@@ -208,7 +227,10 @@ struct WorkflowXcodebuildFlagPinsTests {
             "the `Run UI tests` step body is \(escapedSize) escaped chars (dedented scalar chars \(body.count) + \(newlineCount) newlines); #249 caps it at 1,200 because the whole scalar is one GitHub expression and >21,000 makes the push produce a 0-job run (the pre-extraction scalar was 8,849). Move logic into \(scriptPath) — re-derive with the pyyaml recipe"
         )
 
-        // Delegation: a real (non-comment) call with all three matrix values.
+        // Delegation: a real (non-comment) call with all three matrix values
+        // inside the call's own argument list. Impl lens 2 (ev-6) passed the
+        // old body-wide contains() with the arguments only in a trailing
+        // comment, so scope them to the call's comment-stripped continuation.
         let codeLines = body.components(separatedBy: "\n").filter {
             let trimmed = $0.trimmingCharacters(in: .whitespaces)
             return !trimmed.isEmpty && !trimmed.hasPrefix("#")
@@ -217,14 +239,24 @@ struct WorkflowXcodebuildFlagPinsTests {
             codeLines.first?.contains("bash scripts/ci/run-ui-tests.sh") == true,
             "the `Run UI tests` step must delegate with `bash scripts/ci/run-ui-tests.sh`: a comment-only reference runs nothing (issue #249)"
         )
+        var callLines: [String] = []
+        if !codeLines.isEmpty {
+            callLines.append(codeLines[0])
+            var callCursor = 0
+            while callCursor + 1 < codeLines.count, codeLines[callCursor].hasSuffix("\\") {
+                callCursor += 1
+                callLines.append(codeLines[callCursor])
+            }
+        }
+        let callText = callLines.joined(separator: "\n")
         for argument in [
             "${{ matrix.shard.name }}",
             "${{ matrix.shard.needs-fixture }}",
             "${{ matrix.shard.only-testing }}",
         ] {
             #expect(
-                body.contains("\"\(argument)\""),
-                "the `Run UI tests` step must pass \(argument) to \(scriptPath) — re-derive this pin (issue #249)"
+                callText.contains("\"\(argument)\""),
+                "the `Run UI tests` step must pass \(argument) to \(scriptPath) inside the delegation call's own argument list (not in a comment or outside the call) — re-derive this pin (issue #249)"
             )
         }
 
@@ -256,41 +288,77 @@ struct WorkflowXcodebuildFlagPinsTests {
             if !line.hasSuffix("\\") { break }
             cursor += 1
         }
-        let invocationText = continuation.joined(separator: "\n")
-        for flag in [
-            "-collect-test-diagnostics never",
-            "-test-timeouts-enabled YES",
-            "-default-test-execution-time-allowance 300",
-            "-maximum-test-execution-time-allowance 300",
-            "-parallel-testing-enabled NO",
-            "CODE_SIGNING_ALLOWED=NO",
-        ] {
+        // Impl lens 2 (fold round 1): the invocation region must hold only
+        // real xcodebuild arguments. Cut whole-line comments locally (a stuck
+        // YAML stripper can leave them in place — ev-10) and everything from
+        // the pipeline's first `|` onward (ev-7 moved a flag onto the `tee`
+        // line), then tokenize what remains so each flag is bound to a unique
+        // occurrence and its pinned value — xcodebuild option parsing is
+        // last-wins, so a duplicate could silently override the pin (ev-11).
+        let invocationCodeLines = continuation.map(Self.cuttingLineComment)
+        let invocationCode = invocationCodeLines.joined(separator: "\n")
+        let pipeIndex = invocationCode.firstIndex(of: "|")
+        let argumentRegion = pipeIndex.map { String(invocationCode[..<$0]) } ?? invocationCode
+        let flagTokens = argumentRegion
+            .replacingOccurrences(of: "\\", with: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        func expectFlag(_ flag: String, value: String) {
+            let occurrences = flagTokens.indices.filter { flagTokens[$0] == flag }
             #expect(
-                invocationText.contains(flag),
-                "the xcodebuild invocation in \(scriptPath) must carry `\(flag)` — re-derive this pin (issue #249)"
+                occurrences.count == 1,
+                "the xcodebuild invocation in \(scriptPath) must pass `\(flag) \(value)` exactly once before the `|` pipeline, found \(occurrences.count) `\(flag)` token(s) — xcodebuild option parsing is last-wins, so a duplicate can silently override the pinned value — re-derive this pin (issue #249)"
             )
+            if let first = occurrences.first {
+                let nextToken = first + 1 < flagTokens.count ? flagTokens[first + 1] : "<end of invocation>"
+                #expect(
+                    nextToken == value,
+                    "the `\(flag)` token in the xcodebuild invocation of \(scriptPath) is followed by `\(nextToken)`, expected `\(value)` — re-derive this pin (issue #249)"
+                )
+            }
         }
+
+        expectFlag("-collect-test-diagnostics", value: "never")
+        expectFlag("-test-timeouts-enabled", value: "YES")
+        expectFlag("-default-test-execution-time-allowance", value: "300")
+        expectFlag("-maximum-test-execution-time-allowance", value: "300")
+        expectFlag("-parallel-testing-enabled", value: "NO")
+
+        let codeSigningOccurrences = flagTokens.filter { $0 == "CODE_SIGNING_ALLOWED=NO" }
         #expect(
-            invocationText.contains(#"| tee "$RUNNER_TEMP/test.log""#),
+            codeSigningOccurrences.count == 1,
+            "the xcodebuild invocation in \(scriptPath) must pass `CODE_SIGNING_ALLOWED=NO` exactly once before the `|` pipeline, found \(codeSigningOccurrences.count) — re-derive this pin (issue #249)"
+        )
+        #expect(
+            invocationCode.contains(#"| tee "$RUNNER_TEMP/test.log""#),
             #"the xcodebuild invocation in \#(scriptPath) must pipe through `| tee "$RUNNER_TEMP/test.log"` so a failed shard still uploads its log — re-derive this pin (issue #249)"#
         )
 
-        // `PIPESTATUS[0]` must be the next statement (comments allowed): any
-        // intervening command clobbers it, and a clobbered status makes a red
-        // shard exit green.
+        // `PIPESTATUS[0]` must be captured by the immediately next statement
+        // (comments allowed) in the exact `XC_EXIT=${PIPESTATUS[0]}`
+        // assignment shape: any intervening command clobbers the status, and a
+        // bare reference or a different assignment leaves the captured status
+        // unset, so a red shard could exit green.
         let afterPipeline = scriptLines[(cursor + 1)...].first {
             let trimmed = $0.trimmingCharacters(in: .whitespaces)
             return !trimmed.isEmpty && !trimmed.hasPrefix("#")
-        } ?? ""
+        }?.trimmingCharacters(in: .whitespaces) ?? ""
         #expect(
-            afterPipeline.contains("${PIPESTATUS[0]}"),
-            "the statement immediately after the xcodebuild pipeline in \(scriptPath) must capture `${PIPESTATUS[0]}` — an intervening command clobbers the status — re-derive this pin (issue #249)"
+            afterPipeline.range(of: #"^XC_EXIT=\$\{PIPESTATUS\[0\]\}$"#, options: .regularExpression) != nil,
+            "the statement immediately after the xcodebuild pipeline in \(scriptPath) must be exactly `XC_EXIT=${PIPESTATUS[0]}` (found `\(afterPipeline)`) — an intervening command clobbers the status and a bare reference leaves the captured status unset — re-derive this pin (issue #249)"
         )
-        // The byte-parity extraction kept `exit $XC_EXIT` unquoted; accept
-        // either spelling, the assertion is the re-exit itself.
+
+        // The re-exit must be an anchored `exit $XC_EXIT` / `exit "$XC_EXIT"`
+        // statement; a file-wide contains could be satisfied by `exit 0` or an
+        // echoed token elsewhere.
+        let exitLines = scriptLines.enumerated().filter {
+            $0.element.trimmingCharacters(in: .whitespaces)
+                .range(of: #"^exit\s+"?\$XC_EXIT"?$"#, options: .regularExpression) != nil
+        }
         #expect(
-            strippedScript.range(of: #"exit\s+"?\$XC_EXIT"?"#, options: .regularExpression) != nil,
-            "\(scriptPath) must re-exit with xcodebuild's status so a red shard reaches the step result — re-derive this pin (issue #249)"
+            exitLines.count == 1,
+            "\(scriptPath) must re-exit with xcodebuild's captured status exactly once (`exit $XC_EXIT` or `exit \"$XC_EXIT\"`), found \(exitLines.count) matching statement(s) — re-derive this pin (issue #249)"
         )
 
         // The plist injection is the extraction's silent-break surface: an
@@ -305,22 +373,52 @@ struct WorkflowXcodebuildFlagPinsTests {
             strippedScript.contains("keepAlways"),
             "\(scriptPath) must keep `keepAlways` attachment lifetimes or passing tests drop their screenshots — re-derive this pin (issue #249)"
         )
+
+        // Impl lens 2 (fold round 1): the old backstop checked only the first
+        // `<<'PY'` opener's immediate next line, so a decoy opener (ev-1) or a
+        // blank first body line (ev-2) left the real, indented heredoc
+        // unchecked. Check every opener instead, and require exactly one
+        // opener and exactly one column-0 `PY` terminator, so a decoy cannot
+        // shadow the real heredoc; each mismatch records its own issue with
+        // the opener's line.
         let heredocLines = strippedScript.components(separatedBy: "\n")
-        if let opener = heredocLines.firstIndex(where: { $0.contains("<<'PY'") }),
-           opener + 1 < heredocLines.count {
-            let heredocBodyStart = heredocLines[opener + 1]
-            #expect(
-                !heredocBodyStart.hasPrefix(" ") && !heredocBodyStart.hasPrefix("\t"),
-                "the line after `<<'PY'` in \(scriptPath) must start at column 0: an indented heredoc body raises IndentationError and `set +e` lets the script continue with the plist injection silently skipped — re-derive this pin (issue #249)"
-            )
-            #expect(
-                strippedScript.contains("\nPY\n"),
-                "\(scriptPath) must keep the column-0 `PY` heredoc terminator — re-derive this pin (issue #249)"
-            )
-        } else {
+        let pyOpeners = heredocLines.enumerated().filter { $0.element.contains("<<'PY'") }
+        let pyTerminators = heredocLines.enumerated().filter { $0.element == "PY" }
+        if pyOpeners.isEmpty {
             Issue.record(
                 "\(scriptPath) no longer contains the `<<'PY'` plist-injection heredoc — re-derive this pin (issue #249)"
             )
+        } else if pyOpeners.count > 1 {
+            Issue.record(
+                "\(scriptPath) must contain exactly one `<<'PY'` plist-injection heredoc, found \(pyOpeners.count) openers at lines \(pyOpeners.map { String($0.offset + 1) }.joined(separator: ", ")) — a decoy opener can shadow the real heredoc — re-derive this pin (issue #249)"
+            )
+        }
+        if pyTerminators.count != 1 {
+            Issue.record(
+                "\(scriptPath) must contain exactly one column-0 `PY` heredoc terminator, found \(pyTerminators.count) at lines \(pyTerminators.map { String($0.offset + 1) }.joined(separator: ", ")) — an early decoy terminator silently truncates the plist injection — re-derive this pin (issue #249)"
+            )
+        }
+        for (openerIndex, _) in pyOpeners {
+            let bodyStartIndex = heredocLines[(openerIndex + 1)...].firstIndex {
+                !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            }
+            guard let bodyStartIndex else {
+                Issue.record(
+                    "the `<<'PY'` heredoc opened at line \(openerIndex + 1) of \(scriptPath) has no body lines — re-derive this pin (issue #249)"
+                )
+                continue
+            }
+            let firstBodyLine = heredocLines[bodyStartIndex]
+            if firstBodyLine.hasPrefix(" ") || firstBodyLine.hasPrefix("\t") {
+                Issue.record(
+                    "the first non-blank line of the `<<'PY'` heredoc opened at line \(openerIndex + 1) of \(scriptPath) is indented (`\(firstBodyLine.prefix(40))`): an indented heredoc body raises IndentationError and `set +e` lets the script continue with the plist injection silently skipped — re-derive this pin (issue #249)"
+                )
+            }
+            if !heredocLines[(openerIndex + 1)...].contains("PY") {
+                Issue.record(
+                    "the `<<'PY'` heredoc opened at line \(openerIndex + 1) of \(scriptPath) has no column-0 `PY` terminator after it — re-derive this pin (issue #249)"
+                )
+            }
         }
     }
 
@@ -417,7 +515,12 @@ struct WorkflowXcodebuildFlagPinsTests {
 
     /// Returns the dedented value of the `run: |` literal block scalar that
     /// belongs to the step at `stepLineIndex`, or nil when the step does not
-    /// use `run: |` (inline/folded scalars red the caller's shape guard).
+    /// use `run: |` or does not carry exactly one step-level `run:` key.
+    /// Impl lens 2 (fold round 1): measuring the first `run:` scalar is
+    /// unsound when a duplicate step-level key exists (YAML is last-wins:
+    /// ev-5) or when a nested `with.run` decoy precedes the real key (ev-9),
+    /// so the scanner anchors to the step's own key indent (the item indent +
+    /// 2) and fails closed on anything but exactly one `run: |`.
     /// Text-level YAML heuristic: the step ends at the next list item at the
     /// step's own indentation; the block's own indentation is fixed by its
     /// first non-empty line, and clip chomping leaves exactly one final
@@ -426,19 +529,33 @@ struct WorkflowXcodebuildFlagPinsTests {
         let lines = source.components(separatedBy: "\n")
         guard stepLineIndex < lines.count else { return nil }
         let stepIndent = lines[stepLineIndex].prefix { $0 == " " }.count
+        let keyIndent = stepIndent + 2
 
-        var runLine: Int?
-        var index = stepLineIndex + 1
-        while index < lines.count {
-            let line = lines[index]
+        // The step block ends at the next list item at the step's indent.
+        var stepEnd = lines.count
+        var probe = stepLineIndex + 1
+        while probe < lines.count {
+            let line = lines[probe]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let indent = line.prefix { $0 == " " }.count
-            if trimmed.hasPrefix("- ") && indent == stepIndent { break }
-            if trimmed == "run: |" { runLine = index; break }
-            if trimmed.hasPrefix("run:") { return nil }
-            index += 1
+            if trimmed.hasPrefix("- "), indent == stepIndent {
+                stepEnd = probe
+                break
+            }
+            probe += 1
         }
-        guard let run = runLine else { return nil }
+
+        // Exactly one step-level `run:` key. A nested `with.run` decoy sits
+        // deeper than `keyIndent`; a duplicate step-level key is counted and
+        // fails closed.
+        let runKeys = lines[stepLineIndex..<stepEnd].enumerated().filter { pair in
+            let line = pair.element
+            let indent = line.prefix { $0 == " " }.count
+            return indent == keyIndent && line.trimmingCharacters(in: .whitespaces).hasPrefix("run:")
+        }
+        guard runKeys.count == 1, let stepLocalRun = runKeys.first?.offset else { return nil }
+        let run = stepLineIndex + stepLocalRun
+        guard lines[run].trimmingCharacters(in: .whitespaces) == "run: |" else { return nil }
         let runIndent = lines[run].prefix { $0 == " " }.count
 
         var blockIndent: Int?
@@ -463,6 +580,54 @@ struct WorkflowXcodebuildFlagPinsTests {
         guard blockIndent != nil, !block.isEmpty else { return nil }
         while let last = block.last, last.isEmpty { block.removeLast() }
         return block.joined(separator: "\n") + "\n"
+    }
+
+    /// Cuts one YAML/bash-style trailing comment from a single line: a `#`
+    /// at line start or preceded by whitespace starts a comment, outside
+    /// single/double quotes. The file-level `strippingYAMLComments` already
+    /// blanks comments, but it can be left stuck by an apostrophe (documented
+    /// divergence); this per-line backstop keeps the invocation region clean
+    /// in that case so a comment-only flag cannot satisfy the flag assertions
+    /// (impl lens 2, Finding 6/ev-10).
+    private static func cuttingLineComment(_ line: String) -> String {
+        var result = ""
+        var previousWasWhitespace = true
+        var inSingleQuoted = false
+        var inDoubleQuoted = false
+        var escaped = false
+        for character in line {
+            if inDoubleQuoted {
+                result.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inDoubleQuoted = false
+                }
+                previousWasWhitespace = false
+                continue
+            }
+            if inSingleQuoted {
+                result.append(character)
+                if character == "'" {
+                    inSingleQuoted = false
+                }
+                previousWasWhitespace = false
+                continue
+            }
+            if character == "#", previousWasWhitespace {
+                break
+            }
+            if character == "'" {
+                inSingleQuoted = true
+            } else if character == "\"" {
+                inDoubleQuoted = true
+            }
+            result.append(character)
+            previousWasWhitespace = character.isWhitespace
+        }
+        return result
     }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
