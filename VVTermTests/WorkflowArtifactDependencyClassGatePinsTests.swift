@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 835
-    private static let expectedBaseVerdictCases = 404
+    private static let expectedManifestCases = 851
+    private static let expectedBaseVerdictCases = 420
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1071,6 +1071,26 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-shell-continuation-over-bound.yml",
         "accept-shell-delegation-bak-suffix.yml",
         "reject-shell-delegation-symlink-escape.yml",
+        // #399 fold round 2: the every-word `cd` spellings, the deferred
+        // function refusal, the defaults `working-directory`, the indented
+        // scalar capture, the phrase quote-strip and bash-join pins, the
+        // ANSI-C hex assembly and the order-aware `cd` accept control.
+        "reject-shell-delegation-cd-if.yml",
+        "reject-shell-delegation-cd-while.yml",
+        "reject-shell-delegation-cd-brace.yml",
+        "reject-shell-delegation-cd-bang.yml",
+        "reject-shell-delegation-cd-paren-space.yml",
+        "reject-shell-delegation-cd-assignment-prefix.yml",
+        "reject-shell-delegation-cd-command.yml",
+        "reject-shell-delegation-cd-time.yml",
+        "reject-shell-delegation-cd-deferred-function.yml",
+        "reject-shell-defaults-working-directory.yml",
+        "reject-shell-working-directory-indented-scalar.yml",
+        "reject-shell-gh-run-download-cmdsub-quoted-run.yml",
+        "reject-shell-gh-run-download-backtick-quoted-run.yml",
+        "reject-shell-delegation-continuation.yml",
+        "reject-shell-gh-run-download-ansic-hex-assembly.yml",
+        "accept-shell-delegation-cd-after-candidate.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
@@ -1094,6 +1114,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "shell-benign.sh",
         "shell-cycle-a.sh",
         "shell-cycle-b.sh",
+        // #399 fold round 2: the order-aware `cd` accept control's
+        // self-referencing delegated script.
+        "shell-self-cd.sh",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -1445,6 +1468,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "nested-delegation depth cap",
             "delegated-script floor: only",
             "Keep the download in a `uses: actions/download-artifact` step",
+            // #399 fold round 2: the deferred-function refusal's
+            // distinctive fragment (the every-word `cd` spellings reuse
+            // the existing cd fragment, and the defaults/indented-scalar
+            // capture reuses the working-directory fragment).
+            "inside a function body, in a shell body",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(
