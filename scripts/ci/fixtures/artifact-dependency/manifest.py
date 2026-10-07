@@ -7348,7 +7348,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-shell-delegation-unresolvable.yml:8: delegation to `scripts/ci/shell-missing.sh` — the gate cannot resolve the referenced script (refusing rather than skipping)",
+            "reject-shell-delegation-unresolvable.yml:8: delegation to `scripts/ci/shell-missing.sh` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
         ],
     },
     {

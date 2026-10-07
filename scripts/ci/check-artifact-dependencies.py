@@ -7932,7 +7932,7 @@ _SHELL_DOWNLOADER_REFUSAL = (
 
 _SHELL_DELEGATION_UNRESOLVED_REFUSAL = (
     "delegation to `{subpath}`{provenance} — the gate cannot resolve the referenced script "
-    "(refusing rather than skipping)"
+    "(refusing rather than skipping); fix the path, restore the script, or reword the mention"
 )
 
 _SHELL_DELEGATION_ESCAPE_REFUSAL = (
