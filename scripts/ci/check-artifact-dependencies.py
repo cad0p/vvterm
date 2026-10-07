@@ -8217,14 +8217,91 @@ def _shell_strip_quotes(word: str) -> str:
     return word.replace("'", "").replace('"', "")
 
 
+# One `$'…'` ANSI-C literal as `_shell_tokens` keeps it (verbatim, including
+# the closing quote): a backslash escapes the next character, so the close is
+# the first unescaped `'`. The capture excludes both quotes.
+_SHELL_ANSI_C_QUOTED_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'", re.DOTALL)
+
+
+def _shell_decode_ansi_c_body(body: str) -> str:
+    r"""Decode one `$'…'` body the way bash's ANSI-C quoting does (issue
+    #399 fold round 2, N6): the C single-character escapes, `\cX`, octal
+    `\NNN`, hex `\xHH`, `\uHHHH` and `\UHHHHHHHH`. A `\x`/`\u`/`\U`
+    with no valid digit and any other unrecognized escape keep their
+    backslash AND character, exactly as bash leaves them (measured:
+    `$'\q'`, `$'\xZ'` and `$'\8'` all print with the backslash). The
+    decoder is what makes `g$'\x68' run download` visible to the phrase
+    test; an unrecognized escape therefore cannot fabricate a `gh` word."""
+    result: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\" or index + 1 >= len(body):
+            result.append(char)
+            index += 1
+            continue
+        nxt = body[index + 1]
+        if nxt in ("x", "u", "U"):
+            width = {"x": 2, "u": 4, "U": 8}[nxt]
+            digits = body[index + 2 : index + 2 + width]
+            match = re.match(r"[0-9A-Fa-f]{1," + str(width) + r"}", digits)
+            if match is not None:
+                codepoint = int(match.group(0), 16)
+                if codepoint <= 0x10FFFF:
+                    result.append(chr(codepoint))
+                    index += 2 + len(match.group(0))
+                    continue
+            result.append(char)
+            result.append(nxt)
+            index += 2
+            continue
+        if nxt in "01234567":
+            match = re.match(r"[0-7]{1,3}", body[index + 1 :])
+            assert match is not None
+            result.append(chr(int(match.group(0), 8)))
+            index += 1 + len(match.group(0))
+            continue
+        if nxt == "c" and index + 2 < len(body):
+            control = body[index + 2]
+            result.append("\x7f" if control == "?" else chr(ord(control) & 0x1F))
+            index += 3
+            continue
+        mapped = _ANSI_C_ESCAPES.get(nxt)
+        if mapped is not None:
+            result.append(mapped)
+            index += 2
+            continue
+        result.append("\\")
+        result.append(nxt)
+        index += 2
+    return "".join(result)
+
+
+def _shell_decode_ansi_c(word: str) -> str:
+    """Every `$'…'` ANSI-C literal in one tokenizer word replaced with its
+    decoded text (issue #399 fold round 2, N6); a word with no `$'` spelling
+    is returned untouched, so the existing spellings and their diagnostics
+    cannot move."""
+    if "$'" not in word:
+        return word
+    return _SHELL_ANSI_C_QUOTED_RE.sub(
+        lambda match: _shell_decode_ansi_c_body(match.group(1)), word
+    )
+
+
 def _normalize_shell_word(word: str) -> str:
-    """The v3 token model's word normalization (issue #399 fold round 1):
-    quote characters removed, a backslash followed by whitespace collapsed
-    to one space (the single-quoted `bash -c` continuation remnant joined by
+    r"""The v3 token model's word normalization (issue #399 fold round 2):
+    `$'…'` ANSI-C literals decoded first (bash expands them before the
+    command runs, so `g$'\x68'` is the word `gh`), then quote characters
+    removed, a backslash followed by whitespace collapsed to one space (the
+    single-quoted `bash -c` continuation remnant joined by
     `_quoted_payload_joined_segments`), then every whitespace run collapsed
-    to one space so `gh  run  download` and tab-separated payloads read as
-    one phrase."""
-    normalized = _shell_strip_quotes(word)
+    to one space. The collapse is normalization, not the double-space/tab
+    coverage: the `\b`-ordered phrase test below tolerates arbitrary
+    separators between its three words by construction; the collapse is what
+    turns the retained `\`+newline of the payload join into a space."""
+    decoded = _shell_decode_ansi_c(word)
+    normalized = _shell_strip_quotes(decoded)
     normalized = re.sub(r"\\\s+", " ", normalized)
     return re.sub(r"\s+", " ", normalized)
 
