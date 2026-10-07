@@ -3,9 +3,11 @@
 # unbalanced `'` inside a `run: |` shell body is opaque text, not a YAML
 # scalar error (recheck NEW-5; six real-tree witnesses, e.g. the
 # `NEW_COMMIT="$(gh api ...` body lines in scripts/ci/ghostty-bump-pr.sh).
-# The gate scans only `.github/workflows`: run bodies extracted into
-# `scripts/ci/*.sh` (the #249/#396 pattern) are outside its scan — the
-# pre-existing script-indirection blind spot, tracked by a follow-up issue.
+# The gate scans only `.github/workflows` for the YAML rule; run bodies
+# extracted into `scripts/ci/*.sh` (the #249/#396 pattern) are covered by the
+# #399 shell-downloader pass instead: a `gh run download` in a delegated
+# script refuses fail-closed at the delegating step's line, and the spellings
+# the pass does not model are the #399 residual list.
 jobs:
   build:
     runs-on: ubuntu-latest
