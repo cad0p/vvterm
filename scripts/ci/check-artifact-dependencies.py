@@ -1098,15 +1098,20 @@ rest), adds the #350 item-12 continuation joins (the raw
 `_bash_joined_continuation_segments`; a chain beyond the 64-line analysis
 bound refuses rather than yielding the joins' empty fail-open, mirroring
 `_run_id_continuation_bound_refusal`), and refuses on the token model. The
-token model is one normalized phrase test per segment: each word is
-quote-stripped, a backslash followed by whitespace and every whitespace run
-collapse to one space, and the segment refuses when a `\bgh\b` word is
-followed (in order) by a `\brun\b` word and a `\bdownload\b` word. That
-covers `gh  run  download`, tab-separated and `$(…)`/backtick payloads,
-`gh run -R owner/repo download`, `gh$IFS run download` and the
-single-quoted `bash -c` continuation payload (the outer joins deliberately
-skip a backslash inside single quotes, so a dedicated payload join feeds
-the interpreter's view of the text). The `-artifact@ref` action shape is
+token model is one normalized phrase test per segment: each word is first
+ANSI-C-decoded (fold round 2, N6: a `$'…'` literal is expanded the way bash
+expands it before the command runs, so `g$'\x68' run download` is the
+phrase), then quote-stripped; a backslash followed by whitespace and every
+whitespace run collapse to one space. The segment refuses when a `\bgh\b`
+word is followed (in order) by a `\brun\b` word and a `\bdownload\b` word.
+The `\b`-ordered test is what covers `gh  run  download`, tab-separated and
+`$(…)`/backtick payloads, `gh run -R owner/repo download` and
+`gh$IFS run download`; the collapses are normalization (they turn the
+single-quoted `bash -c` continuation remnant into a space), and the
+quote-strip is what exposes a quoted `run` inside a `$(…)`/backtick payload
+(fold round 2, N4). The single-quoted `bash -c` payload has a dedicated
+join because the outer joins deliberately skip a backslash inside single
+quotes. The `-artifact@ref` action shape is
 deliberately NOT a token: a shell body
 cannot execute a GitHub Action, so the ref is data there, and treating the
 shape as a downloader flips the pinned
@@ -1124,11 +1129,23 @@ candidate is resolved as the path the shell would execute, so
 `scripts/ci/x.sh`. The resolved path must be a file inside the scanned root
 (canonical containment) and is read with a strict UTF-8 decode; an
 absolute or root-escaping candidate, or a missing, loop or unreadable
-target, refuses. A step whose `working-directory:` is not the repository
-root, or a body whose `cd` precedes the delegation, refuses too: the
-executed path is cwd-relative and the gate resolves delegations relative
-to the repository root only (the live `check-license-headers.sh` `SELF=`
-mention sits before its own `cd`, so the `cd` test is order-aware). Nested
+target, refuses. The effective cwd must be the repository root, because the
+gate resolves delegations relative to the root only. A non-root
+`working-directory:` refuses, whether it comes from the step key or from a
+workflow-/job-level `defaults.run.working-directory` (fold round 2, N2),
+and an empty inline `working-directory:` captures the indented scalar
+rather than reading it as the root (N3). A `cd` word ANYWHERE in a segment
+is a cwd change, not just the first word (N1): `if cd`, `while cd`,
+`{ cd`, `! cd`, `( cd`, `FOO=1 cd`, `command cd`, `time cd` and
+`builtin cd` all refuse a later delegation, while a `cd` inside a `$(…)`
+substitution is deliberately not the word `cd` (the tokenizer keeps the
+substitution in one word; `teleport-server.sh:114` and
+`check-ghostty-config.sh:80-81,256` rely on it). The rule is order-aware —
+a delegation that precedes the body's `cd` is not refused by it (the live
+`check-license-headers.sh` `SELF=` mention sits before its own `cd`) — but
+a delegation candidate at or after a function definition refuses when the
+body also contains a `cd`, because a bash function body executes at call
+time and its effective cwd is then unprovable (N1c). Nested
 delegations recurse with a visited set of canonical paths and a depth cap
 of 4; beyond the cap refuses without counting the target as resolved. A
 finding is anchored at the delegating run body's `run:` line and names
@@ -1149,8 +1166,11 @@ outside the workflow's `working-directory`) are not followed (the real tree
 delegates to four, all clean), raw REST downloads (`gh api …/artifacts`),
 heredoc/message text naming a `.sh` path (it is resolved and scanned; a
 missing target refuses), non-`.sh` wrappers, and orphan scripts.
-Delegations under a non-root `working-directory:` or after a `cd` are
-refused, not resolved. The whole
+Delegations under a non-root `working-directory:` or after a modeled `cd`
+are refused, not resolved; a cwd change the tokenizer cannot see — inside
+an interpreter payload (`bash -c 'cd sub; …'`), through an assembled
+command (`CMD=cd; $CMD sub`), or spelled `pushd`/`popd` — is a named
+residual. The whole
 attribute-to-the-delegating-job arm (scanning a delegated downloader under
 the existing transitive-`needs:` rule) is declined by design: an executable
 shell downloader refuses regardless of the `needs:` graph. The
@@ -8104,13 +8124,16 @@ def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int
 # Shell artifact downloaders (issue #399)
 # ---------------------------------------------------------------------------
 
-# The v3 token model's normalized phrase test (issue #399 fold round 1): each
-# word is quote-stripped, `\`+whitespace and every whitespace run collapse to
-# one space, then the segment refuses when a `\bgh\b` word is followed (in
-# order) by a `\brun\b` word and a `\bdownload\b` word. The whitespace
-# collapse covers the double-space/tab/`$( )`/backtick payloads; the
-# `\`+whitespace collapse covers the single-quoted `bash -c` continuation
-# remnant; `\b` (not word equality) covers `gh$IFS` and `${x}gh`.
+# The v3 token model's normalized phrase test (issue #399 fold rounds 1-2):
+# each word is ANSI-C-decoded (fold round 2, N6), quote-stripped, `\`+whitespace
+# and every whitespace run collapse to one space, then the segment refuses
+# when a `\bgh\b` word is followed (in order) by a `\brun\b` word and a
+# `\bdownload\b` word. The `\b`-ordered test — not the collapse — is what
+# covers the double-space/tab/`$( )`/backtick payloads and `gh$IFS`/
+# `${x}gh`: it tolerates arbitrary separators between its three words by
+# construction. The collapse is normalization: the `\`+whitespace form turns
+# the single-quoted `bash -c` continuation remnant (the payload join keeps
+# the `\`+newline pair) into one space.
 _SHELL_GH_WORD_RE = re.compile(r"\bgh\b")
 _SHELL_RUN_WORD_RE = re.compile(r"\brun\b")
 _SHELL_DOWNLOAD_WORD_RE = re.compile(r"\bdownload\b")
@@ -8654,9 +8677,12 @@ def _scan_shell_body(
     the additive continuation joins run after it and a chain beyond their
     analysis bound refuses (plan v2 §3.4, mirroring
     `_run_id_continuation_bound_refusal`). `working_directory` is the
-    enclosing step's `working-directory:` value (None for a delegated
-    script): a non-root value refuses every delegation in the body, and a
-    `cd` segment strictly before a delegation refuses too (fold round 1)."""
+    enclosing step's effective `working-directory:` (None for a delegated
+    script): a non-root value refuses every delegation in the body. A `cd`
+    word in any position of a segment refuses a later delegation in the same
+    body (fold round 2, N1), and a candidate at or after a
+    function-definition opener refuses when the body also contains a `cd`
+    (N1c: the deferred body's cwd is unprovable)."""
     referenced: set[str] = set()
 
     def scan_segment(
