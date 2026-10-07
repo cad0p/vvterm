@@ -14,6 +14,10 @@ import Foundation
 /// tests can drive the fail-fast path without a real loopback bind (issue
 /// #401); production always gets `BrowserMFAListener`.
 ///
+/// Declared unconditionally while its only production constructor,
+/// `BrowserMFAListener`, is Network-gated (`import Network` is unconditional
+/// in `BrowserMFAListener.swift:38`, so no build configuration is affected).
+///
 /// `nonisolated` is load-bearing: the app target sets
 /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so an unmarked protocol would
 /// be MainActor-isolated and the `nonisolated` production conformer would not

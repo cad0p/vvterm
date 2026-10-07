@@ -17,10 +17,12 @@
 //  is a real, non-zero, OS-assigned listener port — never the sentinel
 //  `localhost:0` that broke the live device.
 //
-//  The seam: the mock gRPC client returns a default
+//  The gRPC-channel trick: the mock gRPC client returns a default
 //  `Proto_MFAAuthenticateChallenge()` (no `browserMfaChallenge` set), so the
 //  ceremony throws `noBrowserMFAChallenge` AFTER capturing the URL but BEFORE
 //  opening Safari. This lets us assert the URL without mocking ASWebAuth.
+//  (The listener seam added by #401 is separate: only the fail-fast test
+//  injects a listener stub; the other tests in this class use the real one.)
 //
 //  See:
 //  - VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift
@@ -218,10 +220,12 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// with a structural gate on the ceremony's progress, not another
     /// increase. Run 37604704636 (job 112742518141) saw this test survive the
     /// 30 s budget while the listener bind and the challenge had completed
-    /// ~85–100 ms in, so the structural seam (injecting the listener) is the
-    /// recorded next step and the 30 s race is deleted, not extended. The
-    /// stub's `waitCount` is the observable proof that the A7 guard fired
-    /// before the listener wait.
+    /// ~15–20 ms in (the exact test-start timestamp is inferred from the
+    /// suite-internal clock), so the structural seam (injecting the listener)
+    /// is the recorded next step and the 30 s race is deleted, not extended.
+    /// The typed `.safariFailed` catch is the primary assertion; the stub's
+    /// `waitCount` is a diagnostic that keeps the guard-before-wait ordering
+    /// explicit.
     func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart() async {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
         let presenter = NotStartedBrowserMFAPresenter()
@@ -244,7 +248,9 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
         } catch {
             // The A7 guard did not fire: the ceremony reached the injected
             // listener's wait, which throws immediately (the stub never
-            // suspends).
+            // suspends). No `return` is deliberate: the counterfactual then
+            // reports both this catch-all and the `waitCount == 0` assertion
+            // below, naming the guard-vs-wait failure mode twice.
             XCTFail("expected .safariFailed, got \(error)")
         }
 

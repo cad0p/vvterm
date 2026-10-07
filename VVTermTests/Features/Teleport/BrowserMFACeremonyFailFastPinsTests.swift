@@ -12,9 +12,13 @@
 //  deterministic run cannot manufacture. These pins read the production and
 //  test sources as text and assert the shape:
 //
-//  1. the fail-fast method body carries no `Task.sleep`, `ContinuousClock`
-//     or `failFastBudget`, and still drives `StubBrowserMFAListener` /
-//     `waitCount` with a bare catch-all (`catch {`);
+//  1. the fail-fast method carries no wall clock — `Task.sleep`/`sleep`,
+//     `ContinuousClock`, `Date`, `DispatchTime`, `Timer` — the deleted
+//     `failFastBudget` is refused file-wide (a nested declaration inside
+//     the method would truncate the slice scan), and the method still
+//     drives `StubBrowserMFAListener` / `waitCount`, keeps one bare
+//     catch-all (`catch {`), and asserts the typed `.safariFailed` contract
+//     with the exact A7 message;
 //  2. `BrowserMFACeremony.run` builds its listener through
 //     `makeListener(logger)` (a re-hardcoded `BrowserMFAListener(logger:)`
 //     reds);
@@ -22,16 +26,23 @@
 //     `BrowserMFAListener(`, so the seam cannot silently become a no-op in
 //     production.
 //
-//  FORMATTING HEURISTIC, NOT A PROOF: these pins parse source as text. A
-//  wall clock spelled through a helper escapes pin 1; a listener obtained
-//  through a renamed factory escapes pin 2's token; a second initializer or
-//  a moved default escapes pin 3 (whose single-`init(` anchor fails closed
-//  instead: two `init(` occurrences red the anchor count). The pins catch
-//  the direct regression shapes and fail closed when their anchors move.
-//  `StubBrowserMFAListenerError` is asserted file-wide rather than in the
-//  method slice because the test body never names the type (the catch-all
-//  prints the thrown value); the slice's material proof is the injected
-//  `StubBrowserMFAListener` plus its `waitCount`.
+//  FORMATTING HEURISTIC, NOT A PROOF: these pins parse source as text. Pin
+//  1's slice ends at the next `\n    func ` / `\n    private static let `
+//  declaration, so any nested declaration inserted inside the method
+//  truncates the negative scan (the file-wide `failFastBudget` refusal
+//  cannot be truncated); any wall clock outside the pinned spellings —
+//  a helper, or an API such as `clock_gettime` — still escapes. A listener
+//  obtained through a renamed factory escapes pin 2's token; a second
+//  initializer written with a declaration keyword (`convenience init(` /
+//  `override init(` / `required init(`) is refused explicitly (the
+//  `\n    init(` anchor alone only counts unkeyworded declarations), and
+//  any other second construction site reds pin 3's file-wide
+//  `BrowserMFAListener(` count. The pins catch the direct regression shapes
+//  and fail closed when their anchors move. `StubBrowserMFAListenerError`
+//  is asserted file-wide rather than in the method slice because the test
+//  body never names the type (the catch-all prints the thrown value); the
+//  slice's material proof is the injected `StubBrowserMFAListener` plus its
+//  `waitCount` diagnostic token.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree (measured in the #401 PR report). The variable must actually
@@ -268,6 +279,15 @@ struct BrowserMFACeremonyFailFastPinsTests {
             "StubBrowserMFAListener.waitForResponse() must throw immediately (never suspend), so the reverted-guard counterfactual reds instead of hanging — re-derive this pin (issue #401)"
         )
 
+        // File-wide refusal, not slice-bounded: the 30 s `failFastBudget`
+        // constant was deleted in #401 and must not return anywhere in this
+        // file. This check cannot be truncated by a nested declaration
+        // inside the fail-fast method (lens 1 F1).
+        #expect(
+            !text.contains("failFastBudget"),
+            "the 30 s `failFastBudget` race was deleted in #401; it must not return anywhere in this file"
+        )
+
         let anchors = Self.occurrences(
             of: "func testCeremonyFailsFastWhenTheBrowserSessionDidNotStart",
             in: text
@@ -295,7 +315,10 @@ struct BrowserMFACeremonyFailFastPinsTests {
             "the fail-fast method slice must not be empty — re-derive this pin (issue #401)"
         )
 
-        // Negative: no wall clock may the compete with the guard.
+        // Negative: no wall clock may compete with the guard. The first
+        // three tokens pin the #401 regression spellings explicitly; the
+        // rest close the direct non-helper spellings (the header defeat list
+        // names what still escapes this token set).
         #expect(
             !body.contains("Task.sleep"),
             "the fail-fast test must not race a `Task.sleep` budget — the A7 guard is observed through the injected listener stub (issue #401)"
@@ -306,7 +329,23 @@ struct BrowserMFACeremonyFailFastPinsTests {
         )
         #expect(
             !body.contains("failFastBudget"),
-            "the 30 s `failFastBudget` race was deleted in #401; it must not return"
+            "the 30 s `failFastBudget` race was deleted in #401; it must not return (the file-wide check above cannot be truncated)"
+        )
+        #expect(
+            !body.contains("sleep"),
+            "the fail-fast test must not race any sleep-based budget (`Task.sleep`, `Thread.sleep`, `Task<Never, Never>.sleep`) — the A7 guard is observed through the injected listener stub (issue #401)"
+        )
+        #expect(
+            !body.contains("Timer"),
+            "the fail-fast test must not race a `Timer` budget — the A7 guard is observed through the injected listener stub (issue #401)"
+        )
+        #expect(
+            !body.contains("DispatchTime"),
+            "the fail-fast test must not race a `DispatchTime` deadline — the A7 guard is observed through the injected listener stub (issue #401)"
+        )
+        #expect(
+            !body.contains("Date"),
+            "the fail-fast test must not race a `Date` deadline — the A7 guard is observed through the injected listener stub (issue #401)"
         )
 
         // Positive: the stub seam is still driven, and the catch-all remains.
@@ -318,6 +357,19 @@ struct BrowserMFACeremonyFailFastPinsTests {
             body.contains("makeListener:"),
             "the fail-fast test must inject the stub through the ceremony's `makeListener` seam — re-derive this pin (issue #401)"
         )
+        #expect(
+            body.contains("case .safariFailed"),
+            "the fail-fast test must keep the typed `.safariFailed` catch (a bare catch-all alone no longer enforces the product error contract) — re-derive this pin (issue #401)"
+        )
+        #expect(
+            body.contains("the in-app browser session did not start"),
+            "the fail-fast test must keep the exact A7 message assertion — re-derive this pin (issue #401)"
+        )
+        // `waitCount` is a diagnostic pin token, not independent evidence:
+        // the stub's `waitForResponse()` always throws, so the typed
+        // `.safariFailed` catch above is the primary proof and
+        // `waitCount == 0` cannot fail while it passes. The token keeps the
+        // guard-before-wait ordering explicit if the typed catch is weakened.
         #expect(
             body.contains("waitCount"),
             "the fail-fast test must assert the stub's `waitCount` (the guard fired before the listener wait) — re-derive this pin (issue #401)"
@@ -369,6 +421,17 @@ struct BrowserMFACeremonyFailFastPinsTests {
             "BrowserMFACeremony must declare exactly one init (a `\\n    init(` anchor; `super.init()` does not match) — re-derive this pin (issue #401)"
         )
         let anchor = try #require(anchors.first)
+        // The `\n    init(` anchor only matches an unkeyworded initializer at
+        // class indent; refuse the keyword spellings explicitly so a second
+        // initializer cannot escape the exactly-one anchor (lens 2 F6). Any
+        // second construction site still reds the file-wide
+        // `BrowserMFAListener(` count below.
+        for keyword in ["convenience init(", "override init(", "required init("] {
+            #expect(
+                !text.contains(keyword),
+                "a second initializer written as `\(keyword)` escapes the `\\n    init(` anchor — re-derive this pin (issue #401)"
+            )
+        }
         // `init(` already carries the opening paren: walk the parameter list
         // from the paren itself, not from the first paren inside it.
         let parameterRange = try Self.parenthesizedBlock(
