@@ -231,7 +231,9 @@ signs it with its web-flow key and marks it Verified (the dependabot mechanism;
 docs.github.com "About commit signature verification" → "Signature verification
 for bots"). The step aborts if the response commit is not `verification.verified`.
 
-Mechanics (all in the `bump-pr` step):
+Mechanics (all in `scripts/ci/ghostty-bump-pr.sh`, invoked by the `bump-pr`
+step; the step keeps only the failing-step marker, the `create_bump_pr`
+diagnostic and the delegation — issue #396):
 
 1. No-op gate: after `git add`, `git diff --cached --quiet` exits 0 when the
    rebuild produced identical artifacts (no commit, no PR, no alarm).
