@@ -747,8 +747,10 @@ comment test (pre-existing, recorded, not folded — fold round 2 NIT-2;
 the same per-line context gap); a continuation that runs to the end of
 the run body keeps the partial join (fold round 3 MAJOR-1; the kept join
 is not bash's join — bash removes the \\-newline pair while the join keeps
-the raw \\ and the inserted newline), while a continuation
-longer than 8 physical lines stays open (a named residual; the
+the raw \\ and the inserted newline), while a continuation longer than 64
+physical lines is refused fail-closed rather than silently returning no
+join (issue #350e: `_run_id_continuation_bound_refusal`, mirrored by
+`_raw_continuation_bound_exceeded`; the
 continuation inside a command substitution — `w=$(cp payload \\` +
 newline + `"${arr[0]}")` — is closed by A17 below; the fold round 2
 direction claim in `f68192a6` — "no
@@ -763,7 +765,9 @@ fail-closed continuation join: for a mention-bearing scalar body the join
 strips the scalar's content indent (blank lines exempt), then walks the raw
 physical lines joining a line whose end is an unquoted backslash with the
 next non-blank line (dropping the `\\`+newline pair, skipping intervening
-blanks, bounded at 8 physical lines / 7 joins), with a trailing `\\` on the
+blanks, bounded at 64 physical lines / 63 joins; a longer chain is refused
+fail-closed by the body-level predicate rather than yielding no join —
+issue #350e), with a trailing `\\` on the
 last body line dropped (the EOF case, all styles); the quote state is a
 whole-body property (carried across physical lines, and the join re-opens it
 on the joined text), so a single-quoted region opened on an earlier body
@@ -809,10 +813,13 @@ every indicator spelling, and at EOF (measured at this commit: `--selftest`
 it kept 17 shapes ACCEPT, of which 9 are base-ACCEPT + runtime FLIP (real
 writes the guard suppressed) and 8 are benign; the join closes all nine and
 the eight benign shapes become measured over-refusals (the price of
-fail-closed joining, listed by class with the corpus counts). Boundary
-(stays open, never implied closed): the `>8` chain bound
-(`_CONTINUATION_JOIN_MAX_LINES` = 8 physical lines / 7 joins; `chain|dd|n8`
-closed, `n9+` open), the multi-line ANSI-C trailing-backslash shape (the
+fail-closed joining, listed by class with the corpus counts). The `>8`
+chain bound is closed at #350e: `_CONTINUATION_JOIN_MAX_LINES` is 64
+physical lines / 63 joins, a chain longer than the bound is refused
+fail-closed (`_run_id_continuation_bound_refusal`) instead of yielding no
+join, and `n9..n64` now join (`n8` was already closed; the battery's
+`n9/n10/n11` close). Boundary (stays open, never implied closed): the
+multi-line ANSI-C trailing-backslash shape (the
 `$'…'` region stays open across the physical line — a different tokenizer
 state from item 17's same-line escaped quote; runtime FLIP, pinned by
 `accept-runid-github-env-write-ansic-multiline-trailing-backslash`) and
@@ -1032,10 +1039,32 @@ pinned by `accept-runid-github-env-write-subst-procsub-direct-target`
 `:` spellings, and the bare/`echo`/`cat <(…)` spellings of the same class
 are also measured ACCEPT + runtime FLIP and stay open under this class
 sentence (not limited to the pinned spellings); the `>8` continuation
-bound, sed `-f` script bodies and the remaining #350 classes (items 3–6,
+bound is closed at #350e (raised to 64 physical lines with a fail-closed
+refusal beyond), while sed `-f` script bodies and the remaining #350
+classes (items 3–6,
 8, 10, 11, 15) stay open. Two over-refusals are shipped as
 `reject-overrefusal-*` pins (a substitution/eval inner target that is a
 pure reference to an unassigned name).
+
+#350e (the continuation-bound fold) closes the former `>8` continuation
+fail-open: `_CONTINUATION_JOIN_MAX_LINES` is raised to 64 physical lines
+(the joins keep their fail-closed semantics; only the bound moves), a
+body-level predicate over non-payload lines shares each join's bound walk
+(`_raw_continuation_bound_exceeded` / `_bash_continuation_bound_exceeded`,
+`raw or bash`), and a chain longer than the bound is refused by
+`_run_id_continuation_bound_refusal` instead of yielding no join. Measured
+at #350e (the continuation-bound fold): the fixture corpus is 802/802 cases
+(371 declare `base_exit`); the fold adds 8 fixtures (5 rejects — the dd
+split at n9 and n65, a benign 65-line over-refusal, a blank-inflated
+over-refusal whose bash span exceeds the bound while the raw span does not,
+and a raw-arm-only payload crossing whose >64 raw run walks into a heredoc
+payload while the bash arm stays under the bound — and 3 boundary accepts
+at 16, 64 and 64-pending-at-EOF lines), every one
+`base_exit: 0`, so A12/A17 memberships and the scan floor are unchanged.
+The former boundary item (`chain|dd|n8` closed, `n9+` open) is closed:
+`n9..n64` now join and are caught by the existing write detection, and a
+longer chain is refused fail-closed, not analysed; the remediation for an
+author is to split the chain into shorter logical lines.
 
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
@@ -1082,7 +1111,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 794
+EXPECTED_MANIFEST_CASES = 802
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1100,7 +1129,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 363
+EXPECTED_BASE_VERDICT_CASES = 371
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -4944,7 +4973,20 @@ def _joined_sed_segments(
     ]
 
 
-_CONTINUATION_JOIN_MAX_LINES = 8
+# The continuation joins' analysis bound. The pre-#350e fixture corpus's
+# longest chain was 2 gate-pending lines (3 visible); the fold's boundary
+# fixtures probe 16, 63 (64 physical), 64-pending-at-body-final-EOF and 65
+# physical lines. The workflow corpus's longest is 14 gate-pending / 15
+# physical (`ios-testflight.yml`'s `xcodebuild archive` chain, in a
+# no-download job the run-id rule never scans). The #350 item 12 battery's
+# documented rows span n8-n11 and its wider probe measured `n9..n66`
+# ACCEPT at the former cap 8 (the fail-open this fold closes); at the
+# shipped bound `n9..n64` join and are caught by the existing detection
+# while `n65+` are refused fail-closed. 64 is an analysis bound, not a bash
+# guarantee: a chain longer than it is refused by
+# `_run_id_continuation_bound_refusal` rather than silently yielding no
+# join (the former `>8` fail-open, issue #350e).
+_CONTINUATION_JOIN_MAX_LINES = 64
 
 
 def _scalar_content_indent(
@@ -5150,6 +5192,56 @@ def _whole_body_continuation_state(
     return flags
 
 
+def _raw_continuation_bound_exceeded(lines: list[str], index: int) -> bool:
+    """True when `_joined_continuation_segments` would hit its analysis
+    bound for the chain that starts at `lines[index]` and return `[]`
+    (issue #350e). Mirrors that join's walk exactly: it counts
+    `_line_continuation_pending` physical lines, so a blank line ends the
+    chain, and it checks EOF before the bound — a chain of exactly the
+    bound's lines that runs to the end of the body must not flag (there the
+    join keeps the partial join, fold round 3 MAJOR-1). The join and the
+    body-level exceedance predicate share this decision so they cannot
+    drift."""
+    if not _line_continuation_pending(lines[index]):
+        return False
+    cursor = index
+    while _line_continuation_pending(lines[cursor]):
+        cursor += 1
+        if cursor >= len(lines):
+            return False
+        if (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES:
+            return True
+    return False
+
+
+def _bash_continuation_bound_exceeded(
+    lines: list[str], index: int, pending: list[tuple[bool, str | None]]
+) -> bool:
+    """True when `_bash_joined_continuation_segments` would hit its
+    analysis bound for the chain that starts at `lines[index]` and return
+    `[]` (issue #350e). Mirrors that join's walk exactly: its distance is
+    blank-inclusive (`(nxt - index)`, `nxt` the next non-blank physical
+    line), so a blank-inflated chain can exceed here while
+    `_raw_continuation_bound_exceeded` does not, and it checks EOF before
+    the bound — a trailing backslash on the body's last line is dropped
+    rather than flagged. The join and the body-level exceedance predicate
+    share this decision so they cannot drift."""
+    if index >= len(pending) or not pending[index][0]:
+        return False
+    cursor = index
+    while True:
+        if cursor >= len(pending) or not pending[cursor][0]:
+            return False
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            return False
+        if (nxt - index) >= _CONTINUATION_JOIN_MAX_LINES:
+            return True
+        cursor = nxt
+
+
 def _joined_continuation_segments(
     lines: list[str], index: int
 ) -> list[list[tuple[str, str, int, int]]]:
@@ -5170,8 +5262,13 @@ def _joined_continuation_segments(
     `cp`/`mv`/`install`/`dd of=`/sed `w` EOF spellings open; the additive
     `_bash_joined_continuation_segments` below drops the pair at EOF and
     closes them — issue #350 item 12), while a join longer than the bound
-    still returns `[]` (a named residual shared by both joins)."""
+    still returns `[]`; that empty result is a fail-open on its own, so
+    `_raw_continuation_bound_exceeded` mirrors this walk and the body-level
+    predicate in `_refuse_github_env_run_id_write` refuses such a body
+    instead (issue #350e)."""
     if not _line_continuation_pending(lines[index]):
+        return []
+    if _raw_continuation_bound_exceeded(lines, index):
         return []
     joined = [lines[index]]
     cursor = index
@@ -5179,8 +5276,6 @@ def _joined_continuation_segments(
         cursor += 1
         if cursor >= len(lines):
             break
-        if (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES:
-            return []
         joined.append(lines[cursor])
     return [
         segment
@@ -5205,7 +5300,10 @@ def _bash_joined_continuation_segments(
     skipping intervening blanks. A trailing `\\` on the last body line is
     dropped (the EOF case, all styles). The chain is bounded by
     `_CONTINUATION_JOIN_MAX_LINES` physical lines; a longer chain yields no
-    join (a named residual). The join reads the raw physical lines, so no
+    join, which `_bash_continuation_bound_exceeded` mirrors and the
+    body-level predicate in `_refuse_github_env_run_id_write` turns
+    fail-closed by refusing the body (issue #350e). The join reads the raw
+    physical lines, so no
     style/fold model is needed, and it joins across blank lines too, i.e. it
     models a superset of bash's joining beyond the quote state. The
     predicate is `_whole_body_continuation_state` (the quote state carried
@@ -5232,6 +5330,8 @@ def _bash_joined_continuation_segments(
 
     if index >= len(pending) or not pending[index][0]:
         return []
+    if _bash_continuation_bound_exceeded(lines, index, pending):
+        return []
     parts: list[str] = []
     cursor = index
     while True:
@@ -5247,8 +5347,6 @@ def _bash_joined_continuation_segments(
             # file ends; the rule drops it in every style.
             parts.append(current[:-1])
             break
-        if (nxt - index) >= _CONTINUATION_JOIN_MAX_LINES:
-            return []
         parts.append(current[:-1])
         cursor = nxt
     joined = "".join(parts)
@@ -6309,6 +6407,26 @@ def _run_id_continuation_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     )
 
 
+def _run_id_continuation_bound_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
+    """Issue #350e: a preceding mentioning body holds a backslash
+    continuation chain longer than `_CONTINUATION_JOIN_MAX_LINES`, so both
+    joins stop before the chain's terminator and a write target at its end
+    cannot be extracted. The former behaviour returned no join and the
+    run-id rule accepted (a fail-open); the body-level predicate now
+    refuses the body instead. The raw arm does not model heredoc payload
+    lines, so a >64 raw run that walks into a payload is also refused (a
+    documented fail-closed over-refusal). The remediation is to split the
+    chain into shorter logical lines."""
+    return Refusal(
+        step.run_id_line or step.uses_line,
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job has a "
+        "backslash continuation chain longer than the physical-line analysis bound "
+        f"({_CONTINUATION_JOIN_MAX_LINES} lines), so a joined command's write targets "
+        "cannot be extracted (refusing rather than guessing; split the chain into "
+        "shorter logical lines)",
+    )
+
+
 def _run_id_unmodelled_write_refusal(
     step: ArtifactStep, body: RunBody, match: tuple[str, str | None, bool]
 ) -> Refusal:
@@ -7048,7 +7166,9 @@ def _refuse_github_env_run_id_write(
     assigns (its `env:` wins over a `$GITHUB_ENV` write). Every line of every
     preceding mentioning body is accounted: a line that references the env
     file must be a modelled write with an extractable, classified payload, or
-    the download refuses."""
+    the download refuses; a body holding a continuation chain longer than
+    the joins' analysis bound is refused fail-closed before the per-line walk
+    (`_run_id_continuation_bound_refusal`, issue #350e)."""
     if step.run_id is None:
         return
     head = _env_reference(step.run_id)
@@ -7086,6 +7206,22 @@ def _refuse_github_env_run_id_write(
         continuation_pending = _whole_body_continuation_state(
             lines, body.scalar_content_indent, payload_lines
         )
+        # Issue #350e: a chain longer than the joins' analysis bound is
+        # refused fail-closed instead of yielding no join (either join's
+        # `[]` is a fail-open today, so either arm refuses). The predicate
+        # is computed once per body over non-payload lines — the same head
+        # set the joins are consulted for — and shares each join's bound
+        # decision through the helpers, so the guard cannot drift from the
+        # join it guards.
+        if any(
+            _raw_continuation_bound_exceeded(lines, bound_index)
+            or _bash_continuation_bound_exceeded(
+                lines, bound_index, continuation_pending
+            )
+            for bound_index in range(len(lines))
+            if bound_index not in payload_lines
+        ):
+            raise _run_id_continuation_bound_refusal(step, body)
         modelled_positions = {(hit.index, hit.column) for hit in assignments}
         relevant_names = _relevant_shell_names(
             flip_targets, aliases, assignments, lines, payload_lines
