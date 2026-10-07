@@ -1053,11 +1053,13 @@ body-level predicate over non-payload lines shares each join's bound walk
 (`_raw_continuation_bound_exceeded` / `_bash_continuation_bound_exceeded`,
 `raw or bash`), and a chain longer than the bound is refused by
 `_run_id_continuation_bound_refusal` instead of yielding no join. Measured
-at #350e (the continuation-bound fold): the fixture corpus is 801/801 cases
-(370 declare `base_exit`); the fold adds 7 fixtures (4 rejects — the dd
-split at n9 and n65, a benign 65-line over-refusal, and a blank-inflated
-over-refusal whose bash span exceeds the bound while the raw span does not
-— and 3 boundary accepts at 16, 64 and 64-pending-at-EOF lines), every one
+at #350e (the continuation-bound fold): the fixture corpus is 802/802 cases
+(371 declare `base_exit`); the fold adds 8 fixtures (5 rejects — the dd
+split at n9 and n65, a benign 65-line over-refusal, a blank-inflated
+over-refusal whose bash span exceeds the bound while the raw span does not,
+and a raw-arm-only payload crossing whose >64 raw run walks into a heredoc
+payload while the bash arm stays under the bound — and 3 boundary accepts
+at 16, 64 and 64-pending-at-EOF lines), every one
 `base_exit: 0`, so A12/A17 memberships and the scan floor are unchanged.
 The former boundary item (`chain|dd|n8` closed, `n9+` open) is closed:
 `n9..n64` now join and are caught by the existing write detection, and a
@@ -1109,7 +1111,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 801
+EXPECTED_MANIFEST_CASES = 802
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1127,7 +1129,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 370
+EXPECTED_BASE_VERDICT_CASES = 371
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign

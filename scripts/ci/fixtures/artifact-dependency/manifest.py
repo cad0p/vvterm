@@ -5595,7 +5595,10 @@ CASES = [
     # fail-open is closed fail-closed: chains up to 64 physical lines join
     # (and are caught by the existing write detection), and a longer chain
     # is refused by `_run_id_continuation_bound_refusal`. Every case is
-    # mention-bearing and device-bearing; all seven declare `base_exit: 0`.
+    # mention-bearing and device-bearing; all eight declare `base_exit: 0`.
+    # The raw-payload-crossing case (fold round 1, lens 1 F2) is the
+    # raw-arm-only shape: its >64 raw run walks into a heredoc payload while
+    # the bash arm stays under the bound, so it pins the predicate's raw arm.
     {
         "id": "reject-runid-github-env-write-continuation-chain-over-old-bound",
         "files": [
@@ -5669,6 +5672,17 @@ CASES = [
         "base_exit": 0,
         "excluded": 1,
         "diagnostics": []
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing.yml:95: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+        ]
     },
     # #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote
     # family. A single quote opened on an earlier body line and closed on

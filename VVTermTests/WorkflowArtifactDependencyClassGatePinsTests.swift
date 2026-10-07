@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 801
-    private static let expectedBaseVerdictCases = 370
+    private static let expectedManifestCases = 802
+    private static let expectedBaseVerdictCases = 371
     private static let expectedWorkflowFloor = 12
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
@@ -842,6 +842,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml",
         "accept-runid-github-env-write-continuation-chain-benign-mid-range.yml",
         "accept-runid-github-env-write-continuation-chain-benign-at-analysis-bound-eof.yml",
+        "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing.yml",
         // #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote
         // family (single quote opened on an earlier body line).
         "reject-runid-github-env-write-continuation-quote-crossline-canonical.yml",
