@@ -227,4 +227,149 @@ struct GhosttySurfaceCallbackContextTests {
         #expect(drained, "the deferred free block must run and release the context")
         app.cleanup()
     }
+
+    // MARK: - Pending clipboard request registry (#329)
+
+    /// #329 registry contract: a registered request is claimable exactly once;
+    /// a second claim of the same pointer must return false so a completion
+    /// cannot issue a second C call for the same request state.
+    @Test
+    func registryClaimRemovesEachPendingRequestExactlyOnce() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-claim")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let first = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        let second = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer {
+            first.deallocate()
+            second.deallocate()
+        }
+
+        #expect(context.registerPendingClipboardRequest(state: first, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.registerPendingClipboardRequest(state: second, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.claimPendingClipboardRequest(first), "the first claim must consume the entry")
+        #expect(context.claimPendingClipboardRequest(first) == false, "a second claim must fail")
+        #expect(context.claimPendingClipboardRequest(second), "the other entry must still be claimable")
+        #expect(context.drainPendingClipboardRequests().isEmpty, "every claim must remove exactly its own entry")
+    }
+
+    /// #329 registry contract: the drain removes what is pending once and
+    /// returns nothing on the second call — the property that makes a teardown
+    /// drain idempotent.
+    @Test
+    func registryDrainReturnsRemainingEntriesOnceAndThenEmpties() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-drain")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let first = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        let second = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer {
+            first.deallocate()
+            second.deallocate()
+        }
+
+        #expect(context.registerPendingClipboardRequest(state: first, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.registerPendingClipboardRequest(state: second, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.claimPendingClipboardRequest(first))
+
+        let drained = context.drainPendingClipboardRequests()
+        #expect(drained.count == 1, "the drain must return the remaining entry once")
+        #expect(drained.first?.state == second)
+        #expect(context.drainPendingClipboardRequests().isEmpty, "a second drain must return nothing")
+    }
+
+    /// #329 registry contract: `invalidate()` must not clear the registry, and
+    /// the drain must ignore `isValid`. This is the load-bearing invariant of
+    /// the deferred `deinit` path, which invalidates the context synchronously
+    /// and drains later on the main queue.
+    @Test
+    func registryDrainReturnsEntriesAfterInvalidation() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-invalidate-drain")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let pending = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer { pending.deallocate() }
+
+        #expect(context.registerPendingClipboardRequest(state: pending, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        context.invalidate()
+        #expect(context.resolve() == nil, "positive control: invalidation must suppress resolution")
+
+        let drained = context.drainPendingClipboardRequests()
+        #expect(drained.count == 1, "invalidate() must not clear the registry: the deferred drain still owes a release")
+        #expect(drained.first?.state == pending)
+        #expect(drained.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+    }
+
+    /// #329 registry contract: a registration that arrives after invalidation
+    /// is a no-op — no free path can drain an entry added after the context
+    /// died, so admitting one would retain the core's request state forever.
+    @Test
+    func registryRegisterAfterInvalidationIsANoOp() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-late-register")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let late = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer { late.deallocate() }
+
+        context.invalidate()
+        #expect(
+            context.registerPendingClipboardRequest(state: late, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE) == false,
+            "register must report false once the context is invalid"
+        )
+        #expect(context.drainPendingClipboardRequests().isEmpty, "an invalidated context must not accept new entries")
+    }
+
+    /// #329 registry contract: the drain's returned pairs carry the registered
+    /// kind, so the teardown telemetry and the deny completion can label each
+    /// release correctly.
+    @Test
+    func registryDrainCarriesTheRegisteredKind() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-kinds")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let paste = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        let osc52Read = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer {
+            paste.deallocate()
+            osc52Read.deallocate()
+        }
+
+        #expect(context.registerPendingClipboardRequest(state: paste, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.registerPendingClipboardRequest(state: osc52Read, kind: GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ))
+
+        let drained = context.drainPendingClipboardRequests()
+        let kinds = Dictionary(uniqueKeysWithValues: drained.map { ($0.state, $0.kind) })
+        #expect(kinds[paste] == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(kinds[osc52Read] == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ)
+    }
 }

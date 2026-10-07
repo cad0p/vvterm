@@ -10,7 +10,9 @@
 //
 //  #327 extends this file with P-E (the clipboard-confirmation resolve guards)
 //  and P-F (prompt title + default-button parity), and with P-G (the
-//  completion gate's captured-handle comparison).
+//  completion gate's captured-handle comparison). #329 extends it with P-H
+//  (the teardown drain ordering, the completion's claim discipline, the
+//  per-branch registration order, and the registry invariants).
 //
 //  WHAT THESE PINS ASSERT
 //    P-A  repo-wide: no `Unmanaged<GhosttyTerminalView>` cast remains anywhere
@@ -43,6 +45,15 @@
 //         drop-path `else` between them — the half the behavioural seam-death
 //         test cannot discriminate (`cleanup()` invalidates the context first,
 //         so deleting only the comparison stays green there).
+//    P-H  (#329) both `Ghostty.Surface` free paths order invalidate → drain →
+//         `ghostty_surface_free` (the deinit drain inside
+//         `withExtendedLifetime(context)`); `complete` orders its nil-state
+//         guard → claim → C call with the claim's guard `else` between them;
+//         both `confirmReadClipboard` branches register after their own resolve
+//         guard (the prompt branch also after the payload copy); and
+//         `invalidate()` never clears the registry while the drain never
+//         consults `isValid`, never calls C under the lock, and keeps the deny
+//         literal arguments.
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
@@ -72,6 +83,13 @@
 //    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
 //         completion gate (keeping the resolve) → the comparison count drops
 //         to 0.
+//    P-H  (#329, each mutation verified on a mutated source copy with
+//         `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`): delete the free-path drain or
+//         move it after the free → P-H1; delete the claim or discard its result
+//         with `_ =` → P-H2; delete a branch registration or move it above its
+//         resolve guard → P-H3; make `invalidate()` clear the registry, make
+//         the drain consult `isValid`, move the drain's C call under `withLock`,
+//         or change its deny arguments → P-H4.
 
 import Foundation
 import Testing
@@ -110,6 +128,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     private static let appSource = "VVTerm/GhosttyTerminal/Ghostty.App.swift"
     private static let surfaceSource = "VVTerm/GhosttyTerminal/Ghostty.Surface.swift"
+    private static let contextSource = "VVTerm/GhosttyTerminal/Ghostty.SurfaceCallbackContext.swift"
     private static let renderingSetupSource = "VVTerm/GhosttyTerminal/GhosttyRenderingSetup.swift"
     private static let iOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+iOS.swift"
     private static let macOSViewSource = "VVTerm/GhosttyTerminal/GhosttyTerminalView+macOS.swift"
@@ -562,6 +581,260 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         #expect(
             Self.occurrences(of: "context.resolve()", in: between).isEmpty,
             "P-G: no further resolve may sit between the handle comparison and the completion"
+        )
+    }
+
+    // MARK: - P-H: the #329 teardown drain and its registry
+
+    /// #329 ordering on both free paths: `callbackContext.invalidate()` <
+    /// drain < `ghostty_surface_free`, and the deferred `deinit` drain sits
+    /// inside the `withExtendedLifetime(context)` block. P-C already pins
+    /// invalidate < free; this pin adds the drain that releases the in-flight
+    /// clipboard request while the surface handle is still valid.
+    @Test
+    func testPHSurfaceDrainsPendingClipboardRequestsBeforeEveryFree() throws {
+        let text = Self.strippingComments(try source(Self.surfaceSource))
+
+        let freeAnchor = try #require(
+            Self.occurrences(of: "func free()", in: text).first,
+            "P-H: Surface must keep its synchronous free()"
+        )
+        let freeBody = try Self.bracedBlock(after: freeAnchor, in: text)
+        let freeInvalidate = try #require(
+            text.range(of: "callbackContext.invalidate()", range: freeBody),
+            "P-H: free() must invalidate the context"
+        )
+        let freeDrain = try #require(
+            text.range(of: "drainPendingClipboardRequests(", range: freeBody),
+            "P-H: free() must drain the pending clipboard requests"
+        )
+        let freeCall = try #require(
+            text.range(of: "ghostty_surface_free(", range: freeBody),
+            "P-H: free() must call ghostty_surface_free"
+        )
+        #expect(
+            freeInvalidate.lowerBound < freeDrain.lowerBound,
+            "P-H: free() must invalidate before the teardown drain"
+        )
+        #expect(
+            freeDrain.lowerBound < freeCall.lowerBound,
+            "P-H: free()'s drain must run before ghostty_surface_free (the C completion needs the live surface handle)"
+        )
+
+        let deinitAnchor = try #require(
+            Self.occurrences(of: "deinit", in: text).first,
+            "P-H: Surface must keep its deinit"
+        )
+        let deinitBody = try Self.bracedBlock(after: deinitAnchor, in: text)
+        let deinitInvalidate = try #require(
+            text.range(of: "callbackContext.invalidate()", range: deinitBody),
+            "P-H: deinit must invalidate the context"
+        )
+        let asyncAnchor = try #require(
+            text.range(of: "DispatchQueue.main.async", range: deinitBody),
+            "P-H: deinit must defer the free to the main queue"
+        )
+        let asyncBody = try Self.bracedBlock(after: asyncAnchor, in: text)
+        let retainAnchor = try #require(
+            text.range(of: "withExtendedLifetime(context)", range: asyncBody),
+            "P-H: the deferred free block must retain the captured context"
+        )
+        let retainBody = try Self.bracedBlock(after: retainAnchor, in: text)
+        let deinitDrain = try #require(
+            text.range(of: "drainPendingClipboardRequests(", range: retainBody),
+            "P-H: the deferred block must drain inside withExtendedLifetime(context)"
+        )
+        let deinitFree = try #require(
+            text.range(of: "ghostty_surface_free(", range: retainBody),
+            "P-H: the deferred block must call ghostty_surface_free inside withExtendedLifetime(context)"
+        )
+        #expect(
+            deinitInvalidate.lowerBound < deinitDrain.lowerBound,
+            "P-H: deinit must invalidate before the deferred drain"
+        )
+        #expect(
+            deinitDrain.lowerBound < deinitFree.lowerBound,
+            "P-H: the deferred drain must run before ghostty_surface_free"
+        )
+    }
+
+    /// #329 claim discipline in `complete`: the nil-state guard precedes the
+    /// claim, the claim's guard `else`/`return` sits between the claim and the
+    /// C completion, and the claim result is consumed (a `_ =` discard would
+    /// let the double completion the claim exists to prevent).
+    @Test
+    func testPHCompletionClaimsBeforeTheCCompletion() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let completeAnchor = try #require(
+            Self.occurrences(of: "func complete(", in: appText).first,
+            "P-H: Ghostty.App.swift must keep complete("
+        )
+        let completeBody = try Self.bracedBlock(after: completeAnchor, in: appText)
+
+        let nilStateGuard = try #require(
+            appText.range(of: "guard let state else", range: completeBody),
+            "P-H: complete must keep its nil-state guard"
+        )
+        let claim = try #require(
+            appText.range(of: "claimPendingClipboardRequest(", range: completeBody),
+            "P-H: complete must claim the registered request"
+        )
+        let cCall = try #require(
+            appText.range(of: "ghostty_surface_complete_clipboard_request(", range: completeBody),
+            "P-H: complete must call the C completion"
+        )
+
+        #expect(
+            nilStateGuard.lowerBound < claim.lowerBound,
+            "P-H: the nil-state guard must precede the claim (never claim a nil state)"
+        )
+        #expect(
+            claim.lowerBound < cCall.lowerBound,
+            "P-H: the claim must precede the C completion"
+        )
+
+        let between = String(appText[claim.upperBound..<cCall.lowerBound])
+        #expect(
+            Self.occurrences(of: "else {", in: between).count == 1,
+            "P-H: the claim must own a guard else-branch before the C completion"
+        )
+        #expect(
+            Self.occurrences(of: "return", in: between).count >= 1,
+            "P-H: a failed claim must return, never fall through to the C completion"
+        )
+        #expect(
+            Self.occurrences(of: "_ =", in: appText, range: completeBody).isEmpty,
+            "P-H: the claim result must be consumed by its guard, never discarded with `_ =`"
+        )
+    }
+
+    /// #329 registration per branch: the deny branch resolves its own context
+    /// before it registers and completes; the prompt branch resolves, copies
+    /// the payload, registers, then schedules the `Task`. P-E pins
+    /// resolve-before-complete; this pin adds resolve-before-register, so a
+    /// dead callback frame can never register a request that no surface free
+    /// can drain.
+    @Test
+    func testPHClipboardRegistrationSitsAfterEachResolveGuard() throws {
+        let appText = Self.strippingComments(try source(Self.appSource))
+        let confirmAnchor = try #require(
+            Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
+            "P-H: Ghostty.App.swift must keep confirmReadClipboard"
+        )
+        let confirmBody = try Self.bracedBlock(after: confirmAnchor, in: appText)
+
+        let routes = Self.flexibleOccurrences(
+            of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            routes.count == 2,
+            "P-H: both confirm branches must resolve through the context; found \(routes.count)"
+        )
+        let registrations = Self.occurrences(
+            of: "registerPendingClipboardRequest(",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            registrations.count == 2,
+            "P-H: both confirm branches must register their request; found \(registrations.count)"
+        )
+        let completions = Self.flexibleOccurrences(
+            of: "complete( surface:",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            completions.count == 2,
+            "P-H: confirmReadClipboard must keep its two completion sites; found \(completions.count)"
+        )
+        let payloadCopy = try #require(
+            Self.occurrences(of: "let payload = string.map", in: appText, range: confirmBody).first,
+            "P-H: the prompt branch must copy the payload"
+        )
+        let taskAnchor = try #require(
+            Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
+            "P-H: the confirmation callback must dispatch its completion through a Task"
+        )
+
+        guard routes.count == 2, registrations.count == 2, completions.count == 2 else { return }
+
+        // Deny branch: resolve → register → complete.
+        #expect(
+            routes[0].lowerBound < registrations[0].lowerBound,
+            "P-H: the deny branch must resolve before it registers"
+        )
+        #expect(
+            registrations[0].lowerBound < completions[0].lowerBound,
+            "P-H: the deny branch must register before it completes"
+        )
+
+        // Prompt branch: resolve → copy → register → Task.
+        #expect(
+            routes[1].lowerBound < payloadCopy.lowerBound,
+            "P-H: the prompt branch must resolve before it copies the payload"
+        )
+        #expect(
+            payloadCopy.lowerBound < registrations[1].lowerBound,
+            "P-H: the prompt branch must copy the payload before it registers"
+        )
+        #expect(
+            registrations[1].lowerBound < taskAnchor.lowerBound,
+            "P-H: the prompt branch must register before it schedules the Task"
+        )
+    }
+
+    /// #329 registry invariants: `invalidate()` must not clear the registry
+    /// (the deferred drain still owes each entry's release), the drain must not
+    /// consult `isValid`, no C completion may sit inside a `withLock` body, and
+    /// the drain's deny literal must stay `("", pending.state, true)`.
+    @Test
+    func testPHRegistryInvariants() throws {
+        let contextText = Self.strippingComments(try source(Self.contextSource))
+        let surfaceText = Self.strippingComments(try source(Self.surfaceSource))
+
+        let invalidateAnchor = try #require(
+            Self.occurrences(of: "func invalidate()", in: contextText).first,
+            "P-H: SurfaceCallbackContext must keep invalidate()"
+        )
+        let invalidateBody = try Self.bracedBlock(after: invalidateAnchor, in: contextText)
+        #expect(
+            Self.occurrences(of: "pendingClipboardRequests", in: contextText, range: invalidateBody).isEmpty,
+            "P-H: invalidate() must not clear the registry"
+        )
+
+        let drainAnchor = try #require(
+            Self.occurrences(of: "func drainPendingClipboardRequests()", in: contextText).first,
+            "P-H: SurfaceCallbackContext must keep drainPendingClipboardRequests()"
+        )
+        let drainBody = try Self.bracedBlock(after: drainAnchor, in: contextText)
+        #expect(
+            Self.occurrences(of: "isValid", in: contextText, range: drainBody).isEmpty,
+            "P-H: the drain must ignore isValid (the deinit path invalidates before it drains)"
+        )
+
+        for (file, text) in [(Self.contextSource, contextText), (Self.surfaceSource, surfaceText)] {
+            for lockAnchor in Self.occurrences(of: "withLock", in: text) {
+                guard let lockBody = try? Self.bracedBlock(after: lockAnchor, in: text) else { continue }
+                #expect(
+                    Self.occurrences(
+                        of: "ghostty_surface_complete_clipboard_request(",
+                        in: text,
+                        range: lockBody
+                    ).isEmpty,
+                    "P-H: no C completion may sit inside a withLock body in \(file)"
+                )
+            }
+        }
+
+        #expect(
+            Self.occurrences(
+                of: "ghostty_surface_complete_clipboard_request(surface, \"\", pending.state, true)",
+                in: surfaceText
+            ).count == 1,
+            "P-H: the drain must release each entry with the deny literal (\"\", pending.state, true)"
         )
     }
 
