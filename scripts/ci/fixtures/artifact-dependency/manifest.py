@@ -5615,7 +5615,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -5636,7 +5636,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -5647,7 +5647,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml:92: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing)"
+            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml:92: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {

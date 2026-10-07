@@ -4971,14 +4971,19 @@ def _joined_sed_segments(
     ]
 
 
-# The continuation joins' analysis bound. The measured corpora stay far
-# below it: the fixture corpus's longest chain is 2 gate-pending lines (3
-# visible), the workflow corpus's longest is 14 gate-pending / 15 physical
-# (`ios-testflight.yml`'s `xcodebuild archive` chain, in a job the run-id
-# rule never scans), and the #350 item 12 battery's largest probed shape is
-# 11. 64 is an analysis bound, not a bash guarantee: a chain longer than it
-# is refused by `_run_id_continuation_bound_refusal` rather than silently
-# yielding no join (the former `>8` fail-open, issue #350e).
+# The continuation joins' analysis bound. The pre-#350e fixture corpus's
+# longest chain was 2 gate-pending lines (3 visible); the fold's boundary
+# fixtures probe 16, 63 (64 physical), 64-pending-at-body-final-EOF and 65
+# physical lines. The workflow corpus's longest is 14 gate-pending / 15
+# physical (`ios-testflight.yml`'s `xcodebuild archive` chain, in a
+# no-download job the run-id rule never scans). The #350 item 12 battery's
+# documented rows span n8-n11 and its wider probe measured `n9..n66`
+# ACCEPT at the former cap 8 (the fail-open this fold closes); at the
+# shipped bound `n9..n64` join and are caught by the existing detection
+# while `n65+` are refused fail-closed. 64 is an analysis bound, not a bash
+# guarantee: a chain longer than it is refused by
+# `_run_id_continuation_bound_refusal` rather than silently yielding no
+# join (the former `>8` fail-open, issue #350e).
 _CONTINUATION_JOIN_MAX_LINES = 64
 
 
@@ -6415,7 +6420,8 @@ def _run_id_continuation_bound_refusal(step: ArtifactStep, body: RunBody) -> Ref
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job has a "
         "backslash continuation chain longer than the physical-line analysis bound "
         f"({_CONTINUATION_JOIN_MAX_LINES} lines), so a joined command's write targets "
-        "cannot be extracted (refusing rather than guessing)",
+        "cannot be extracted (refusing rather than guessing; split the chain into "
+        "shorter logical lines)",
     )
 
 
