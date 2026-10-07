@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): the downloader token in a comment is text; the tokenizer
+# stops at the unquoted `#`, so the body accepts.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          # gh run download 12345 -n vvterm-build
+          set -euo pipefail
+          echo "no downloader here"

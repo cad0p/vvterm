@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): the downloader inside a quoted `bash -c` argument is one
+# tokenized word, matched only by branch B (substring containment).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash -c "gh run download 12345 -n vvterm-build"

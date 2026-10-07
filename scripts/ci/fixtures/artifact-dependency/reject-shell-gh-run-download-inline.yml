@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a plain inline `gh run download` and the
+# `gh -R owner/repo run download` spelling (branch A with an operand between
+# `gh` and the `run download` pair); two steps, two diagnostics.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh run download 12345 -n vvterm-build
+      - run: gh -R owner/repo run download 12345 -n vvterm-build

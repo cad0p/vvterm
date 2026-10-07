@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a stdin redirect's target word is dropped by the argv
+# operand walk, so the delegation predicate runs on every word token.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash < scripts/ci/shell-evil.sh

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a backslash continuation split after `gh` and after `run`;
+# only the bash-faithful join produces the adjacency, so each step yields one
+# diagnostic.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          gh \
+            run download 12345 -n vvterm-build
+      - run: |
+          gh run \
+            download 67890 -n vvterm-build

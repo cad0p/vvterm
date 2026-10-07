@@ -7275,4 +7275,166 @@ CASES = [
         "excluded": 1,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #399: shell artifact downloaders in run bodies and delegated
+    # `scripts/ci/*.sh` scripts. Every reject case pins its exact diagnostic
+    # (the token rendering, the nested `scripts/ci/<name>.sh:<line>`
+    # provenance, the unresolved-delegation and depth-cap messages, the
+    # delegated-script floor); every case declares the measured base verdict
+    # of the pre-#399 gate (`base_exit: 0`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-gh-run-download-inline",
+        "files": ["reject-shell-gh-run-download-inline.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-inline.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+            "reject-shell-gh-run-download-inline.yml:10: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-quoted-arg",
+        "files": ["reject-shell-gh-run-download-quoted-arg.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-quoted-arg.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-continuation",
+        "files": ["reject-shell-gh-run-download-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-continuation.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+            "reject-shell-gh-run-download-continuation.yml:12: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-gh-run-download",
+        "files": ["reject-shell-delegation-gh-run-download.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-gh-run-download.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cmdsub",
+        "files": ["reject-shell-delegation-cmdsub.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cmdsub.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-stdin-redirect",
+        "files": ["reject-shell-delegation-stdin-redirect.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-stdin-redirect.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-unresolvable",
+        "files": ["reject-shell-delegation-unresolvable.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-unresolvable.yml:8: delegation to `scripts/ci/shell-missing.sh` — the gate cannot resolve the referenced script (refusing rather than skipping)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-transitive",
+        "files": ["reject-shell-delegation-transitive.yml"],
+        "extra_files": {
+            "scripts/ci/shell-hop-a.sh": "shell-hop-a.sh",
+            "scripts/ci/shell-hop-b.sh": "shell-hop-b.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-transitive.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-hop-b.sh:7` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-depth-cap",
+        "files": ["reject-shell-delegation-depth-cap.yml"],
+        "extra_files": {
+            "scripts/ci/shell-chain-1.sh": "shell-chain-1.sh",
+            "scripts/ci/shell-chain-2.sh": "shell-chain-2.sh",
+            "scripts/ci/shell-chain-3.sh": "shell-chain-3.sh",
+            "scripts/ci/shell-chain-4.sh": "shell-chain-4.sh",
+            "scripts/ci/shell-chain-5.sh": "shell-chain-5.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-depth-cap.yml:9: delegation to `scripts/ci/shell-chain-5.sh` from `scripts/ci/shell-chain-4.sh:6` exceeds the nested-delegation depth cap (4) — the gate cannot prove the referenced script's body (refusing rather than skipping)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-floor",
+        "files": [
+            "accept-needs-flow.yml",
+            "accept-needs-bare.yml",
+            "accept-needs-after-steps.yml",
+            "accept-needs-same-indent.yml",
+            "accept-needs-quoted.yml",
+            "accept-bom-quoted-jobs.yml",
+            "accept-templated-upload.yml",
+            "accept-producer-is-consumer.yml",
+            "accept-cross-run-run-id.yml",
+            "accept-block-scalar.yml",
+            "accept-quoted-uses.yml",
+            "accept-run-id-with-needs.yml",
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "floor": True,
+        "diagnostics": [
+            "delegated-script floor: only 0 distinct delegated script(s) resolved from workflow run bodies; the floor is 6 — update the floor constant only if the delegations were intentionally removed (refusing rather than passing a tree where the delegation scan is vacuous)",
+        ],
+    },
+    {
+        "id": "accept-shell-run-body-comment-token",
+        "files": ["accept-shell-run-body-comment-token.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-shell-benign-delegation",
+        "files": ["accept-shell-benign-delegation.yml"],
+        "extra_files": {"scripts/ci/shell-benign.sh": "shell-benign.sh"},
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-shell-delegation-cycle",
+        "files": ["accept-shell-delegation-cycle.yml"],
+        "extra_files": {
+            "scripts/ci/shell-cycle-a.sh": "shell-cycle-a.sh",
+            "scripts/ci/shell-cycle-b.sh": "shell-cycle-b.sh",
+        },
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-shell-delegation-prefixed-path",
+        "files": ["accept-shell-delegation-prefixed-path.yml"],
+        "extra_files": {"scripts/ci/shell-benign.sh": "shell-benign.sh"},
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
 ]
