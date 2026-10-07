@@ -62,10 +62,19 @@ final class BrowserMFACeremony: NSObject {
     private let logger: Logger
     /// The in-app browser presenter.
     private let presenter: any BrowserMFAPresenting
+    /// Builds the loopback listener the ceremony starts. The production
+    /// default is the real `BrowserMFAListener`; tests inject a stub so the
+    /// fail-fast path needs no loopback bind (issue #401).
+    private let makeListener: (Logger) -> any BrowserMFAListening
 
-    init(logging: any TeleportLogging, presenter: any BrowserMFAPresenting) {
+    init(
+        logging: any TeleportLogging,
+        presenter: any BrowserMFAPresenting,
+        makeListener: @escaping (Logger) -> any BrowserMFAListening = { BrowserMFAListener(logger: $0) }
+    ) {
         self.logger = logging.logger(category: "TeleportBrowserMFA")
         self.presenter = presenter
+        self.makeListener = makeListener
         super.init()
     }
 
@@ -81,7 +90,7 @@ final class BrowserMFACeremony: NSObject {
         host: String
     ) async throws -> Proto_BrowserMFAResponse {
         #if canImport(Network)
-        let listener = BrowserMFAListener(logger: logger)
+        let listener = makeListener(logger)
         var safariHandle: (any BrowserMFASessionHandle)?
         defer {
             safariHandle?.cancel()

@@ -73,7 +73,7 @@ nonisolated enum BrowserMFAListenerError: Error, LocalizedError {
 /// `nonisolated` + `@unchecked Sendable`: every piece of mutable state is
 /// guarded by `stateLock`, and the Network callbacks run on the private
 /// serial `ioQueue`.
-nonisolated final class BrowserMFAListener: NSObject, @unchecked Sendable {
+nonisolated final class BrowserMFAListener: NSObject, BrowserMFAListening, @unchecked Sendable {
 
     // MARK: Configuration
 
