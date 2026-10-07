@@ -94,8 +94,11 @@
 //         behavioural (seam-death test); move the drain after the free → pin
 //         P-H1; delete the claim → behavioural (no-double-complete test, a
 //         clean pre-teardown assertion since fold round 1); discard the claim
-//         result with `_ =` → pin P-H2; delete a branch registration → pin
-//         P-H3; move a registration above its resolve guard → pin P-H3
+//         result with `_ =` → pin P-H2; make `complete`'s `context` parameter
+//         optional again → pin P-H2 (the non-optional-context assertion);
+//         delete the deny-branch registration → pin P-H3; delete the
+//         prompt-branch registration → behavioural (seam-death test, CF-4);
+//         move a registration above its resolve guard → pin P-H3
 //         (non-minimal mutation; P-B/P-E also red on the extra route); make
 //         `invalidate()` clear the registry → behavioural (registry test 3);
 //         make the drain consult `isValid` → pin P-H4 (measured in fold round
