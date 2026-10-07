@@ -92,13 +92,15 @@
 //  condition or error anchor plus the next four trimmed lines, the anchor
 //  line included: the fast-forward-failure group carries its `exit 1`
 //  inline), not control-flow-proven; the Trap-3 diagnostic assertion reads
-//  the comment-stripped code lines, so a commented-out echo does not
-//  satisfy it; the three `probe-passed` writes are bound one-per-region
+//  the comment-cut code lines (the per-line cutter, so a full-line or a
+//  trailing comment cannot satisfy it — fold round 2, closure-lens
+//  finding 3; CF-21); the three `probe-passed` writes are bound one-per-region
 //  (discovery / `update_existing_pr()` / after `gh pr create`), so a
 //  count-preserving relocation reds; and the budget guard also reads
-//  bare-`-` step anchors (its block-scalar helper's step-end scan still
-//  stops only at `- ` items, so a bare-dash sibling sequence is a documented
-//  over-read shape that fails closed on duplicate `run:` keys). Residual
+//  bare-`-` step anchors, with the block-scalar helper's step-end scan
+//  stopping at any list item at the step's own indentation (`- ` or bare
+//  `-`), so a bare-dash sibling boundary is a real boundary rather than an
+//  over-read (fold round 2, closure-lens finding 2; CF-20). Residual
 //  bounds: the heredoc backstop is textual —
 //  it requires exactly one `<<'PY'` opener (unconditional: an unrelated second
 //  `PY` heredoc in this script reds fail-closed and requires re-deriving the
@@ -556,10 +558,12 @@ struct WorkflowXcodebuildFlagPinsTests {
                 == #"echo "create-bump-pr" > "$RUNNER_TEMP/ghostty-probe-step""#,
             "the `\(stepName)` step must keep the failing-step marker as its first code line: the alarm step names that marker even when the script cannot start — re-derive this pin (issue #396)"
         )
-        // Fold round 1 (impl lens 2, MINOR): assert on the comment-stripped
-        // code lines — a commented-out echo is not a visible diagnostic.
+        // Fold round 1 (impl lens 2, MINOR) + fold round 2 (closure lens
+        // finding 3): assert on the comment-cut code lines — a commented-out
+        // echo, including one trailing a real statement, is not a visible
+        // diagnostic.
         #expect(
-            codeLines.contains { $0.contains(#"echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'""#) },
+            codeLines.contains { Self.cuttingLineComment($0).contains(#"echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'""#) },
             "the `\(stepName)` step must keep the `inputs.create_bump_pr` diagnostic as a visible (comment-stripped) code line (the documented Trap-3 dispatch-mishap diagnostic) — re-derive this pin (issue #396)"
         )
 
@@ -898,7 +902,9 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// expressions and inline/folded `run:` scalars are unreadable by
     /// `dedentedRunBlockScalar` (one inline expression-bearing `run:` today,
     /// 104 chars). Fold round 1 (impl lens 3, MINOR): both step-anchor
-    /// spellings are accepted (`- name: …` and a bare `-`).
+    /// spellings are accepted (`- name: …` and a bare `-`). Fold round 2
+    /// (closure-lens MINOR): the helper's step-end scan stops at both
+    /// spellings too, so an adjacent bare-dash step boundary is respected.
     @Test
     func testEveryExpressionBearingRunScalarStaysUnderTheRepoBudget() throws {
         let workflowFiles = try Self.listFiles(in: ".github/workflows", extensions: ["yml", "yaml"])
@@ -1047,7 +1053,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// so the scanner anchors to the step's own key indent (the item indent +
     /// 2) and fails closed on anything but exactly one `run: |`.
     /// Text-level YAML heuristic: the step ends at the next list item at the
-    /// step's own indentation; the block's own indentation is fixed by its
+    /// step's own indentation (either `- ` or a bare `-`, fold round 2); the
+    /// block's own indentation is fixed by its
     /// first non-empty line, and clip chomping leaves exactly one final
     /// newline.
     private static func dedentedRunBlockScalar(in source: String, stepLineIndex: Int) -> String? {
@@ -1063,7 +1070,7 @@ struct WorkflowXcodebuildFlagPinsTests {
             let line = lines[probe]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let indent = line.prefix { $0 == " " }.count
-            if trimmed.hasPrefix("- "), indent == stepIndent {
+            if (trimmed.hasPrefix("- ") || trimmed == "-"), indent == stepIndent {
                 stepEnd = probe
                 break
             }
