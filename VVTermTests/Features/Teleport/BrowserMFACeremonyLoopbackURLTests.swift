@@ -160,13 +160,36 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// open `https://<host>/web/mfa/browser/<request_id>`. A wrong path or a
     /// truncated request id sends the user to a page that cannot approve the
     /// pending request.
+    ///
+    /// Host-state tolerance, not retry machinery: the wait for
+    /// `presenter.presentedURLs` is `approvalPagePresentationTolerance` (45 s),
+    /// not the 15 s this test originally raced with. `BrowserMFACeremony` is
+    /// `@MainActor`, and on a loaded simulator runner the listener bind plus
+    /// the ceremony's MainActor hops can be starved far past 15 s — measured
+    /// 2026-10-07 (PR #395, required `unit-tests` job of run 37577383467, job
+    /// 112652747154): this test ran 103.073 s and `presentedURLs` was still
+    /// empty when the 15 s budget expired, while the suite's next case bound
+    /// its listener and passed in 1.4 s. The class is recorded in #326 (the
+    /// fail-fast budget 2 s → 30 s) and #336/#337 (four sequential 15 s
+    /// listener binds starved ≈65 s → a 20 s tolerance). 45 s is 3× the
+    /// product's 15 s single-listener-start timeout (`BrowserMFAListener`
+    /// `.defaultStartTimeout`) and keeps headroom over the measured single-hop
+    /// starvation; it still discriminates, because the URL must be presented
+    /// before the bound (the `XCTUnwrap` below fails otherwise) and the
+    /// product's own listener deadline is 180 s, so the bound still proves
+    /// prompt presentation rather than eventual. The observed failure spent
+    /// 103.073 s on a 15 s budget (the rest was the ceremony's cancel drain);
+    /// 45 s plus the same ≈88 s drain is ≈133 s, inside the job's 180 s
+    /// per-test allowance. Escalation (recorded, not implied): if a stall ever
+    /// survives 45 s, the next step is a structural gate on the ceremony's
+    /// progress, not another increase.
     func testCeremony_opensTheServerApprovalPageForTheChallengeRequestID() async throws {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
         let presenter = RecordingBrowserMFAPresenter()
         let ceremony = BrowserMFACeremony(logging: DefaultTeleportLogging(), presenter: presenter)
 
         let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
-        let deadline = ContinuousClock.now + .seconds(15)
+        let deadline = ContinuousClock.now + Self.approvalPagePresentationTolerance
         while presenter.presentedURLs.isEmpty, ContinuousClock.now < deadline {
             await Task.yield()
         }
@@ -248,6 +271,11 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// The host-state-tolerant budget for the fail-fast race above. See that
     /// test's doc comment for the measurement and the escalation rule.
     private static let failFastBudget: Duration = .seconds(30)
+
+    /// The host-state-tolerant wait for the approval-page presentation in
+    /// `testCeremony_opensTheServerApprovalPageForTheChallengeRequestID`. See
+    /// that test's doc comment for the measurement and the escalation rule.
+    private static let approvalPagePresentationTolerance: Duration = .seconds(45)
 
     /// A gRPC stub that answers the challenge request with a real
     /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.
