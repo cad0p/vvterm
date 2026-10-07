@@ -167,7 +167,8 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// `@MainActor`, and on a loaded simulator runner the listener bind plus
     /// the ceremony's MainActor hops can be starved far past 15 s — measured
     /// 2026-10-07 (PR #395, required `unit-tests` job of run 37577383467, job
-    /// 112652747154): this test ran 103.073 s and `presentedURLs` was still
+    /// 112652747154; tracked as issue #397): this test ran 103.073 s and
+    /// `presentedURLs` was still
     /// empty when the 15 s budget expired, while the suite's next case bound
     /// its listener and passed in 1.4 s. The class is recorded in #326 (the
     /// fail-fast budget 2 s → 30 s) and #336/#337 (four sequential 15 s

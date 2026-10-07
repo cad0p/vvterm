@@ -61,12 +61,18 @@
 //  second step, an inline/folded scalar (`run: >-`, `run: |2`, `run: …`), a
 //  hard-coded indentation or a second step-level `run:` key all red the shape
 //  guard rather than pass. Residual bounds: the heredoc backstop is textual —
-//  it requires exactly one `<<'PY'` opener, each opener's first non-blank
-//  body line at column 0 and exactly one column-0 `PY` terminator after it —
-//  but it does not `ast.parse` the body or prove the injected marker text is
-//  reachable code; the `run:`/step scanner is a text heuristic that fails
-//  closed with a re-derive message when it cannot prove exactly one
-//  step-level key.
+//  it requires exactly one `<<'PY'` opener (unconditional: an unrelated second
+//  `PY` heredoc in this script reds fail-closed and requires re-deriving the
+//  pin), each opener's first non-blank body line at column 0 and exactly one
+//  column-0 `PY` terminator after it — but it does not `ast.parse` the body or
+//  prove the injected marker text is reachable code; the `run:`/step scanner
+//  is a text heuristic that fails closed with a re-derive message when it
+//  cannot prove exactly one step-level key; the pipeline cut is quote-unaware,
+//  so a `|` inside a quoted argument reds every flag assertion (fail-closed
+//  false red); and control flow is not modelled, so a pre-invocation `exit`
+//  with a computed status is invisible to the anchored re-exit assertion (a
+//  literal `exit 0` is rejected outright, because it would end the shard green
+//  with zero tests run).
 //
 //  The script corpus reuses the same YAML-comment stripper, and the two
 //  languages' quoting rules diverge: the stripper does not model bash
@@ -230,7 +236,10 @@ struct WorkflowXcodebuildFlagPinsTests {
         // Delegation: a real (non-comment) call with all three matrix values
         // inside the call's own argument list. Impl lens 2 (ev-6) passed the
         // old body-wide contains() with the arguments only in a trailing
-        // comment, so scope them to the call's comment-stripped continuation.
+        // comment, so scope them to the call's comment-stripped continuation;
+        // closure lens fold-1 finding 1: each call line is comment-cut too, so
+        // an argument parked in a trailing comment on the call line cannot
+        // satisfy the assertion.
         let codeLines = body.components(separatedBy: "\n").filter {
             let trimmed = $0.trimmingCharacters(in: .whitespaces)
             return !trimmed.isEmpty && !trimmed.hasPrefix("#")
@@ -248,7 +257,7 @@ struct WorkflowXcodebuildFlagPinsTests {
                 callLines.append(codeLines[callCursor])
             }
         }
-        let callText = callLines.joined(separator: "\n")
+        let callText = callLines.map(Self.cuttingLineComment).joined(separator: "\n")
         for argument in [
             "${{ matrix.shard.name }}",
             "${{ matrix.shard.needs-fixture }}",
@@ -359,6 +368,22 @@ struct WorkflowXcodebuildFlagPinsTests {
         #expect(
             exitLines.count == 1,
             "\(scriptPath) must re-exit with xcodebuild's captured status exactly once (`exit $XC_EXIT` or `exit \"$XC_EXIT\"`), found \(exitLines.count) matching statement(s) — re-derive this pin (issue #249)"
+        )
+
+        // Closure lens (fold round 1, finding 2): a pre-invocation `exit 0`
+        // ends the shard green with zero tests run, and the anchored re-exit
+        // assertion above cannot see it — this is a text pin with no
+        // control-flow model. The script's only literal exits are the two
+        // non-zero argument-validation exits and the re-exit, so reject a
+        // literal zero exit anywhere (a computed pre-invocation exit remains
+        // a named residual bound in the header).
+        let zeroExitLines = scriptLines.enumerated().filter {
+            $0.element.trimmingCharacters(in: .whitespaces)
+                .range(of: #"^exit\s+0$"#, options: .regularExpression) != nil
+        }
+        #expect(
+            zeroExitLines.isEmpty,
+            "\(scriptPath) must not contain a literal `exit 0` (found at line(s) \(zeroExitLines.map { String($0.offset + 1) }.joined(separator: ", "))): an early zero exit ends the shard green without running tests, and the anchored re-exit assertion cannot see it — re-derive this pin (issue #249)"
         )
 
         // The plist injection is the extraction's silent-break surface: an
