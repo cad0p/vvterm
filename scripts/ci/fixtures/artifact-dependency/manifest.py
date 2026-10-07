@@ -7748,7 +7748,8 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-shell-delegation-cd-deferred-function.yml:8: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cd-deferred-function.yml:10: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cd-deferred-function.yml:12: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
         ],
     },
     {

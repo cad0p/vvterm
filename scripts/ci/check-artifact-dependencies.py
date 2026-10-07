@@ -8464,11 +8464,13 @@ def _shell_segment_is_cd(
     return False
 
 
-# A function-definition opener: the segment's first word is `function`, or a
-# leading `name()`/`name(){` word, or `name` followed by a `()…` word
-# (`f () {`). Only the leading word(s) count, so a quoted `f()` argument
-# cannot flip the predicate.
+# A function-definition opener: a `function` keyword word, a `name()`/`name(){`
+# word, or `name` followed by a `()…` word (`f () {`). Every word position is
+# scanned, because a definition can follow a reserved word (`then f() { … }`,
+# `do f() { … }`, `{ f() { … }`); an argument-shaped `f()` mention is a
+# deliberate over-refusal only when the body also has a `cd` and a candidate.
 _SHELL_FUNCTION_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)")
+_SHELL_FUNCTION_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _shell_segment_defines_function(
@@ -8477,23 +8479,26 @@ def _shell_segment_defines_function(
     """True when the segment opens a function definition (fold round 2,
     N1c). The deferred-function rule needs this because a bash function body
     executes whenever the function is called, not where it is defined (the
-    closure re-lens' `f() { bash scripts/ci/evil.sh; } ; cd sub ; f` proof)."""
+    closure re-lens' `f() { bash scripts/ci/evil.sh; } ; cd sub ; f` proof).
+    Every word is scanned so `then f() { … }` and `function f` after a
+    reserved word are modeled too."""
     words = [
         _normalize_shell_word(token[1])
         for token in segment
         if token[0] == "word"
     ]
-    if not words:
-        return False
-    if words[0] == "function":
-        return True
-    if _SHELL_FUNCTION_DEF_RE.match(words[0]):
-        return True
-    return (
-        len(words) > 1
-        and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", words[0]) is not None
-        and words[1].startswith("()")
-    )
+    for index, word in enumerate(words):
+        if word == "function":
+            return True
+        if _SHELL_FUNCTION_DEF_RE.match(word):
+            return True
+        if (
+            index + 1 < len(words)
+            and _SHELL_FUNCTION_NAME_RE.match(word) is not None
+            and words[index + 1].startswith("()")
+        ):
+            return True
+    return False
 
 
 def _shell_body_has_cd(
