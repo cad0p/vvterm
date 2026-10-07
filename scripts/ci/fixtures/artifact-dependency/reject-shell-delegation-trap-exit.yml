@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 3, N10): a `trap` action executes at EXIT/ERR time,
+# so a candidate registered before the body's `cd` still runs in the
+# post-`cd` cwd. Four spellings: EXIT single-quoted, EXIT double-quoted with
+# the `cd` on the same line, ERR, and the `cd` inside the action itself.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          trap 'bash scripts/ci/shell-evil.sh' EXIT
+          cd sub
+      - run: |
+          trap "bash scripts/ci/shell-evil.sh" EXIT; cd sub
+      - run: |
+          trap 'bash scripts/ci/shell-evil.sh' ERR
+          cd sub
+      - run: |
+          trap 'cd sub; bash scripts/ci/shell-evil.sh' EXIT

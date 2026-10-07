@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 3, N14): the function name and its `()` are split
+# across a backslash continuation; only the bash-faithful join reads the
+# joined text as the definition opener `f()`.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          f \
+          () { bash scripts/ci/shell-evil.sh; }
+          cd sub
+          f

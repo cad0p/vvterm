@@ -7824,4 +7824,81 @@ CASES = [
         "base_exit": 0,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #399 fold round 3 (closure re-lens N10-N14): the deferred `trap`
+    # action (N10), the substitution-internal `cd` (N11), the ANSI-C
+    # delegation path (N12), the sourced-helper `cd` (N13) and the
+    # continuation-split function-definition opener (N14). Every reject
+    # case pins its exact diagnostic; every case declares `base_exit: 0`
+    # (the pre-#399 gate has no shell pass, so all five accepted).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-delegation-trap-exit",
+        "files": ["reject-shell-delegation-trap-exit.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-trap-exit.yml:10: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:13: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:15: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:18: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cmdsub-cd",
+        "files": ["reject-shell-delegation-cmdsub-cd.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cmdsub-cd.yml:9: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cmdsub-cd.yml:11: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cmdsub-cd.yml:13: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-ansic-path",
+        "files": ["reject-shell-delegation-ansic-path.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-ansic-path.yml:9: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-sourced-cd",
+        "files": ["reject-shell-delegation-sourced-cd.yml"],
+        "extra_files": {
+            "scripts/ci/helper.sh": "shell-source-cd.sh",
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-sourced-cd.yml:9: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-sourced-cd.yml:12: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-deferred-function-split",
+        "files": ["reject-shell-delegation-cd-deferred-function-split.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-deferred-function-split.yml:9: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+        ],
+    },
 ]
