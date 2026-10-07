@@ -87,7 +87,19 @@
 //  under the bound by hand), and the recorded expression-length note's own
 //  reading of whether non-expression `run` scalars are length-checked is
 //  unresolved — 0 such scalars exceed 10,000 today, so the guard's verdict
-//  is unaffected. Residual bounds: the heredoc backstop is textual —
+//  is unaffected. #396 fold round 1 (impl lens 2/3) hardens four bounds:
+//  the failure-branch `exit` bodies are presence-checked line-wise (the
+//  condition or error anchor plus the next four trimmed lines, the anchor
+//  line included: the fast-forward-failure group carries its `exit 1`
+//  inline), not control-flow-proven; the Trap-3 diagnostic assertion reads
+//  the comment-stripped code lines, so a commented-out echo does not
+//  satisfy it; the three `probe-passed` writes are bound one-per-region
+//  (discovery / `update_existing_pr()` / after `gh pr create`), so a
+//  count-preserving relocation reds; and the budget guard also reads
+//  bare-`-` step anchors (its block-scalar helper's step-end scan still
+//  stops only at `- ` items, so a bare-dash sibling sequence is a documented
+//  over-read shape that fails closed on duplicate `run:` keys). Residual
+//  bounds: the heredoc backstop is textual —
 //  it requires exactly one `<<'PY'` opener (unconditional: an unrelated second
 //  `PY` heredoc in this script reds fail-closed and requires re-deriving the
 //  pin), each opener's first non-blank body line at column 0 and exactly one
@@ -106,8 +118,12 @@
 //  #396 heredoc backstop is textual: exactly one `<<JSON` opener (an
 //  unrelated second one reds fail-closed), its first non-blank body line at
 //  column 0 and exactly one column-0 `JSON` terminator after it; the budget
-//  guard's population floor is 24, the readable expression-bearing `run: |`
-//  scalars (the plan's 25 counted the inline scalar the scanner cannot read).
+//  guard's population floor is 20 — the measured readable population (24
+//  expression-bearing `run: |` scalars; the plan's 25 counted the inline
+//  scalar the scanner cannot read) minus a 4-scalar margin, so a benign
+//  extraction that legitimately moves a scalar's `${{ }}` into `env:` does
+//  not red required CI; the floor is re-derived when a run scalar loses its
+//  expressions.
 //
 //  The script corpus reuses the same YAML-comment stripper, and the two
 //  languages' quoting rules diverge: the stripper does not model bash
@@ -540,9 +556,11 @@ struct WorkflowXcodebuildFlagPinsTests {
                 == #"echo "create-bump-pr" > "$RUNNER_TEMP/ghostty-probe-step""#,
             "the `\(stepName)` step must keep the failing-step marker as its first code line: the alarm step names that marker even when the script cannot start — re-derive this pin (issue #396)"
         )
+        // Fold round 1 (impl lens 2, MINOR): assert on the comment-stripped
+        // code lines — a commented-out echo is not a visible diagnostic.
         #expect(
-            body.contains(#"echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'""#),
-            "the `\(stepName)` step must keep the `inputs.create_bump_pr` diagnostic (the documented Trap-3 dispatch-mishap diagnostic) — re-derive this pin (issue #396)"
+            codeLines.contains { $0.contains(#"echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'""#) },
+            "the `\(stepName)` step must keep the `inputs.create_bump_pr` diagnostic as a visible (comment-stripped) code line (the documented Trap-3 dispatch-mishap diagnostic) — re-derive this pin (issue #396)"
         )
 
         // Delegation, located by content (the marker is deliberately first, so
@@ -616,6 +634,35 @@ struct WorkflowXcodebuildFlagPinsTests {
             "an unverified API commit must abort instead of pushing a permanently blocked bump"
         )
 
+        // Fold round 1 (impl lens 2, MAJOR): the assertions above bind the
+        // abort *conditions*; deleting an `exit 1` body left all 5 pins green
+        // (measured rx-1/rx-3/rx-4) while silently changing the alarm /
+        // mergeability semantics. Bind each abort body: locate the condition
+        // (or its error line, for the two inline groups) and require `exit 1`
+        // within the next 4 trimmed lines, the anchor line included (the
+        // fast-forward-failure group carries its `exit 1` inline).
+        let abortSites: [(anchor: String, label: String)] = [
+            (#"if [[ -z "$GH_TOKEN" ]]; then"#, "the empty-GH_TOKEN preflight"),
+            (#"[[ "$VERIFIED" != "true" ]]"#, "the unverified-commit gate"),
+            (#"Could not fast-forward bump branch ${BRANCH}"#, "the fast-forward ref-write failure"),
+            (#"gh pr create failed and no evergreen PR was found"#, "the create-failure path"),
+        ]
+        for site in abortSites {
+            let matches = scriptLines.enumerated().filter { $0.element.contains(site.anchor) }
+            #expect(
+                matches.count == 1,
+                "\(scriptPath) must contain exactly one `\(site.anchor)` anchor for \(site.label), found \(matches.count) at line(s) \(matches.map { String($0.offset + 1) }.joined(separator: ", ")) — re-derive this pin (issue #396)"
+            )
+            if let anchorIndex = matches.first?.offset {
+                let window = scriptLines[anchorIndex..<min(anchorIndex + 5, scriptLines.count)]
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                #expect(
+                    window.contains { $0.range(of: #"(^|;\s)exit 1($|;|\s*})"#, options: .regularExpression) != nil },
+                    "\(scriptPath) must `exit 1` in \(site.label) (anchor `\(site.anchor)` at line \(anchorIndex + 1)): the condition without its abort body lets the failure fall through silently — deleting that `exit 1` was measured all-green before this binding (fold round 1, impl lens 2) — re-derive this pin (issue #396)"
+                )
+            }
+        }
+
         // Scratch blob-upload vehicle: the push must go to a TAG (branch
         // pushes of the unsigned scratch commit are rejected by
         // required_signatures — alarm #173).
@@ -665,10 +712,37 @@ struct WorkflowXcodebuildFlagPinsTests {
             )
         }
 
-        // The alarm marker: exactly 3 post-ownership write sites (PR
-        // discovery, update path, create path).
-        let markerWrites = scriptLines.enumerated().filter {
-            $0.element.contains(#"echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok""#)
+        // The alarm marker: exactly 3 write sites, bound one-per-region (PR
+        // discovery, the update function, after `gh pr create`). Fold round 1
+        // (impl lens 2, NIT): the count alone passed a relocation that
+        // preserved it (e.g. moving the create-path write above
+        // `gh pr create`), silently converting a pre-PR failure into a path
+        // that had already written the marker.
+        let markerNeedle = #"echo "probe-passed" > "$RUNNER_TEMP/ghostty-probe-ok""#
+        let markerWrites = scriptLines.enumerated().filter { $0.element.contains(markerNeedle) }
+        let updateFunctionStart = try #require(
+            scriptLines.firstIndex { $0.trimmingCharacters(in: .whitespaces) == "update_existing_pr() {" },
+            "\(scriptPath) must still define `update_existing_pr() {` — re-derive this pin (issue #396)"
+        )
+        let updateFunctionEnd = try #require(
+            scriptLines[(updateFunctionStart + 1)...].firstIndex { $0 == "}" },
+            "\(scriptPath)'s `update_existing_pr()` function must still close at column 0 — re-derive this pin (issue #396)"
+        )
+        let createdPRLine = try #require(
+            scriptLines.firstIndex { $0.contains(#"echo "Created bump PR: $PR_URL""#) },
+            "\(scriptPath) must still echo `Created bump PR: $PR_URL` after the create path — re-derive this pin (issue #396)"
+        )
+        let markerRegions: [(name: String, contains: (Int) -> Bool)] = [
+            ("the PR-discovery region (before `update_existing_pr()`)", { $0 < updateFunctionStart }),
+            ("the `update_existing_pr()` function body", { $0 > updateFunctionStart && $0 < updateFunctionEnd }),
+            ("the create path (after `echo \"Created bump PR: $PR_URL\"`)", { $0 > createdPRLine }),
+        ]
+        for region in markerRegions {
+            let regionWrites = markerWrites.filter { region.contains($0.offset) }
+            #expect(
+                regionWrites.count == 1,
+                "\(scriptPath) must write the `probe-passed` alarm marker exactly once in \(region.name), found \(regionWrites.count) at line(s) \(regionWrites.map { String($0.offset + 1) }.joined(separator: ", ")) — the marker's placement is the pre-PR-alarm invariant — re-derive this pin (issue #396)"
+            )
         }
         #expect(
             markerWrites.count == 3,
@@ -818,10 +892,13 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// one growth spurt away from a parse rejection, and for a schedule-only
     /// workflow that rejection is a silently dark schedule rather than a
     /// 0-job push run. Population floor plus positive control so a scanner
-    /// that sees nothing cannot pass. Scope: `env:`/`if:`/`with:` scalars are
-    /// separate expressions and inline/folded `run:` scalars are unreadable
-    /// by `dedentedRunBlockScalar` (one inline expression-bearing `run:`
-    /// today, 104 chars).
+    /// that sees nothing cannot pass; the floor is 20 (the measured 24 minus
+    /// a 4-scalar margin, re-derived when a run scalar legitimately loses its
+    /// `${{ }}`). Scope: `env:`/`if:`/`with:` scalars are separate
+    /// expressions and inline/folded `run:` scalars are unreadable by
+    /// `dedentedRunBlockScalar` (one inline expression-bearing `run:` today,
+    /// 104 chars). Fold round 1 (impl lens 3, MINOR): both step-anchor
+    /// spellings are accepted (`- name: …` and a bare `-`).
     @Test
     func testEveryExpressionBearingRunScalarStaysUnderTheRepoBudget() throws {
         let workflowFiles = try Self.listFiles(in: ".github/workflows", extensions: ["yml", "yaml"])
@@ -832,7 +909,9 @@ struct WorkflowXcodebuildFlagPinsTests {
             let lines = source.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard trimmed.hasPrefix("- ") else { continue }
+                // Fold round 1 (impl lens 3, MINOR): the bare `-` step
+                // spelling is legal YAML too; accept both anchor shapes.
+                guard trimmed.hasPrefix("- ") || trimmed == "-" else { continue }
                 guard let body = Self.dedentedRunBlockScalar(in: source, stepLineIndex: index),
                       body.contains("${{") else { continue }
                 let newlineCount = body.components(separatedBy: "\n").count - 1
@@ -846,10 +925,13 @@ struct WorkflowXcodebuildFlagPinsTests {
         // Floor = the measured readable population at #396 (24 block scalars;
         // the repo's 25th expression-bearing run scalar is the 104-char inline
         // `ios-adhoc-pr.yml` one, outside this scanner's scope and recorded
-        // under the bound by hand). A scanner that sees nothing must not pass.
+        // under the bound by hand) minus a 4-scalar margin (fold round 1,
+        // impl lens 3, NIT): the margin keeps a benign extraction that
+        // legitimately moves a scalar's `${{ }}` into `env:` from reding
+        // required CI. A scanner that sees nothing must not pass.
         #expect(
-            scanned.count >= 24,
-            "the repo-wide budget scan saw only \(scanned.count) expression-bearing `run: |` scalars; the measured readable population at #396 is 24 (plus one unreadable inline scalar, 104 chars) — a scanner that sees nothing must not pass — re-derive this pin (issue #396)"
+            scanned.count >= 20,
+            "the repo-wide budget scan saw only \(scanned.count) expression-bearing `run: |` scalars; the measured readable population at #396 was 24 (plus one unreadable inline scalar, 104 chars) and the floor is 20 (a 4-scalar margin) — a scanner that sees nothing must not pass; re-derive the floor when a run scalar legitimately loses its `${{ }}` — re-derive this pin (issue #396)"
         )
         let overBudget = scanned.filter { $0.escaped > 10_000 }
         #expect(
