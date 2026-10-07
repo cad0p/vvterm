@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): `time cd` runs the cd in the current shell
+# before the delegation that follows.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          time cd sub; bash scripts/ci/shell-evil.sh

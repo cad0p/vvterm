@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the root-containment guard refuses a
+# delegation whose canonical path escapes the scanned root through a
+# symlink (the target is benign; the escape itself is the refusal).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-benign.sh

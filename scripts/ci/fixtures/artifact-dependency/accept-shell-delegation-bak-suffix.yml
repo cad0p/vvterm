@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the right-anchor lookahead keeps a `.bak`
+# suffix mention from resolving to the live script name; only the `.bak`
+# file exists on disk, so the case accepts.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-benign.sh.bak

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 3, N13): a sourced `scripts/ci/*.sh` shares the
+# caller's shell, so its `cd` changes the caller's cwd; the refusal fires at
+# the source, before a later delegation can be resolved under the root.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          . scripts/ci/helper.sh
+          bash scripts/ci/shell-evil.sh
+      - run: |
+          source scripts/ci/helper.sh
+          bash scripts/ci/shell-evil.sh

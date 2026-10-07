@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a benign delegated script whose `gh run download` mention
+# is a comment and whose self-reference resolves, so the visited set cuts it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-benign.sh

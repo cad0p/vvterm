@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): a `cd` before the delegation makes the
+# executed path cwd-relative; the gate refuses rather than guessing.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cd sub
+          bash scripts/ci/shell-evil.sh

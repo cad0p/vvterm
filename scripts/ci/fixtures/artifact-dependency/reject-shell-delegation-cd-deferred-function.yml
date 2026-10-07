@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1c): the function body is deferred — the
+# delegation textually precedes the `cd`, but `f` executes it afterwards.
+# The second step spells the definition after a reserved word (`then f()`),
+# which the every-word definition scan must see too.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          f() { bash scripts/ci/shell-evil.sh; } ; cd sub ; f
+      - run: |
+          if true; then f() { bash scripts/ci/shell-evil.sh; }; fi ; cd sub ; f

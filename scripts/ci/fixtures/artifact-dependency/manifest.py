@@ -7275,4 +7275,630 @@ CASES = [
         "excluded": 1,
         "diagnostics": [],
     },
+    # ------------------------------------------------------------------
+    # #399: shell artifact downloaders in run bodies and delegated
+    # `scripts/ci/*.sh` scripts. Every reject case pins its exact diagnostic
+    # (the token rendering, the nested `scripts/ci/<name>.sh:<line>`
+    # provenance, the unresolved-delegation and depth-cap messages, the
+    # delegated-script floor); every case declares the measured base verdict
+    # of the pre-#399 gate (`base_exit: 0`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-gh-run-download-inline",
+        "files": ["reject-shell-gh-run-download-inline.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-inline.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+            "reject-shell-gh-run-download-inline.yml:10: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-quoted-arg",
+        "files": ["reject-shell-gh-run-download-quoted-arg.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-quoted-arg.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-continuation",
+        "files": ["reject-shell-gh-run-download-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-continuation.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+            "reject-shell-gh-run-download-continuation.yml:12: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-gh-run-download",
+        "files": ["reject-shell-delegation-gh-run-download.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-gh-run-download.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cmdsub",
+        "files": ["reject-shell-delegation-cmdsub.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cmdsub.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-stdin-redirect",
+        "files": ["reject-shell-delegation-stdin-redirect.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-stdin-redirect.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-unresolvable",
+        "files": ["reject-shell-delegation-unresolvable.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-unresolvable.yml:8: delegation to `scripts/ci/shell-missing.sh` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-transitive",
+        "files": ["reject-shell-delegation-transitive.yml"],
+        "extra_files": {
+            "scripts/ci/shell-hop-a.sh": "shell-hop-a.sh",
+            "scripts/ci/shell-hop-b.sh": "shell-hop-b.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-transitive.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-hop-b.sh:7` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-depth-cap",
+        "files": ["reject-shell-delegation-depth-cap.yml"],
+        "extra_files": {
+            "scripts/ci/shell-chain-1.sh": "shell-chain-1.sh",
+            "scripts/ci/shell-chain-2.sh": "shell-chain-2.sh",
+            "scripts/ci/shell-chain-3.sh": "shell-chain-3.sh",
+            "scripts/ci/shell-chain-4.sh": "shell-chain-4.sh",
+            "scripts/ci/shell-chain-5.sh": "shell-chain-5.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-depth-cap.yml:9: delegation to `scripts/ci/shell-chain-5.sh` from `scripts/ci/shell-chain-4.sh:6` exceeds the nested-delegation depth cap (4) — the gate cannot prove the referenced script's body (refusing rather than skipping)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-floor",
+        "files": [
+            "accept-needs-flow.yml",
+            "accept-needs-bare.yml",
+            "accept-needs-after-steps.yml",
+            "accept-needs-same-indent.yml",
+            "accept-needs-quoted.yml",
+            "accept-bom-quoted-jobs.yml",
+            "accept-templated-upload.yml",
+            "accept-producer-is-consumer.yml",
+            "accept-cross-run-run-id.yml",
+            "accept-block-scalar.yml",
+            "accept-quoted-uses.yml",
+            "accept-run-id-with-needs.yml",
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "floor": True,
+        "diagnostics": [
+            "delegated-script floor: only 0 distinct delegated script(s) resolved from workflow run bodies; the floor is 6 — update the floor constant only if the delegations were intentionally removed (refusing rather than passing a tree where the delegation scan is vacuous)",
+        ],
+    },
+    {
+        "id": "accept-shell-run-body-comment-token",
+        "files": ["accept-shell-run-body-comment-token.yml"],
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-shell-benign-delegation",
+        "files": ["accept-shell-benign-delegation.yml"],
+        "extra_files": {"scripts/ci/shell-benign.sh": "shell-benign.sh"},
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "accept-shell-delegation-cycle",
+        "files": ["accept-shell-delegation-cycle.yml"],
+        "extra_files": {
+            "scripts/ci/shell-cycle-a.sh": "shell-cycle-a.sh",
+            "scripts/ci/shell-cycle-b.sh": "shell-cycle-b.sh",
+        },
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-shell-delegation-prefixed-path",
+        "files": ["reject-shell-delegation-prefixed-path.yml"],
+        "extra_files": {
+            "dir/scripts/ci/shell-evil.sh": "shell-evil.sh",
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-prefixed-path.yml:8: shell artifact downloader (`gh run download`) in `dir/scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    # ------------------------------------------------------------------
+    # #399 fold round 1: the normalized phrase test, the executed-path
+    # delegation model, the cwd refusals, the harness escape fixtures and
+    # the continuation-bound fixture. Every reject case pins its measured
+    # diagnostic; every case declares the measured base verdict of the
+    # pre-#399 gate (`base_exit: 0`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-gh-run-download-double-space",
+        "files": ["reject-shell-gh-run-download-double-space.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-double-space.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-tab",
+        "files": ["reject-shell-gh-run-download-tab.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-tab.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-cmdsub-spaced",
+        "files": ["reject-shell-gh-run-download-cmdsub-spaced.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-cmdsub-spaced.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-backtick-spaced",
+        "files": ["reject-shell-gh-run-download-backtick-spaced.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-backtick-spaced.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-repo-flag",
+        "files": ["reject-shell-gh-run-download-repo-flag.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-repo-flag.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-payload-continuation",
+        "files": ["reject-shell-gh-run-download-payload-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-payload-continuation.yml:9: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-ifs",
+        "files": ["reject-shell-gh-ifs.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-ifs.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-double-slash",
+        "files": ["reject-shell-delegation-double-slash.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-double-slash.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-dot-segment",
+        "files": ["reject-shell-delegation-dot-segment.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-dot-segment.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-parent-segment",
+        "files": ["reject-shell-delegation-parent-segment.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-parent-segment.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-case-component",
+        "files": ["reject-shell-delegation-case-component.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-case-component.yml:9: delegation to `Scripts/ci/shell-evil.sh` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-case-extension",
+        "files": ["reject-shell-delegation-case-extension.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-case-extension.yml:9: delegation to `scripts/ci/EVIL.SH` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-quoted-inner",
+        "files": ["reject-shell-delegation-quoted-inner.yml"],
+        "extra_files": {"scripts/ci/evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-quoted-inner.yml:8: shell artifact downloader (`gh run download`) in `scripts/ci/evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-absolute-path",
+        "files": ["reject-shell-delegation-absolute-path.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-absolute-path.yml:8: delegation to `/tmp/out/scripts/ci/shell-evil.sh` resolves outside the scanned root — the gate resolves `scripts/ci/*.sh` delegations under the scanned root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-working-directory",
+        "files": ["reject-shell-delegation-working-directory.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-working-directory.yml:10: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-prefix",
+        "files": ["reject-shell-delegation-cd-prefix.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-prefix.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-continuation-over-bound",
+        "files": ["reject-shell-continuation-over-bound.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-continuation-over-bound.yml:8: shell text in this `run:` body has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined downloader or delegation cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)",
+        ],
+    },
+    {
+        "id": "accept-shell-delegation-bak-suffix",
+        "files": ["accept-shell-delegation-bak-suffix.yml"],
+        "extra_files": {"scripts/ci/shell-benign.sh.bak": "shell-benign.sh"},
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
+        "id": "reject-shell-delegation-symlink-escape",
+        "files": ["reject-shell-delegation-symlink-escape.yml"],
+        "extra_symlinks": {"scripts/ci/shell-benign.sh": "shell-benign.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-symlink-escape.yml:9: delegation to `scripts/ci/shell-benign.sh` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
+        ],
+    },
+    # ------------------------------------------------------------------
+    # #399 fold round 2 (closure re-lens N1-N7): the every-word `cd`
+    # predicate (N1), the deferred-function refusal (N1c), the
+    # `defaults.run.working-directory` model (N2), the indented-scalar
+    # capture (N3), the two phrase quote-strip pins (N4), the
+    # bash-faithful delegation join pin (N5), the ANSI-C hex assembly
+    # (N6) and the order-aware `cd` accept pin (N7). Every reject case
+    # pins its exact diagnostic; every case declares the measured base
+    # verdict of the pre-#399 gate (`base_exit: 0`).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-delegation-cd-if",
+        "files": ["reject-shell-delegation-cd-if.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-if.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-while",
+        "files": ["reject-shell-delegation-cd-while.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-while.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-brace",
+        "files": ["reject-shell-delegation-cd-brace.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-brace.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-bang",
+        "files": ["reject-shell-delegation-cd-bang.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-bang.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-paren-space",
+        "files": ["reject-shell-delegation-cd-paren-space.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-paren-space.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-assignment-prefix",
+        "files": ["reject-shell-delegation-cd-assignment-prefix.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-assignment-prefix.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-command",
+        "files": ["reject-shell-delegation-cd-command.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-command.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-time",
+        "files": ["reject-shell-delegation-cd-time.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-time.yml:8: delegation to `scripts/ci/shell-evil.sh` after a `cd` in the same shell body — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-deferred-function",
+        "files": ["reject-shell-delegation-cd-deferred-function.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-deferred-function.yml:10: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cd-deferred-function.yml:12: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-defaults-working-directory",
+        "files": ["reject-shell-defaults-working-directory.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-defaults-working-directory.yml:12: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+            "reject-shell-defaults-working-directory.yml:16: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-working-directory-indented-scalar",
+        "files": ["reject-shell-working-directory-indented-scalar.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-working-directory-indented-scalar.yml:10: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-cmdsub-quoted-run",
+        "files": ["reject-shell-gh-run-download-cmdsub-quoted-run.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-cmdsub-quoted-run.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-backtick-quoted-run",
+        "files": ["reject-shell-gh-run-download-backtick-quoted-run.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-backtick-quoted-run.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-continuation",
+        "files": ["reject-shell-delegation-continuation.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-continuation.yml:8: delegation to `scripts/ci/evil.sh` — the gate cannot resolve the referenced script (refusing rather than skipping); fix the path, restore the script, or reword the mention",
+        ],
+    },
+    {
+        "id": "reject-shell-gh-run-download-ansic-hex-assembly",
+        "files": ["reject-shell-gh-run-download-ansic-hex-assembly.yml"],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-gh-run-download-ansic-hex-assembly.yml:8: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+            "reject-shell-gh-run-download-ansic-hex-assembly.yml:10: shell artifact downloader (`gh run download`) in this `run:` body — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "accept-shell-delegation-cd-after-candidate",
+        "files": ["accept-shell-delegation-cd-after-candidate.yml"],
+        "extra_files": {"scripts/ci/shell-self-cd.sh": "shell-self-cd.sh"},
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    # ------------------------------------------------------------------
+    # #399 fold round 3 (closure re-lens N10-N14): the deferred `trap`
+    # action (N10), the substitution-internal `cd` (N11), the ANSI-C
+    # delegation path (N12), the sourced-helper `cd` (N13) and the
+    # continuation-split function-definition opener (N14). Every reject
+    # case pins its exact diagnostic; every case declares `base_exit: 0`
+    # (the pre-#399 gate has no shell pass, so all five accepted).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-shell-delegation-trap-exit",
+        "files": ["reject-shell-delegation-trap-exit.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-trap-exit.yml:10: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:13: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:15: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-trap-exit.yml:18: delegation to `scripts/ci/shell-evil.sh` inside a `trap` action whose shell body or action contains a `cd` — the gate cannot prove the trap's effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cmdsub-cd",
+        "files": ["reject-shell-delegation-cmdsub-cd.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cmdsub-cd.yml:9: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cmdsub-cd.yml:11: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+            "reject-shell-delegation-cmdsub-cd.yml:13: delegation to `scripts/ci/shell-evil.sh` inside a command substitution that also contains a `cd` — the substitution's own shell has already changed cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-ansic-path",
+        "files": ["reject-shell-delegation-ansic-path.yml"],
+        "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-ansic-path.yml:9: shell artifact downloader (`gh run download`) in `scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-sourced-cd",
+        "files": ["reject-shell-delegation-sourced-cd.yml"],
+        "extra_files": {
+            "scripts/ci/helper.sh": "shell-source-cd.sh",
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-sourced-cd.yml:9: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
+            "reject-shell-delegation-sourced-cd.yml:12: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-cd-deferred-function-split",
+        "files": ["reject-shell-delegation-cd-deferred-function-split.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-cd-deferred-function-split.yml:9: delegation to `scripts/ci/shell-evil.sh` inside a function body, in a shell body that also contains a `cd` — the gate cannot prove the deferred body's effective cwd (refusing rather than guessing)",
+        ],
+    },
 ]

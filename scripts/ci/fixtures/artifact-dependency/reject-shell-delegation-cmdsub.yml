@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): the delegation subpath inside a `$(…)` word is matched only
+# because the predicate has no left boundary.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash $(scripts/ci/shell-evil.sh)

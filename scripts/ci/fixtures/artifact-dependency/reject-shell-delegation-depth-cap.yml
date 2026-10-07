@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a five-hop delegation chain; the fifth hop is benign, so
+# only the nested-delegation depth cap refuses it, and the refusal names the
+# chain-4 delegation's script line.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-chain-1.sh

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): the downloader sits two delegations deep, so the refusal
+# names the nested script's line and the recursion is exercised.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-hop-a.sh

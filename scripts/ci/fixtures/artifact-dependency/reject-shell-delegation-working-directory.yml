@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): a non-root `working-directory` makes the
+# delegation cwd-relative; the gate refuses rather than resolving it under
+# the repository root.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - working-directory: sub
+        run: bash scripts/ci/shell-evil.sh

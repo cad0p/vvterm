@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399): a delegation to a script whose body runs the downloader;
+# the refusal names the script's line, not only the delegating step.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-evil.sh

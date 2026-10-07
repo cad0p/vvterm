@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 3, N12): the delegation path is a `$'…'` ANSI-C
+# literal; the root copy is EVIL here, so without the decode the gate accepts
+# an invisible path spelling that bash expands to the executed script.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash $'\x73cripts/ci/shell-evil.sh'

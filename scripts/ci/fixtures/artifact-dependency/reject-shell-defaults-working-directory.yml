@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N2): a job-level `defaults:` and a workflow-level
+# `defaults:` both set `run.working-directory`; GitHub executes the delegations
+# in `sub`, so resolving them against the repository root is wrong.
+jobs:
+  job-default:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sub
+    steps:
+      - run: bash scripts/ci/shell-evil.sh
+  workflow-default:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-evil.sh
+defaults:
+  run:
+    working-directory: sub

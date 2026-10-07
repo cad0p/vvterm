@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the backslash+newline is literal for the
+# outer shell (single-quoted) but the inner `bash -c` removes it and runs
+# `gh run download`; the payload join recovers the phrase.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          bash -c 'gh run \
+          download 12345 -n vvterm-build'

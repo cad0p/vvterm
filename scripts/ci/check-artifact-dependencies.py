@@ -1083,6 +1083,119 @@ refusal; the runtime value would be the text `null`); and env `!!int null`,
 which is `StringToken("null")` at runtime, so reading it as present is
 correct.
 
+SHELL ARTIFACT DOWNLOADERS (#399)
+---------------------------------
+Run bodies are blanked before the reconciliation pass, so the YAML model
+never reads shell text. A `gh run download` in a `run:` scalar, or in a
+`scripts/ci/*.sh` body the run scalar delegates to (the #249/#396
+extraction pattern), would bypass the job-ordering rule entirely; the pass
+refuses a run body containing the modeled spellings of the shell artifact
+downloader. The pass therefore tokenizes every parsed run body PER PHYSICAL
+LINE (a whole-body
+`_shell_tokens` call is measurably fail-open: an indented `#` truncates the
+rest), adds the #350 item-12 continuation joins (the raw
+`_joined_continuation_segments` plus the bash-faithful
+`_bash_joined_continuation_segments`; a chain beyond the 64-line analysis
+bound refuses rather than yielding the joins' empty fail-open, mirroring
+`_run_id_continuation_bound_refusal`), and refuses on the token model. The
+token model is one normalized phrase test per segment: each word is first
+ANSI-C-decoded (fold round 2, N6: a `$'…'` literal is expanded the way bash
+expands it before the command runs, so `g$'\x68' run download` is the
+phrase), then quote-stripped; a backslash followed by whitespace and every
+whitespace run collapse to one space. The segment refuses when a `\bgh\b`
+word is followed (in order) by a `\brun\b` word and a `\bdownload\b` word.
+The `\b`-ordered test is what covers `gh  run  download`, tab-separated and
+`$(…)`/backtick payloads, `gh run -R owner/repo download` and
+`gh$IFS run download`; the collapses are normalization (they turn the
+single-quoted `bash -c` continuation remnant into a space), and the
+quote-strip is what exposes a quoted `run` inside a `$(…)`/backtick payload
+(fold round 2, N4). The single-quoted `bash -c` payload has a dedicated
+join because the outer joins deliberately skip a backslash inside single
+quotes. The `-artifact@ref` action shape is
+deliberately NOT a token: a shell body
+cannot execute a GitHub Action, so the ref is data there, and treating the
+shape as a downloader flips the pinned
+`accept-run-line-mentioning-action` control. Comments never match
+(`_shell_tokens` stops at an unquoted `#`).
+
+The delegation model scans EVERY word token of EVERY segment (not
+`_argv_operand_words`, which drops redirect targets and would miss
+`bash < scripts/ci/x.sh`). Each word is ANSI-C-decoded first (fold round 3,
+N12: symmetric with the token model, so `bash $'\x73cripts/ci/x.sh'` names
+the executed path instead of an invisible spelling), then quote-stripped
+and normalized with
+`posixpath.normpath`, then every match of the case-insensitive,
+right-anchored `(?:/|[A-Za-z0-9_.-]+/)*scripts/ci/[A-Za-z0-9_.-]+\\.sh`
+candidate is resolved as the path the shell would execute, so
+`dir/scripts/ci/x.sh` scans the `dir/` copy and `scripts/ci//x.sh`,
+`scripts/./ci/x.sh` and `scripts/ci/../ci/x.sh` all read as
+`scripts/ci/x.sh`. The resolved path must be a file inside the scanned root
+(canonical containment) and is read with a strict UTF-8 decode; an
+absolute or root-escaping candidate, or a missing, loop or unreadable
+target, refuses. The effective cwd must be the repository root, because the
+gate resolves delegations relative to the root only. A non-root
+`working-directory:` refuses, whether it comes from the step key or from a
+workflow-/job-level `defaults.run.working-directory` (fold round 2, N2),
+and an empty inline `working-directory:` captures the indented scalar
+rather than reading it as the root (N3). A `cd` word ANYWHERE in a segment
+is a cwd change, not just the first word (N1): `if cd`, `while cd`,
+`{ cd`, `! cd`, `( cd`, `FOO=1 cd`, `command cd`, `time cd` and
+`builtin cd` all refuse a later delegation, while a `cd` inside a `$(…)`
+substitution is not the OUTER shell's `cd` (the tokenizer keeps the
+substitution in one word; `teleport-server.sh:114` and
+`check-ghostty-config.sh:80-81,256` rely on it) — but a delegation inside
+that same substitution refuses when the substitution itself contains a
+modeled `cd` (fold round 3, N11), because the substitution's own shell has
+already changed cwd. The rule is order-aware —
+a delegation that precedes the body's `cd` is not refused by it (the live
+`check-license-headers.sh` `SELF=` mention sits before its own `cd`) — and
+a candidate at or after a function definition refuses when the
+body also contains a `cd`, because a bash function body executes at call
+time and its effective cwd is then unprovable (N1c). A candidate inside a
+`trap` action is deferred the same way: the action executes at EXIT/ERR
+time, so a `cd` anywhere in the body or in the action itself refuses (fold
+round 3, N10). A candidate sourced via `.`/`source` from a `scripts/ci/*.sh`
+whose body contains a modeled `cd` refuses at the source (fold round 3,
+N13), because the sourced script shares the caller's shell. The definition
+scan reads the bash-faithful join as well as the physical line, so a
+`f \\` + newline + `()` name/`()` split is the definition too (fold round
+3, N14). Nested
+delegations recurse with a visited set of canonical paths and a depth cap
+of 4; beyond the cap refuses without counting the target as resolved. A
+finding is anchored at the delegating run body's `run:` line and names
+`scripts/ci/<name>.sh:<line>` for a nested script finding. Over-refusal is
+the accepted failure mode: a quoted/echoed mention of the command, or a
+message naming a `.sh` path whose target is missing, refuses.
+
+The class is narrowed, not closed. Named residuals: assembled tokens
+(`CMD="gh run"; $CMD download`), `printf`/base64 assembly piped to `bash`,
+interpreter payloads (`python3 -c`, `node -e`, `ruby`, `perl`), process
+substitution with a computed payload (`bash <(printf 'gh run %s download'
+x)`; the literal `<(scripts/ci/x.sh)` shape IS resolved and scanned),
+redirect-fed scripts not matching the path shape, `PATH`-invoked scripts,
+dynamic paths (`$NAME`/`${NAME}`), a `scripts/ci/<name>.sh` subpath glued
+to a preceding non-`/` path component (`xscripts/ci/x.sh` matches the root
+copy, not the executed file), `.sh` wrappers outside `scripts/ci/` (and
+outside the workflow's `working-directory`) are not followed (the real tree
+delegates to four, all clean), raw REST downloads (`gh api …/artifacts`),
+heredoc/message text naming a `.sh` path (it is resolved and scanned; a
+missing target refuses), non-`.sh` wrappers, and orphan scripts.
+Delegations under a non-root `working-directory:` or after a modeled `cd`
+are refused, not resolved; a cwd change the tokenizer cannot see — inside
+an interpreter payload (`bash -c 'cd sub; …'`), through an assembled
+command (`CMD=cd; $CMD sub`), through a dynamic `.`/`source` target, or
+spelled `pushd`/`popd` — is a named
+residual. The whole
+attribute-to-the-delegating-job arm (scanning a delegated downloader under
+the existing transitive-`needs:` rule) is declined by design: an executable
+shell downloader refuses regardless of the `needs:` graph. The
+delegated-script floor (`MIN_SCANNED_DELEGATED_SCRIPTS`) is enforced on
+distinct canonical paths after the per-file loop and only when
+`enforce_floor` is set, so `reject-scan-floor` keeps its single diagnostic.
+The real-scan summary prints both units: `resolved N distinct delegated
+script(s) from M distinct run-body reference(s)`, where M counts distinct
+`(run body, subpath)` pairs up to the first finding per body.
+
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
     python3 scripts/ci/check-artifact-dependencies.py --selftest
@@ -1095,6 +1208,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
+import posixpath
 import re
 import shutil
 import sys
@@ -1111,12 +1226,19 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 802
+EXPECTED_MANIFEST_CASES = 856
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
 # removed (and then update the pin suite too).
 MIN_SCANNED_WORKFLOW_FILES = 12
+# The delegated-script floor (issue #399): a distinct-canonical-path count of
+# the `scripts/ci/*.sh` scripts resolved from workflow run bodies. The real
+# tree resolves 9, so a typo'd `--root` or a truncated tree cannot make the
+# delegation scan vacuous. Enforced only under `enforce_floor` and only
+# after the workflow floor, so `reject-scan-floor` keeps its single
+# diagnostic.
+MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold + 15 at
 # the round-3 fold + 15 at the round-4 fold) each declare the measured
 # exit of the pre-fold gate
@@ -1129,7 +1251,7 @@ MIN_SCANNED_WORKFLOW_FILES = 12
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 371
+EXPECTED_BASE_VERDICT_CASES = 425
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -1286,6 +1408,12 @@ class ArtifactStep:
     run_line: int | None = None
     run_body_text: str = ""
     run_mentions_github_env: bool = False
+    # Issue #399 fold round 1: the step's `working-directory:` value and key
+    # line, so the shell-downloader pass can refuse a `scripts/ci/*.sh`
+    # delegation whose executed path is cwd-relative (the gate resolves
+    # delegations relative to the repository root only).
+    working_directory: str | None = None
+    working_directory_line: int | None = None
 
 
 @dataclass
@@ -1309,6 +1437,11 @@ class RunBody:
     # continuation join. `body_text` stays byte-identical for every existing
     # predicate.
     scalar_content_indent: int = 0
+    # Issue #399 fold round 1: the enclosing step's `working-directory:` value
+    # and key line, carried so the shell-downloader pass refuses a
+    # `scripts/ci/*.sh` delegation that is cwd-relative.
+    working_directory: str | None = None
+    working_directory_line: int | None = None
 
 
 @dataclass
@@ -1328,6 +1461,10 @@ class Job:
     # Every parsed `run:` step's location/mention record, in step order
     # (the #339 same-job, preceding-position scan).
     run_bodies: list[RunBody] = field(default_factory=list)
+    # Issue #399 fold round 2: the job-level `defaults.run.working-directory`
+    # value (None when the job declares none), resolved into a run body that
+    # does not carry its own `working-directory:`.
+    defaults_working_directory: str | None = None
 
 
 @dataclass
@@ -1350,6 +1487,13 @@ class ScanResult:
     # this so a vacuous accept (a download that never reached the cross-run
     # path) cannot pass (#342).
     excluded: int = 0
+    # Issue #399, additive counters for the shell-downloader pass:
+    # `delegated_scripts` counts DISTINCT canonical `scripts/ci/*.sh` paths
+    # resolved from workflow run bodies (the delegated-script floor unit),
+    # `delegation_refs` counts the resolved (run body, subpath) references
+    # at the workflow level. The summary line prints both.
+    delegated_scripts: int = 0
+    delegation_refs: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -2072,6 +2216,10 @@ class WorkflowParser:
         # The top-level `env:` block, as an inclusive line range: workflow
         # env is visible to every step, so it stays in scope everywhere.
         self.workflow_env_range: tuple[int, int] | None = None
+        # Issue #399 fold round 2: the workflow-level
+        # `defaults.run.working-directory` value (None when absent), the
+        # fallback for a run body whose job and step declare none.
+        self.workflow_defaults_working_directory: str | None = None
 
     # -- small helpers -----------------------------------------------------
 
@@ -2108,6 +2256,7 @@ class WorkflowParser:
     def parse(self) -> list[Job]:
         self._scan_top_level_duplicates()
         self.workflow_env_range = self._find_workflow_env_range()
+        self.workflow_defaults_working_directory = self._find_workflow_defaults()
         jobs_index = self._find_jobs_key()
         end = self._jobs_region_end(jobs_index)
         self._parse_job_region(list(range(jobs_index + 1, end)), jobs_index + 1)
@@ -2139,6 +2288,133 @@ class WorkflowParser:
                 return None
             return (index + 1, end)
         return None
+
+    def _find_workflow_defaults(self) -> str | None:
+        """The top-level `defaults:` block's `run.working-directory` value,
+        or None when no top-level `defaults:` key exists (issue #399 fold
+        round 2, N2). GitHub applies this default to every job's run steps
+        that do not override it, so the parser must see it: an opaque
+        consume would resolve delegations against the repository root while
+        GitHub executes them in the default directory."""
+        for key, line in self._top_level_keys():
+            if key != "defaults":
+                continue
+            index = line - 1
+            kv = split_key_value(self._body(index))
+            assert kv is not None
+            value = kv[1].strip()
+            if value not in ("", "{}"):
+                raise Refusal(
+                    index + 1,
+                    "top-level 'defaults:' must be a block mapping — refusing rather than guessing",
+                )
+            end = self._top_level_block_end(index)
+            body = list(range(index + 1, end))
+            return self._defaults_working_directory(body, 0, len(body))
+        return None
+
+    def _defaults_working_directory(
+        self, body: list[int], start: int, end: int
+    ) -> str | None:
+        """Parse a `defaults:` block's region `[start, end)` of `body` and
+        return its `run.working-directory` value (None when absent). Only
+        the two GitHub `defaults.run` keys are modeled; any other key
+        refuses, because an unmodeled shape could hide the cwd default
+        (issue #399 fold round 2, N2)."""
+        working_directory: str | None = None
+        child_col: int | None = None
+        seen: dict[str, int] = {}
+        i = start
+        while i < end:
+            index = body[i]
+            if is_blank(self.lines[index]):
+                i += 1
+                continue
+            indent = self._indent(index)
+            if child_col is None:
+                child_col = indent
+            if indent != child_col:
+                raise Refusal(index + 1, UNCONSUMED_REFUSAL)
+            key, value = self._kv(index, self._body(index))
+            if key in seen:
+                raise Refusal(
+                    index + 1,
+                    f"duplicate mapping key '{key}' under 'defaults:' "
+                    f"(lines {seen[key]} and {index + 1}) — remove one (GitHub's "
+                    "duplicate-key semantics are unverified, so the gate refuses)",
+                )
+            seen[key] = index + 1
+            if key != "run":
+                raise Refusal(
+                    index + 1,
+                    f"unmodeled '{key}:' under 'defaults:' — the gate models only "
+                    "defaults.run.working-directory (refusing rather than guessing)",
+                )
+            if value.strip():
+                raise Refusal(
+                    index + 1,
+                    "'run:' under 'defaults:' must be a block mapping — refusing rather than guessing",
+                )
+            run_end = self._consume_opaque(body, i, child_col)
+            run_working_directory = self._defaults_run_working_directory(
+                body, i + 1, run_end
+            )
+            if run_working_directory is not None:
+                working_directory = run_working_directory
+            i = run_end
+        return working_directory
+
+    def _defaults_run_working_directory(
+        self, body: list[int], start: int, end: int
+    ) -> str | None:
+        """The `working-directory` value inside a `defaults.run:` block
+        region `[start, end)` (None when absent). `shell` is modeled as a
+        cwd-free key; any other key refuses (issue #399 fold round 2, N2)."""
+        working_directory: str | None = None
+        child_col: int | None = None
+        seen: dict[str, int] = {}
+        i = start
+        while i < end:
+            index = body[i]
+            if is_blank(self.lines[index]):
+                i += 1
+                continue
+            indent = self._indent(index)
+            if child_col is None:
+                child_col = indent
+            if indent != child_col:
+                raise Refusal(index + 1, UNCONSUMED_REFUSAL)
+            key, value = self._kv(index, self._body(index))
+            if key in seen:
+                raise Refusal(
+                    index + 1,
+                    f"duplicate mapping key '{key}' under 'defaults.run:' "
+                    f"(lines {seen[key]} and {index + 1}) — remove one (GitHub's "
+                    "duplicate-key semantics are unverified, so the gate refuses)",
+                )
+            seen[key] = index + 1
+            if key == "working-directory":
+                end_pos = i + 1 if value else self._consume_opaque(body, i, child_col)
+                # Fold round 2, N3: an empty inline value is not proof of the
+                # root — YAML reads the indented scalar, so capture it.
+                working_directory = (
+                    decode_scalar(value)
+                    if value
+                    else self._plain_block_scalar_text(body, i, end_pos)
+                )
+                i = end_pos
+                continue
+            if key == "shell":
+                # `shell:` never changes the working directory; consume it
+                # opaquely whatever its shape.
+                i = i + 1 if value else self._consume_opaque(body, i, child_col)
+                continue
+            raise Refusal(
+                index + 1,
+                f"unmodeled '{key}:' under 'defaults.run:' — the gate models only "
+                "run.working-directory and run.shell (refusing rather than guessing)",
+            )
+        return working_directory
 
     def _top_level_keys(self) -> list[tuple[str, int]]:
         keys: list[tuple[str, int]] = []
@@ -2291,6 +2567,21 @@ class WorkflowParser:
             if key == "env":
                 i, job.env_range = self._consume_env_block(body, i, body_col)
                 continue
+            if key == "defaults":
+                # Issue #399 fold round 2 (N2): the job-level
+                # `defaults.run.working-directory` is an executable cwd, so
+                # it must be parsed rather than consumed opaquely.
+                if value.strip() not in ("", "{}"):
+                    raise Refusal(
+                        index + 1,
+                        "job 'defaults:' must be a block mapping — refusing rather than guessing",
+                    )
+                end = self._consume_opaque(body, i, body_col)
+                job.defaults_working_directory = self._defaults_working_directory(
+                    body, i + 1, end
+                )
+                i = end
+                continue
             if key == "needs":
                 _refuse_block_scalar_header(index, key, value)
                 _refuse_non_string_value_tag(index, key, value)
@@ -2310,6 +2601,17 @@ class WorkflowParser:
                 f"job '{name}' has both 'uses:' (line {job.uses_line}) and 'steps:' "
                 f"(line {job.steps_line}) — a reusable-workflow call cannot declare steps",
             )
+        # Issue #399 fold round 2 (N2): resolve the cwd chain after the whole
+        # job is walked, so a `defaults:` key in any position still reaches
+        # the run bodies parsed before it. A step's own value wins; then the
+        # job default; then the workflow default.
+        for body in job.run_bodies:
+            if body.working_directory is not None:
+                continue
+            if job.defaults_working_directory is not None:
+                body.working_directory = job.defaults_working_directory
+            elif self.workflow_defaults_working_directory is not None:
+                body.working_directory = self.workflow_defaults_working_directory
         return job
 
     def _consume_opaque(self, body: list[int], key_pos: int, parent_col: int) -> int:
@@ -2451,6 +2753,8 @@ class WorkflowParser:
                     scalar_content_indent=_scalar_content_indent(
                         self.lines, step.run_line, step.run_body_text
                     ),
+                    working_directory=step.working_directory,
+                    working_directory_line=step.working_directory_line,
                 )
             )
         if step.kind:
@@ -2497,6 +2801,21 @@ class WorkflowParser:
         if key == "env":
             end, step.env_range = self._consume_env_block(body, pos, col)
             return end
+        if key == "working-directory":
+            # Issue #399 fold round 1: captured (not refused) here; the
+            # shell-downloader pass refuses a `scripts/ci/*.sh` delegation in
+            # a step whose effective cwd is not the repository root. Fold
+            # round 2 (N3): an empty inline value is captured from the
+            # consumed scalar too, so `working-directory:` + an indented
+            # `sub` is not read as the repository root.
+            end = pos + 1 if value else self._consume_opaque(body, pos, col)
+            step.working_directory = (
+                decode_scalar(value)
+                if value
+                else self._plain_block_scalar_text(body, pos, end)
+            )
+            step.working_directory_line = index + 1
+            return end
         if key == "run":
             step.run_line = index + 1
             end = pos + 1 if value else self._consume_opaque(body, pos, col)
@@ -2504,6 +2823,22 @@ class WorkflowParser:
             step.run_mentions_github_env = _mentions_github_env(step.run_body_text)
             return end
         return pos + 1 if value else self._consume_opaque(body, pos, col)
+
+    def _plain_block_scalar_text(
+        self, body: list[int], pos: int, end: int
+    ) -> str:
+        """The folded plain-scalar text of a key's consumed block (issue
+        #399 fold round 2, N3): `working-directory:` with an empty inline
+        value and an indented scalar (`working-directory:` newline `  sub`).
+        YAML folds those lines with spaces; the gate only needs the decoded
+        string, because any non-root value refuses a delegation. An empty
+        block decodes to the empty string, i.e. the repository root."""
+        parts = [
+            self._body(body[j]).strip()
+            for j in range(pos + 1, end)
+            if not is_blank(self.lines[body[j]])
+        ]
+        return decode_scalar(" ".join(parts))
 
     def _run_body_text(
         self, index: int, value: str, body: list[int], pos: int, end: int
@@ -7801,6 +8136,942 @@ def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int
 
 
 # ---------------------------------------------------------------------------
+# Shell artifact downloaders (issue #399)
+# ---------------------------------------------------------------------------
+
+# The v3 token model's normalized phrase test (issue #399 fold rounds 1-2):
+# each word is ANSI-C-decoded (fold round 2, N6), quote-stripped, `\`+whitespace
+# and every whitespace run collapse to one space, then the segment refuses
+# when a `\bgh\b` word is followed (in order) by a `\brun\b` word and a
+# `\bdownload\b` word. The `\b`-ordered test — not the collapse — is what
+# covers the double-space/tab/`$( )`/backtick payloads and `gh$IFS`/
+# `${x}gh`: it tolerates arbitrary separators between its three words by
+# construction. The collapse is normalization: the `\`+whitespace form turns
+# the single-quoted `bash -c` continuation remnant (the payload join keeps
+# the `\`+newline pair) into one space.
+_SHELL_GH_WORD_RE = re.compile(r"\bgh\b")
+_SHELL_RUN_WORD_RE = re.compile(r"\brun\b")
+_SHELL_DOWNLOAD_WORD_RE = re.compile(r"\bdownload\b")
+
+# The delegation predicate (issue #399, fold round 1): a path-like match with
+# optional leading path components (`dir/scripts/ci/x.sh`, `/tmp/…`), matched
+# case-insensitively and right-anchored, so `x.sh.bak` cannot resolve to
+# `x.sh`. The candidate is read from the quote-stripped word after
+# `posixpath.normpath`, so `//`, `.` and `..` spellings read as the executed
+# path, and each match is normalized again.
+_SHELL_DELEGATION_RE = re.compile(
+    r"(?:/|[A-Za-z0-9_.-]+/)*scripts/ci/[A-Za-z0-9_.-]+\.sh(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+
+# The nested-delegation analysis bound (plan v2 §3.3): the real tree nests
+# zero levels (`check-isolated-deinit-census.sh` self-references resolve and
+# are cut by the visited set), so a chain this deep is refused rather than
+# analysed. Depth counts entered scripts; the workflow run body is depth 0.
+_SHELL_DELEGATION_MAX_DEPTH = 4
+
+_SHELL_DOWNLOADER_REFUSAL = (
+    "shell artifact downloader (`gh run download`) in {location} — shell text is "
+    "refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs "
+    "in shell bodies. Keep the download in a `uses: actions/download-artifact` step "
+    "(or extend the gate)"
+)
+
+_SHELL_DELEGATION_UNRESOLVED_REFUSAL = (
+    "delegation to `{subpath}`{provenance} — the gate cannot resolve the referenced script "
+    "(refusing rather than skipping); fix the path, restore the script, or reword the mention"
+)
+
+_SHELL_DELEGATION_ESCAPE_REFUSAL = (
+    "delegation to `{subpath}`{provenance} resolves outside the scanned root — "
+    "the gate resolves `scripts/ci/*.sh` delegations under the scanned root only "
+    "(refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_WORKING_DIR_REFUSAL = (
+    "delegation to `{subpath}`{provenance} under "
+    "`working-directory: {working_directory}` — the gate resolves delegations "
+    "relative to the repository root only (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} after a `cd` in the same shell body — "
+    "the gate resolves delegations relative to the repository root only "
+    "(refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_DEFERRED_FUNCTION_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a function body, in a shell body "
+    "that also contains a `cd` — the gate cannot prove the deferred body's "
+    "effective cwd (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_TRAP_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a `trap` action whose shell "
+    "body or action contains a `cd` — the gate cannot prove the trap's "
+    "effective cwd (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_CMDSUB_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a command substitution that "
+    "also contains a `cd` — the substitution's own shell has already changed "
+    "cwd (refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_SOURCED_CD_REFUSAL = (
+    "delegation to `{subpath}`{provenance} via `.`/`source` of a script whose "
+    "body contains a `cd` — a sourced script shares this shell's cwd, so the "
+    "gate cannot prove later delegations' effective cwd (refusing rather than "
+    "guessing)"
+)
+
+_SHELL_DELEGATION_DEPTH_REFUSAL = (
+    "delegation to `{subpath}`{provenance} exceeds the nested-delegation depth cap "
+    f"({_SHELL_DELEGATION_MAX_DEPTH}) — the gate cannot prove the referenced "
+    "script's body (refusing rather than skipping)"
+)
+
+_SHELL_CONTINUATION_BOUND_REFUSAL = (
+    f"shell text in {{location}} has a backslash continuation chain longer than "
+    f"the physical-line analysis bound ({_CONTINUATION_JOIN_MAX_LINES} lines), so a "
+    "joined downloader or delegation cannot be extracted (refusing rather than "
+    "guessing; split the chain into shorter logical lines)"
+)
+
+
+@dataclass
+class ShellDownloaderScan:
+    """The #399 pass's result for one workflow file. `findings` are
+    `(run_body.line, message)` anchors, `delegated` the DISTINCT canonical
+    `scripts/ci/*.sh` paths resolved (including nested scripts, excluding a
+    target the depth cap refused), and `references` the count of `(run body,
+    subpath)` references found in the workflow run bodies themselves
+    (nested references are recursion, not resolution roots), up to the
+    first finding per body — reporting stops at the first refusal, so a
+    failing file's count can be partial."""
+
+    root: Path
+    findings: list[tuple[int, str]] = field(default_factory=list)
+    delegated: set[Path] = field(default_factory=set)
+    references: int = 0
+
+
+def _shell_body_location(origin: str | None, line: int) -> str:
+    """The refusal location: `scripts/ci/<name>.sh:<line>` for a finding
+    inside a delegated script, or `this run: body` for one in the workflow."""
+    if origin is None:
+        return "this `run:` body"
+    return f"`{origin}:{line}`"
+
+
+def _shell_strip_quotes(word: str) -> str:
+    """Remove the quote characters from one tokenizer word. `_shell_tokens`
+    already removes the quotes of an ordinary word, but keeps the content of
+    a `$(…)`/backtick region verbatim (so `$(scripts/ci/"evil".sh)` and
+    `$(gh run download)` survive with their inner quotes); the #399 token and
+    delegation models read the quote-stripped word so those spellings are
+    visible (fold round 1, lens-1 BLOCKER 1 / MAJOR 4)."""
+    return word.replace("'", "").replace('"', "")
+
+
+# One `$'…'` ANSI-C literal as `_shell_tokens` keeps it (verbatim, including
+# the closing quote): a backslash escapes the next character, so the close is
+# the first unescaped `'`. The capture excludes both quotes.
+_SHELL_ANSI_C_QUOTED_RE = re.compile(r"\$'((?:\\.|[^'\\])*)'", re.DOTALL)
+
+
+def _shell_decode_ansi_c_body(body: str) -> str:
+    r"""Decode one `$'…'` body the way bash's ANSI-C quoting does (issue
+    #399 fold round 2, N6): the C single-character escapes, `\cX`, octal
+    `\NNN`, hex `\xHH`, `\uHHHH` and `\UHHHHHHHH`. A `\x`/`\u`/`\U`
+    with no valid digit and any other unrecognized escape keep their
+    backslash AND character, exactly as bash leaves them (measured:
+    `$'\q'`, `$'\xZ'` and `$'\8'` all print with the backslash). The
+    decoder is what makes `g$'\x68' run download` visible to the phrase
+    test; an unrecognized escape therefore cannot fabricate a `gh` word."""
+    result: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\" or index + 1 >= len(body):
+            result.append(char)
+            index += 1
+            continue
+        nxt = body[index + 1]
+        if nxt in ("x", "u", "U"):
+            width = {"x": 2, "u": 4, "U": 8}[nxt]
+            digits = body[index + 2 : index + 2 + width]
+            match = re.match(r"[0-9A-Fa-f]{1," + str(width) + r"}", digits)
+            if match is not None:
+                codepoint = int(match.group(0), 16)
+                if codepoint <= 0x10FFFF:
+                    result.append(chr(codepoint))
+                    index += 2 + len(match.group(0))
+                    continue
+            result.append(char)
+            result.append(nxt)
+            index += 2
+            continue
+        if nxt in "01234567":
+            match = re.match(r"[0-7]{1,3}", body[index + 1 :])
+            assert match is not None
+            result.append(chr(int(match.group(0), 8)))
+            index += 1 + len(match.group(0))
+            continue
+        if nxt == "c" and index + 2 < len(body):
+            control = body[index + 2]
+            result.append("\x7f" if control == "?" else chr(ord(control) & 0x1F))
+            index += 3
+            continue
+        mapped = _ANSI_C_ESCAPES.get(nxt)
+        if mapped is not None:
+            result.append(mapped)
+            index += 2
+            continue
+        result.append("\\")
+        result.append(nxt)
+        index += 2
+    return "".join(result)
+
+
+def _shell_decode_ansi_c(word: str) -> str:
+    """Every `$'…'` ANSI-C literal in one tokenizer word replaced with its
+    decoded text (issue #399 fold round 2, N6); a word with no `$'` spelling
+    is returned untouched, so the existing spellings and their diagnostics
+    cannot move."""
+    if "$'" not in word:
+        return word
+    return _SHELL_ANSI_C_QUOTED_RE.sub(
+        lambda match: _shell_decode_ansi_c_body(match.group(1)), word
+    )
+
+
+def _normalize_shell_word(word: str) -> str:
+    r"""The v3 token model's word normalization (issue #399 fold round 2):
+    `$'…'` ANSI-C literals decoded first (bash expands them before the
+    command runs, so `g$'\x68'` is the word `gh`), then quote characters
+    removed, a backslash followed by whitespace collapsed to one space (the
+    single-quoted `bash -c` continuation remnant joined by
+    `_quoted_payload_joined_segments`), then every whitespace run collapsed
+    to one space. The collapse is normalization, not the double-space/tab
+    coverage: the `\b`-ordered phrase test below tolerates arbitrary
+    separators between its three words by construction; the collapse is what
+    turns the retained `\`+newline of the payload join into a space."""
+    decoded = _shell_decode_ansi_c(word)
+    normalized = _shell_strip_quotes(decoded)
+    normalized = re.sub(r"\\\s+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized)
+
+
+def _ordered_word_positions(
+    words: list[str], pattern: re.Pattern[str]
+) -> list[tuple[int, int]]:
+    """Every `(word index, match start)` of `pattern` over `words`, in
+    source order, so the phrase test can require a strictly later match."""
+    return [
+        (word_index, match.start())
+        for word_index, word in enumerate(words)
+        for match in pattern.finditer(word)
+    ]
+
+
+def _shell_segment_is_artifact_downloader(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """The v3 token model over one joined segment (issue #399 fold round
+    1): within the normalized word list, a `\bgh\b` word is followed (in
+    order) by a `\brun\b` word and a `\bdownload\b` word. The match is
+    positional, so `gh run -R owner/repo download` matches, `run … gh …
+    download` does not, and a single word that carries the whole phrase
+    (`bash -c "gh  run  download …"`, `$(gh run download)`, the joined
+    single-quoted payload) matches too."""
+    words = [
+        _normalize_shell_word(token[1])
+        for token in segment
+        if token[0] == "word"
+    ]
+    gh_positions = _ordered_word_positions(words, _SHELL_GH_WORD_RE)
+    run_positions = _ordered_word_positions(words, _SHELL_RUN_WORD_RE)
+    download_positions = _ordered_word_positions(words, _SHELL_DOWNLOAD_WORD_RE)
+    for gh_position in gh_positions:
+        for run_position in run_positions:
+            if run_position <= gh_position:
+                continue
+            for download_position in download_positions:
+                if download_position > run_position:
+                    return True
+    return False
+
+
+def _quoted_payload_joined_segments(
+    lines: list[str], index: int, content_indent: int
+) -> list[list[tuple[str, str, int, int]]]:
+    """Issue #399 fold round 1: the single-quoted payload join. A
+    backslash+newline inside a single-quoted region is literal for the OUTER shell,
+    so neither `_joined_continuation_segments` nor
+    `_bash_joined_continuation_segments` joins it; but the interpreter that
+    receives the string (`bash -c '…'`) removes the pair and runs the joined
+    command. The caller runs this pass only where the whole-body quote state
+    at the line end is `'` (an open single-quoted payload); the join keeps
+    the backslash and the newline so `_normalize_shell_word` collapses the
+    remnant to one space. Intervening blanks are skipped, and a chain that
+    ends at EOF drops the trailing backslash (the inner interpreter drops it
+    too)."""
+    if not _line_has_continuation(lines[index]):
+        return []
+    parts = [_strip_continuation_indent(lines[index], content_indent)]
+    cursor = index
+    while _line_has_continuation(parts[-1]):
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            parts[-1] = parts[-1][:-1]
+            break
+        parts.append(_strip_continuation_indent(lines[nxt], content_indent))
+        cursor = nxt
+    return [
+        segment
+        for segment in _shell_segments(_shell_tokens("\n".join(parts)))
+        if segment
+    ]
+
+
+def _delegation_provenance(origin: str | None, line: int) -> str:
+    """The refusal provenance for a nested delegation: ` from
+    `scripts/ci/<parent>.sh:<line>``, or the empty string at the workflow
+    level (plan v2 §3.3/F9)."""
+    if origin is None:
+        return ""
+    return f" from `{origin}:{line}`"
+
+
+def _shell_delegation_candidates(word: str) -> list[str]:
+    """Every `scripts/ci/*.sh` candidate in one quote-stripped word as the
+    normalized path the shell would execute (issue #399 fold round 1). The
+    word is ANSI-C-decoded first (fold round 3, N12), symmetric with
+    `_normalize_shell_word`, so `bash $'\x73cripts/ci/x.sh'` names the
+    executed path instead of an invisible spelling; it is then
+    `posixpath.normpath`-normalized BEFORE matching so
+    `scripts/ci//x.sh`, `scripts/./ci/x.sh` and `scripts/ci/../ci/x.sh` all
+    read as the executed path; each match is normalized again so a candidate
+    found in an unnormalized word (a `$()` payload) is normalized too."""
+    stripped = _shell_strip_quotes(_shell_decode_ansi_c(word))
+    if not stripped:
+        return []
+    normalized = posixpath.normpath(stripped)
+    return [
+        posixpath.normpath(match.group(0))
+        for match in _SHELL_DELEGATION_RE.finditer(normalized)
+    ]
+
+
+def _shell_delegation_escapes_root(subpath: str) -> bool:
+    """True when a normalized delegation candidate is absolute or climbs
+    out of the scanned root (a `..` segment left after `posixpath.normpath`),
+    so the gate refuses rather than resolving a path outside the tree
+    (issue #399 fold round 1)."""
+    return (
+        subpath.startswith("/")
+        or subpath == ".."
+        or subpath.startswith("../")
+    )
+
+
+def _shell_segment_is_cd(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """The #399 cwd predicate over one segment (fold round 2): ANY
+    quote-stripped word whose leading `(`/backslash run is stripped equals
+    `cd` is a cwd change. The fold-round-1 first-word-only predicate missed
+    every executable spelling whose `cd` is not the first normalized word:
+    `if cd sub`, `while cd sub`, `{ cd sub`, `! cd sub`, `( cd sub`,
+    `FOO=1 cd sub`, `command cd sub`, `time cd sub` and `builtin cd sub` all
+    change the shell cwd, so all of them refuse a later delegation
+    (closure re-lens N1). A `cd` inside a `$(…)`/backtick region does NOT
+    change the shell cwd: the tokenizer keeps the whole substitution in one
+    word, so a word that merely CONTAINS `cd` is not the word `cd`
+    (`teleport-server.sh:114` and `check-ghostty-config.sh:80-81,256`
+    rely on that exclusion)."""
+    for token in segment:
+        if token[0] != "word":
+            continue
+        if _normalize_shell_word(token[1]).lstrip("(\\") == "cd":
+            return True
+    return False
+
+
+# A function-definition opener: a `function` keyword word, a `name()`/`name(){`
+# word, or `name` followed by a `()…` word (`f () {`). Every word position is
+# scanned, because a definition can follow a reserved word (`then f() { … }`,
+# `do f() { … }`, `{ f() { … }`); an argument-shaped `f()` mention is a
+# deliberate over-refusal only when the body also has a `cd` and a candidate.
+_SHELL_FUNCTION_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)")
+_SHELL_FUNCTION_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _shell_segment_defines_function(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """True when the segment opens a function definition (fold round 2,
+    N1c). The deferred-function rule needs this because a bash function body
+    executes whenever the function is called, not where it is defined (the
+    closure re-lens' `f() { bash scripts/ci/evil.sh; } ; cd sub ; f` proof).
+    Every word is scanned so `then f() { … }` and `function f` after a
+    reserved word are modeled too."""
+    words = [
+        _normalize_shell_word(token[1])
+        for token in segment
+        if token[0] == "word"
+    ]
+    for index, word in enumerate(words):
+        if word == "function":
+            return True
+        if _SHELL_FUNCTION_DEF_RE.match(word):
+            return True
+        if (
+            index + 1 < len(words)
+            and _SHELL_FUNCTION_NAME_RE.match(word) is not None
+            and words[index + 1].startswith("()")
+        ):
+            return True
+    return False
+
+
+def _shell_body_has_cd(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> bool:
+    """True when any segment of the body is a cwd change under
+    `_shell_segment_is_cd` — per physical line or on either continuation
+    join. Read by the deferred-function rule (fold round 2, N1c): a body
+    that defines a function AND changes cwd anywhere cannot prove the cwd
+    its candidates run under, so a candidate the body could defer refuses."""
+    for index in range(len(lines)):
+        for segment in _shell_segments(_shell_tokens(lines[index])):
+            if _shell_segment_is_cd(segment):
+                return True
+    for index in range(len(lines)):
+        for segment in _joined_continuation_segments(lines, index):
+            if _shell_segment_is_cd(segment):
+                return True
+        for segment in _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        ):
+            if _shell_segment_is_cd(segment):
+                return True
+    return False
+
+
+# A `trap` registration word: exactly `trap`, or a word carrying the `trap`
+# prefix with its payload glued on (the `trap'…'` spelling survives
+# tokenization only as one word).
+_SHELL_TRAP_WORD_RE = re.compile(r"^trap(?:$|[^A-Za-z0-9_])")
+
+
+def _shell_segment_trap_payload(
+    segment: list[tuple[str, str, int, int]], token_index: int
+) -> bool:
+    """True when the word at `token_index` is inside a `trap` action (fold
+    round 3, N10). A trap action executes at EXIT/ERR time, exactly like a
+    function body, so a delegation candidate inside it is deferred and its
+    effective cwd is unprovable. The action is the word after `trap` in the
+    token model (`trap 'bash scripts/ci/x.sh' EXIT`), or the word itself when
+    it carries the `trap` prefix."""
+    for prior in segment[:token_index]:
+        if prior[0] != "word":
+            continue
+        if _normalize_shell_word(prior[1]) == "trap":
+            return True
+    token = segment[token_index]
+    if token[0] != "word":
+        return False
+    return _SHELL_TRAP_WORD_RE.match(_normalize_shell_word(token[1])) is not None
+
+
+def _shell_trap_payload_has_cd(word: str) -> bool:
+    """True when a trap action word's payload contains a modeled `cd` (fold
+    round 3, N10). The payload is one tokenizer word (`trap 'cd sub; bash
+    scripts/ci/x.sh' EXIT`), so its inner `;`/`&&` segments are visible only
+    by re-tokenizing the word text."""
+    for segment in _shell_segments(_shell_tokens(word)):
+        if _shell_segment_is_cd(segment):
+            return True
+    return False
+
+
+def _shell_word_substitution_cd(word: str) -> bool:
+    """True when a top-level `$(…)` or backtick region of one tokenizer word
+    contains a modeled `cd` (fold round 3, N11). `_shell_segment_is_cd`
+    cannot see a `cd` inside a substitution (the tokenizer keeps the whole
+    substitution in one word), which is correct for the OUTER shell but not
+    for a delegation inside that same substitution: its own shell has already
+    changed cwd when the candidate runs."""
+    index = 0
+    while index < len(word):
+        if word.startswith("$(", index):
+            end = _consume_command_substitution(word, index)
+            closed = end > index + 2 and word[end - 1] == ")"
+            body = word[index + 2 : end - 1] if closed else word[index + 2 : end]
+            for segment in _shell_segments(_shell_tokens(body)):
+                if _shell_segment_is_cd(segment):
+                    return True
+            index = end
+            continue
+        if word[index] == "`":
+            end = word.find("`", index + 1)
+            body = word[index + 1 :] if end == -1 else word[index + 1 : end]
+            for segment in _shell_segments(_shell_tokens(body)):
+                if _shell_segment_is_cd(segment):
+                    return True
+            index = len(word) if end == -1 else end + 1
+            continue
+        index += 1
+    return False
+
+
+def _shell_segment_sources_script(
+    segment: list[tuple[str, str, int, int]], token_index: int
+) -> bool:
+    """True when the word at `token_index` is an operand of a `.`/`source`
+    word in the same segment (fold round 3, N13): the sourced script runs in
+    this shell, so unlike `bash scripts/ci/x.sh` its `cd` changes the
+    caller's cwd."""
+    for prior in segment[:token_index]:
+        if prior[0] != "word":
+            continue
+        if _normalize_shell_word(prior[1]).lstrip("\\") in (".", "source"):
+            return True
+    return False
+
+
+def _sourced_script_has_cd(
+    subpath: str,
+    origin: str | None,
+    origin_line: int,
+    root: Path,
+    visited: set[Path],
+) -> bool:
+    """True when a `scripts/ci/*.sh` sourced (`.`/`source`) by a shell body
+    contains a modeled `cd`, directly or through a nested source (fold round
+    3, N13). The helper is read through `_read_delegated_script`, so a
+    missing/unreadable target is false here and the caller's resolution path
+    still refuses it; the visited set bounds a source cycle."""
+    canonical, text, refusal = _read_delegated_script(
+        subpath, origin, origin_line, root
+    )
+    if refusal is not None or text is None or canonical in visited:
+        return False
+    visited.add(canonical)
+    lines = text.split("\n")
+    if _shell_body_has_cd(
+        lines, 0, _whole_body_continuation_state(lines, 0, set())
+    ):
+        return True
+    for line in lines:
+        for segment in _shell_segments(_shell_tokens(line)):
+            words = [token for token in segment if token[0] == "word"]
+            for index, token in enumerate(words):
+                if _normalize_shell_word(token[1]).lstrip("\\") not in (
+                    ".",
+                    "source",
+                ):
+                    continue
+                for nested in words[index + 1 :]:
+                    for nested_subpath in _shell_delegation_candidates(nested[1]):
+                        if _sourced_script_has_cd(
+                            nested_subpath, subpath, 0, root, visited
+                        ):
+                            return True
+    return False
+
+
+def _shell_function_def_lines(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> list[int]:
+    """The 0-based line indices carrying a function-definition spelling
+    (fold round 2, N1c), ascending. A continuation-split definition is still
+    visible on its anchor line (`f() \\` keeps `f()` on the first physical
+    line), and a definition whose opener is on an earlier line than a
+    candidate makes every later candidate potentially deferred. The
+    bash-faithful join is scanned too (fold round 3, N14): a name and its
+    `()` split as `f \\` + newline + `()` exist as the definition only after
+    the join removes the backslash-newline pair."""
+    found: list[int] = []
+    for index in range(len(lines)):
+        segments = _shell_segments(_shell_tokens(lines[index]))
+        segments += _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        )
+        for segment in segments:
+            if _shell_segment_defines_function(segment):
+                found.append(index)
+                break
+    return found
+
+
+def _raw_join_last_line(lines: list[str], index: int) -> int:
+    """The last 0-based physical line of the raw continuation join anchored
+    at `index`; the walk mirrors `_joined_continuation_segments`, so the span
+    tracks the join the scanner actually reads."""
+    if not _line_continuation_pending(lines[index]):
+        return index
+    if _raw_continuation_bound_exceeded(lines, index):
+        return index
+    cursor = index
+    while cursor < len(lines) and _line_continuation_pending(lines[cursor]):
+        cursor += 1
+    return min(cursor, len(lines) - 1)
+
+
+def _bash_join_last_line(
+    lines: list[str], index: int, pending: list[tuple[bool, str | None]]
+) -> int:
+    """The last 0-based physical line of the bash-faithful join anchored at
+    `index`; the walk mirrors `_bash_joined_continuation_segments` (blank
+    lines skipped, a trailing `\\` at EOF dropped by the join)."""
+    if index >= len(pending) or not pending[index][0]:
+        return index
+    if _bash_continuation_bound_exceeded(lines, index, pending):
+        return index
+    cursor = index
+    while True:
+        if cursor >= len(pending) or not pending[cursor][0]:
+            return cursor
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            return cursor
+        cursor = nxt
+
+
+def _payload_join_last_line(lines: list[str], index: int) -> int:
+    """The last 0-based physical line of the single-quoted `bash -c`
+    payload join anchored at `index`; the walk mirrors
+    `_quoted_payload_joined_segments` (intervening blanks skipped)."""
+    if not _line_has_continuation(lines[index]):
+        return index
+    cursor = index
+    while _line_has_continuation(lines[cursor]):
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            return cursor
+        cursor = nxt
+    return cursor
+
+
+def _shell_cd_before_lines(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> set[int]:
+    """The #399 cwd predicate's order-aware form (fold round 1): the set of
+    0-based line indices for which a `cd` segment appears strictly earlier
+    in the body, on a physical line or on a continuation join anchored on an
+    earlier line. A delegation on such a line is refused because the
+    effective cwd is no longer the repository root; the live
+    `check-license-headers.sh` body has `SELF=scripts/ci/…` before its own
+    `cd`, so a body-wide rule would refuse a benign self-reference (the
+    brief's primary rule is `cd` BEFORE a delegation). A `cd` in the same
+    segment or line is handled by the caller's in-order walk."""
+    cd_before: set[int] = set()
+    seen_cd = False
+    for index in range(len(lines)):
+        if seen_cd:
+            cd_before.add(index)
+        for segment in _shell_segments(_shell_tokens(lines[index])):
+            if _shell_segment_is_cd(segment):
+                seen_cd = True
+                break
+        if not seen_cd:
+            for segment in _joined_continuation_segments(lines, index):
+                if _shell_segment_is_cd(segment):
+                    seen_cd = True
+                    break
+        if not seen_cd:
+            for segment in _bash_joined_continuation_segments(
+                lines, index, content_indent, pending
+            ):
+                if _shell_segment_is_cd(segment):
+                    seen_cd = True
+                    break
+    return cd_before
+
+
+def _read_delegated_script(
+    subpath: str,
+    origin: str | None,
+    origin_line: int,
+    root: Path,
+) -> tuple[Path | None, str | None, str | None]:
+    """Resolve a `scripts/ci/…​.sh` delegation under `root`: canonicalize,
+    require a file inside the root (canonical containment), then read it with
+    a strict UTF-8 decode. Returns `(canonical_path, text, refusal_message)`;
+    exactly one of the path and the message is set. Missing, outside-root,
+    loop and unreadable targets refuse rather than skip (plan v2 §3.3).
+    `Path.resolve()` raises `OSError` (ELOOP) on current Pythons and
+    `RuntimeError` / `OSError` across the supported versions, so both are
+    caught — fail-closed either way."""
+    provenance = _delegation_provenance(origin, origin_line)
+    refusal = _SHELL_DELEGATION_UNRESOLVED_REFUSAL.format(
+        subpath=subpath, provenance=provenance
+    )
+    try:
+        root_resolved = root.resolve()
+        candidate = (root / subpath).resolve()
+        if not candidate.is_relative_to(root_resolved) or not candidate.is_file():
+            return None, None, refusal
+        raw = candidate.read_bytes()
+    except (OSError, RuntimeError):
+        return None, None, refusal
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, None, refusal
+    return candidate, text, None
+
+
+def _scan_shell_body(
+    lines: list[str],
+    content_indent: int,
+    origin: str | None,
+    working_directory: str | None,
+    scanner: ShellDownloaderScan,
+    visited: set[Path],
+    depth: int,
+) -> tuple[str | None, set[str]]:
+    """Scan one shell body — a workflow `run:` body (`origin is None`) or a
+    delegated script (origin = the `scripts/ci/…​.sh` subpath) — for the #399
+    token model and delegations. Returns `(first refusal message, referenced
+    subpaths)`. Per-physical-line tokenization is mandated (plan v2 §3.1);
+    the additive continuation joins run after it and a chain beyond their
+    analysis bound refuses (plan v2 §3.4, mirroring
+    `_run_id_continuation_bound_refusal`). `working_directory` is the
+    enclosing step's effective `working-directory:` (None for a delegated
+    script): a non-root value refuses every delegation in the body. A `cd`
+    word in any position of a segment refuses a later delegation in the same
+    body (fold round 2, N1), and a candidate at or after a
+    function-definition opener refuses when the body also contains a `cd`
+    (N1c: the deferred body's cwd is unprovable). A candidate inside a
+    `trap` action is deferred the same way (fold round 3, N10); a candidate
+    inside a command substitution that itself contains a `cd` (N11) or
+    sourced via `.`/`source` from a script whose body contains a `cd` (N13)
+    refuses because the substitution's shell, or the sourced script, has
+    already changed cwd."""
+    referenced: set[str] = set()
+
+    def scan_segment(
+        segment: list[tuple[str, str, int, int]],
+        line: int,
+        last_line: int,
+        cwd_unknown: bool,
+    ) -> str | None:
+        if _shell_segment_is_artifact_downloader(segment):
+            return _SHELL_DOWNLOADER_REFUSAL.format(
+                location=_shell_body_location(origin, line)
+            )
+        for token_index, token in enumerate(segment):
+            if token[0] != "word":
+                continue
+            for subpath in _shell_delegation_candidates(token[1]):
+                referenced.add(subpath)
+                if working_directory is not None and working_directory not in (
+                    ".",
+                    "./",
+                    "",
+                ):
+                    return _SHELL_DELEGATION_WORKING_DIR_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                        working_directory=working_directory,
+                    )
+                if cwd_unknown:
+                    return _SHELL_DELEGATION_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_segment_trap_payload(segment, token_index) and (
+                    body_has_cd or _shell_trap_payload_has_cd(token[1])
+                ):
+                    # Fold round 3, N10: a trap action executes at EXIT/ERR
+                    # time, so a `cd` anywhere in the body (or in the action
+                    # itself) makes its effective cwd unprovable.
+                    return _SHELL_DELEGATION_TRAP_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_word_substitution_cd(token[1]):
+                    # Fold round 3, N11: the substitution's own shell has
+                    # already changed cwd when this candidate runs.
+                    return _SHELL_DELEGATION_CMDSUB_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_segment_sources_script(segment, token_index) and (
+                    _sourced_script_has_cd(subpath, origin, line, scanner.root, set())
+                ):
+                    # Fold round 3, N13: a sourced script shares this
+                    # shell's cwd, so its `cd` carries into the caller.
+                    return _SHELL_DELEGATION_SOURCED_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if (
+                    function_def_lines
+                    and body_has_cd
+                    and function_def_lines[0] <= last_line
+                ):
+                    # Fold round 2, N1c: the candidate sits at or after a
+                    # function definition (so the function body may contain
+                    # it) and the body changes cwd somewhere, so the cwd it
+                    # runs under when the function is called is unprovable.
+                    return _SHELL_DELEGATION_DEFERRED_FUNCTION_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if _shell_delegation_escapes_root(subpath):
+                    return _SHELL_DELEGATION_ESCAPE_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                canonical, text, refusal = _read_delegated_script(
+                    subpath, origin, line, scanner.root
+                )
+                if refusal is not None:
+                    return refusal
+                assert canonical is not None and text is not None
+                if canonical in visited:
+                    continue
+                if depth >= _SHELL_DELEGATION_MAX_DEPTH:
+                    return _SHELL_DELEGATION_DEPTH_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                scanner.delegated.add(canonical)
+                visited.add(canonical)
+                nested_message, _nested_referenced = _scan_shell_body(
+                    text.split("\n"),
+                    0,
+                    subpath,
+                    None,
+                    scanner,
+                    visited,
+                    depth + 1,
+                )
+                if nested_message is not None:
+                    return nested_message
+        return None
+
+    pending = _whole_body_continuation_state(lines, content_indent, set())
+    cd_before_lines = _shell_cd_before_lines(lines, content_indent, pending)
+    body_has_cd = _shell_body_has_cd(lines, content_indent, pending)
+    function_def_lines = _shell_function_def_lines(lines, content_indent, pending)
+    for index in range(len(lines)):
+        if _raw_continuation_bound_exceeded(
+            lines, index
+        ) or _bash_continuation_bound_exceeded(lines, index, pending):
+            return (
+                _SHELL_CONTINUATION_BOUND_REFUSAL.format(
+                    location=_shell_body_location(origin, index + 1)
+                ),
+                referenced,
+            )
+    for index, line in enumerate(lines):
+        cwd_unknown = index in cd_before_lines
+        for segment in _shell_segments(_shell_tokens(line)):
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(
+                segment, index + 1, index, cwd_unknown or segment_is_cd
+            )
+            if message is not None:
+                return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
+    for index in range(len(lines)):
+        cwd_unknown = index in cd_before_lines
+        for segment in _joined_continuation_segments(lines, index):
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _raw_join_last_line(lines, index),
+                cwd_unknown or segment_is_cd,
+            )
+            if message is not None:
+                return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
+        cwd_unknown = index in cd_before_lines
+        for segment in _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        ):
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _bash_join_last_line(lines, index, pending),
+                cwd_unknown or segment_is_cd,
+            )
+            if message is not None:
+                return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
+    for index in range(len(lines)):
+        # Issue #399 fold round 1: the single-quoted `bash -c` payload join.
+        # The whole-body quote state at the line end is `'` exactly when the
+        # outer joins deliberately skip this backslash; `pending[index + 1]`
+        # is the next line's start state, i.e. this line's end state.
+        if index + 1 >= len(pending) or pending[index + 1][1] != "'":
+            continue
+        cwd_unknown = index in cd_before_lines
+        for segment in _quoted_payload_joined_segments(
+            lines, index, content_indent
+        ):
+            segment_is_cd = _shell_segment_is_cd(segment)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _payload_join_last_line(lines, index),
+                cwd_unknown or segment_is_cd,
+            )
+            if message is not None:
+                return message, referenced
+            cwd_unknown = cwd_unknown or segment_is_cd
+    return None, referenced
+
+
+def _check_shell_artifact_downloaders(
+    file_result: FileResult, root: Path
+) -> ShellDownloaderScan:
+    """The #399 pass: scan every parsed `run:` body for the shell artifact
+    downloader token model and for delegated `scripts/ci/…​.sh` scripts
+    (transitively, visited set + depth cap). Findings are anchored at the run
+    body's `run:` line; a nested finding names `scripts/ci/<name>.sh:<line>`.
+    Appending the findings to `file_result.diagnostics` makes `scan_root`'s
+    second loop skip the file's `checked_downloads` accounting and
+    `_evaluate_rules` — the same fail-closed path as any refusal."""
+    scan = ShellDownloaderScan(root=root)
+    for job in file_result.jobs:
+        for body in job.run_bodies:
+            message, referenced = _scan_shell_body(
+                body.body_text.split("\n"),
+                body.scalar_content_indent,
+                None,
+                body.working_directory,
+                scan,
+                set(),
+                0,
+            )
+            scan.references += len(referenced)
+            if message is not None:
+                scan.findings.append((body.line, message))
+    return scan
+
+
+# ---------------------------------------------------------------------------
 # File / root scan
 # ---------------------------------------------------------------------------
 
@@ -7908,12 +9179,39 @@ def scan_root(root: Path, enforce_floor: bool = True) -> ScanResult:
         f"artifact-dependency gate: scanning {len(files)} workflow file(s) under {WORKFLOWS_RELPATH}"
     )
     file_results: list[FileResult] = []
+    delegated_scripts: set[Path] = set()
     for path in files:
         relpath = str(path.relative_to(directory))
         file_result = process_file(relpath, path.read_bytes())
+        if not file_result.diagnostics:
+            # Issue #399: the shell-downloader pass runs only for a file the
+            # subset parser accepted, and its findings join the same
+            # `file_result.diagnostics` list so the second loop skips the
+            # file's accounting and rules evaluation.
+            shell_scan = _check_shell_artifact_downloaders(file_result, root)
+            delegated_scripts.update(shell_scan.delegated)
+            result.delegation_refs += shell_scan.references
+            file_result.diagnostics.extend(shell_scan.findings)
         file_results.append(file_result)
         for line, message in file_result.diagnostics:
             result.diagnostics.append(f"{relpath}:{line}: {message}")
+    result.delegated_scripts = len(delegated_scripts)
+    result.summary.append(
+        "artifact-dependency gate: resolved "
+        f"{result.delegated_scripts} distinct delegated script(s) from "
+        f"{result.delegation_refs} distinct run-body reference(s)"
+    )
+    if enforce_floor and result.delegated_scripts < MIN_SCANNED_DELEGATED_SCRIPTS:
+        # Issue #399: the delegate-scan floor. Deliberately after the
+        # workflow-floor early return above, so `reject-scan-floor` keeps its
+        # single diagnostic.
+        result.diagnostics.append(
+            "delegated-script floor: only "
+            f"{result.delegated_scripts} distinct delegated script(s) resolved from "
+            f"workflow run bodies; the floor is {MIN_SCANNED_DELEGATED_SCRIPTS} — update "
+            "the floor constant only if the delegations were intentionally removed "
+            "(refusing rather than passing a tree where the delegation scan is vacuous)"
+        )
     # Global producer index for cross-file diagnostics: artifacts are
     # run-scoped, so a name whose only producer lives in another file cannot
     # satisfy a `needs:` path in this file.
@@ -8036,6 +9334,60 @@ def _load_manifest():
     return module
 
 
+def _confine_fixture_destination(tempdir: Path, destination: str) -> str | None:
+    """Issue #399 fold round 1 (lens-2 F3): every fixture destination must
+    stay inside the case's tempdir. An absolute path, a `..` component, or a
+    path that resolves outside the tempdir fails the case instead of writing
+    outside the sandbox; returns the failure suffix, or None."""
+    path = Path(destination)
+    if path.is_absolute() or ".." in path.parts:
+        return f"fixture destination escapes the case tempdir: {destination}"
+    if not (tempdir / path).resolve().is_relative_to(tempdir.resolve()):
+        return f"fixture destination escapes the case tempdir: {destination}"
+    return None
+
+
+def _materialize_extra_files(case: dict, tempdir: Path) -> str | None:
+    """Copy a case's `extra_files` (`{destination: fixture}`) into the case
+    tempdir, parents created; returns the failure suffix, or None. The
+    destination is confined to the tempdir first (lens-2 F3)."""
+    for destination, filename in case.get("extra_files", {}).items():
+        destination_error = _confine_fixture_destination(tempdir, destination)
+        if destination_error is not None:
+            return destination_error
+        source = FIXTURES_DIR / filename
+        if not source.is_file():
+            return f"fixture file missing: {filename}"
+        target = tempdir / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    return None
+
+
+def _materialize_extra_symlinks(case: dict, tempdir: Path, outside: Path) -> str | None:
+    """Issue #399 fold round 1 (lens-2 F4): a case may declare
+    `extra_symlinks` (`{destination: fixture}`); the fixture is materialized
+    OUTSIDE the scanned root (in the sibling `<tempdir>.outside` directory)
+    and a symlink at `<tempdir>/<destination>` points at it, so the
+    root-containment guard has a rerunnable escape fixture. A missing source
+    or an escaping destination fails the case; returns the failure suffix,
+    or None."""
+    for destination, filename in case.get("extra_symlinks", {}).items():
+        destination_error = _confine_fixture_destination(tempdir, destination)
+        if destination_error is not None:
+            return destination_error
+        source = FIXTURES_DIR / filename
+        if not source.is_file():
+            return f"fixture file missing: {filename}"
+        outside.mkdir(parents=True, exist_ok=True)
+        target = outside / filename
+        shutil.copyfile(source, target)
+        link = tempdir / destination
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, link)
+    return None
+
+
 def run_selftest() -> int:
     manifest = _load_manifest()
     cases = list(manifest.CASES)
@@ -8078,8 +9430,15 @@ def run_selftest() -> int:
     referenced: set[str] = set()
     for case in cases:
         referenced.update(case["files"])
-    on_disk = {p.name for p in FIXTURES_DIR.glob("*.yml")} | {
-        p.name for p in FIXTURES_DIR.glob("*.yaml")
+        # Issue #399: `extra_files` sources and `extra_symlinks` targets are
+        # fixtures too, so an orphan or deleted `.sh` fixture is visible to
+        # the orphan check.
+        referenced.update(case.get("extra_files", {}).values())
+        referenced.update(case.get("extra_symlinks", {}).values())
+    on_disk = {
+        p.name
+        for pattern in ("*.yml", "*.yaml", "*.sh")
+        for p in FIXTURES_DIR.glob(pattern)
     }
     unreferenced = sorted(on_disk - referenced)
     if unreferenced:
@@ -8090,15 +9449,23 @@ def run_selftest() -> int:
     for case in cases:
         case_id = case["id"]
         tempdir = Path(tempfile.mkdtemp(prefix="artifact-dependency-selftest."))
+        outside = Path(str(tempdir) + ".outside")
         try:
             workflows = tempdir / WORKFLOWS_RELPATH
             workflows.mkdir(parents=True)
+            case_error: str | None = None
             for filename in case["files"]:
                 source = FIXTURES_DIR / filename
                 if not source.is_file():
-                    failures.append(f"{case_id}: fixture file missing: {filename}")
+                    case_error = f"fixture file missing: {filename}"
                     break
                 shutil.copyfile(source, workflows / filename)
+            if case_error is None:
+                case_error = _materialize_extra_files(case, tempdir)
+            if case_error is None and case.get("extra_symlinks"):
+                case_error = _materialize_extra_symlinks(case, tempdir, outside)
+            if case_error is not None:
+                failures.append(f"{case_id}: {case_error}")
             else:
                 scan = scan_root(tempdir, enforce_floor=case.get("floor", False))
                 actual_lines = list(scan.diagnostics)
@@ -8133,6 +9500,7 @@ def run_selftest() -> int:
                     )
         finally:
             shutil.rmtree(tempdir, ignore_errors=True)
+            shutil.rmtree(outside, ignore_errors=True)
     elapsed = time.monotonic() - started
     if failures:
         for failure in failures:

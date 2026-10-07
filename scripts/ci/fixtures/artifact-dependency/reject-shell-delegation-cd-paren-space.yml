@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): `( cd … )` changes the cwd inside the
+# subshell; the delegation in that subshell is cwd-relative.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          ( cd sub; bash scripts/ci/shell-evil.sh )

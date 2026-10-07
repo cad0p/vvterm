@@ -76,9 +76,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 802
-    private static let expectedBaseVerdictCases = 371
+    private static let expectedManifestCases = 856
+    private static let expectedBaseVerdictCases = 425
     private static let expectedWorkflowFloor = 12
+    /// Issue #399: the distinct-canonical-path floor for the delegated
+    /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
+    /// (`MIN_SCANNED_DELEGATED_SCRIPTS` in the gate; the real tree resolves
+    /// 9, so a truncated tree cannot make the delegation scan vacuous).
+    private static let expectedDelegatedScriptFloor = 6
 
     /// The `build` job's exact job-level key set (round-2 C-NIT-1). A
     /// job-level condition on the required job can skip the gate while
@@ -1030,6 +1035,100 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-sed-sflag-wg-filename.yml",
         "accept-runid-github-env-write-sed-sflag-block-opener.yml",
         "accept-runid-github-env-write-ansic-octal-name-concat-target.yml",
+        // #399: the shell-downloader inventory (the floor case's file set is
+        // existing accept fixtures, so it adds no file here).
+        "reject-shell-gh-run-download-inline.yml",
+        "reject-shell-gh-run-download-quoted-arg.yml",
+        "reject-shell-gh-run-download-continuation.yml",
+        "reject-shell-delegation-gh-run-download.yml",
+        "reject-shell-delegation-cmdsub.yml",
+        "reject-shell-delegation-stdin-redirect.yml",
+        "reject-shell-delegation-unresolvable.yml",
+        "reject-shell-delegation-transitive.yml",
+        "reject-shell-delegation-depth-cap.yml",
+        "accept-shell-run-body-comment-token.yml",
+        "accept-shell-benign-delegation.yml",
+        "accept-shell-delegation-cycle.yml",
+        "reject-shell-delegation-prefixed-path.yml",
+        // #399 fold round 1: the normalized-phrase, executed-path, cwd,
+        // continuation-bound, lookahead and symlink-escape fixtures.
+        "reject-shell-gh-run-download-double-space.yml",
+        "reject-shell-gh-run-download-tab.yml",
+        "reject-shell-gh-run-download-cmdsub-spaced.yml",
+        "reject-shell-gh-run-download-backtick-spaced.yml",
+        "reject-shell-gh-run-download-repo-flag.yml",
+        "reject-shell-gh-run-download-payload-continuation.yml",
+        "reject-shell-gh-ifs.yml",
+        "reject-shell-delegation-double-slash.yml",
+        "reject-shell-delegation-dot-segment.yml",
+        "reject-shell-delegation-parent-segment.yml",
+        "reject-shell-delegation-case-component.yml",
+        "reject-shell-delegation-case-extension.yml",
+        "reject-shell-delegation-quoted-inner.yml",
+        "reject-shell-delegation-absolute-path.yml",
+        "reject-shell-delegation-working-directory.yml",
+        "reject-shell-delegation-cd-prefix.yml",
+        "reject-shell-continuation-over-bound.yml",
+        "accept-shell-delegation-bak-suffix.yml",
+        "reject-shell-delegation-symlink-escape.yml",
+        // #399 fold round 2: the every-word `cd` spellings, the deferred
+        // function refusal, the defaults `working-directory`, the indented
+        // scalar capture, the phrase quote-strip and bash-join pins, the
+        // ANSI-C hex assembly and the order-aware `cd` accept control.
+        "reject-shell-delegation-cd-if.yml",
+        "reject-shell-delegation-cd-while.yml",
+        "reject-shell-delegation-cd-brace.yml",
+        "reject-shell-delegation-cd-bang.yml",
+        "reject-shell-delegation-cd-paren-space.yml",
+        "reject-shell-delegation-cd-assignment-prefix.yml",
+        "reject-shell-delegation-cd-command.yml",
+        "reject-shell-delegation-cd-time.yml",
+        "reject-shell-delegation-cd-deferred-function.yml",
+        "reject-shell-defaults-working-directory.yml",
+        "reject-shell-working-directory-indented-scalar.yml",
+        "reject-shell-gh-run-download-cmdsub-quoted-run.yml",
+        "reject-shell-gh-run-download-backtick-quoted-run.yml",
+        "reject-shell-delegation-continuation.yml",
+        "reject-shell-gh-run-download-ansic-hex-assembly.yml",
+        "accept-shell-delegation-cd-after-candidate.yml",
+        // #399 fold round 3 (closure re-lens N10-N14): the deferred `trap`
+        // action, the substitution-internal `cd`, the ANSI-C delegation
+        // path, the sourced-helper `cd` and the continuation-split
+        // function-definition opener.
+        "reject-shell-delegation-trap-exit.yml",
+        "reject-shell-delegation-cmdsub-cd.yml",
+        "reject-shell-delegation-ansic-path.yml",
+        "reject-shell-delegation-sourced-cd.yml",
+        "reject-shell-delegation-cd-deferred-function-split.yml",
+    ]
+
+    /// Issue #399: the delegated-script fixtures (`extra_files` sources).
+    /// `requiredFixtures` cannot carry them (the YAML set-equality filter
+    /// drops `.sh`), so this array pins the shell inventory with the same
+    /// existence, manifest-reference and exact set/count invariants. The
+    /// `manifest.contains(fixture)` reference check is deliberately a
+    /// substring mirror (lens-2 F5, accepted): the structural invariant is
+    /// the `--selftest` orphan check, which requires every on-disk fixture
+    /// (including `extra_files` and `extra_symlinks` sources) to be
+    /// referenced by the manifest.
+    private static let requiredScriptFixtures: [String] = [
+        "shell-evil.sh",
+        "shell-hop-a.sh",
+        "shell-hop-b.sh",
+        "shell-chain-1.sh",
+        "shell-chain-2.sh",
+        "shell-chain-3.sh",
+        "shell-chain-4.sh",
+        "shell-chain-5.sh",
+        "shell-benign.sh",
+        "shell-cycle-a.sh",
+        "shell-cycle-b.sh",
+        // #399 fold round 2: the order-aware `cd` accept control's
+        // self-referencing delegated script.
+        "shell-self-cd.sh",
+        // #399 fold round 3, N13: the sourced helper whose `cd` propagates
+        // into the sourcing shell.
+        "shell-source-cd.sh",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -1242,6 +1341,32 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "the fixture directory's YAML files and `requiredFixtures` must match in count, with no duplicate entries — on disk \(fixtureFiles.count), required \(Self.requiredFixtures.count), unique required \(Set(Self.requiredFixtures).count) (issue #342)"
         )
 
+        // Issue #399: the delegated-script fixtures are `.sh`, invisible to
+        // the YAML equality above. Exact set equality plus count, the same
+        // invariant `--selftest` enforces through its `*.sh` orphan check,
+        // and every entry must be referenced by the manifest.
+        let scriptFixtureFiles = onDisk.filter { $0.hasSuffix(".sh") }
+        #expect(
+            Set(scriptFixtureFiles) == Set(Self.requiredScriptFixtures),
+            "the fixture directory's shell files must equal `requiredScriptFixtures` exactly — on disk \(scriptFixtureFiles.count), required \(Self.requiredScriptFixtures.count); extra: \(Set(scriptFixtureFiles).subtracting(Self.requiredScriptFixtures).sorted()); missing: \(Set(Self.requiredScriptFixtures).subtracting(scriptFixtureFiles).sorted()) (issue #399)"
+        )
+        #expect(
+            scriptFixtureFiles.count == Self.requiredScriptFixtures.count
+                && Set(Self.requiredScriptFixtures).count == Self.requiredScriptFixtures.count,
+            "the fixture directory's shell files and `requiredScriptFixtures` must match in count, with no duplicate entries — on disk \(scriptFixtureFiles.count), required \(Self.requiredScriptFixtures.count), unique required \(Set(Self.requiredScriptFixtures).count) (issue #399)"
+        )
+        for fixture in Self.requiredScriptFixtures {
+            let url = root.appendingPathComponent(Self.fixturesDirectory).appendingPathComponent(fixture)
+            #expect(
+                FileManager.default.fileExists(atPath: url.path),
+                "required shell fixture missing: \(Self.fixturesDirectory)/\(fixture) (issue #399)"
+            )
+            #expect(
+                manifest.contains(fixture),
+                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` source (issue #399)"
+            )
+        }
+
         // The script must reference the manifest, and carry the stated
         // manifest-length constant that `--selftest` enforces.
         #expect(
@@ -1255,6 +1380,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         #expect(
             script.contains("MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor)"),
             "\(Self.scriptPath) must state MIN_SCANNED_WORKFLOW_FILES = \(Self.expectedWorkflowFloor) — a stale floor would let a truncated tree pass (issue #316, lens-2 NIT 1)"
+        )
+        #expect(
+            script.contains("MIN_SCANNED_DELEGATED_SCRIPTS = \(Self.expectedDelegatedScriptFloor)"),
+            "\(Self.scriptPath) must state MIN_SCANNED_DELEGATED_SCRIPTS = \(Self.expectedDelegatedScriptFloor) — a stale floor would let a tree with no resolved delegated scripts pass (issue #399)"
         )
         #expect(
             script.contains("EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases)"),
@@ -1335,6 +1464,35 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             // `[A-Za-z_][A-Za-z0-9_]*` names reach it; the unextractable-name
             // refusal above owns the non-ASCII case), so its fragment is no
             // longer a manifest-asserted diagnostic (issue #342, F4).
+            // #399: the shell-downloader pass's distinctive fragments — the
+            // token rendering, the nested provenance, the unresolved
+            // delegation, the depth cap, the delegated floor and the
+            // actionable clause (no generic fragment).
+            "(`gh run download`)",
+            "cannot resolve the referenced script",
+            // #399 fold round 1: the emitted-path escape, the cwd refusals
+            // and the unresolved-delegation remediation clause.
+            "resolves outside the scanned root",
+            "`working-directory: {working_directory}`",
+            "after a `cd` in the same shell body",
+            "the gate resolves delegations relative to the repository root only",
+            "fix the path, restore the script, or reword the mention",
+            "nested-delegation depth cap",
+            "delegated-script floor: only",
+            "Keep the download in a `uses: actions/download-artifact` step",
+            // #399 fold round 2: the deferred-function refusal's
+            // distinctive fragment (the every-word `cd` spellings reuse
+            // the existing cd fragment, and the defaults/indented-scalar
+            // capture reuses the working-directory fragment).
+            "inside a function body, in a shell body",
+            // #399 fold round 3: the trap-deferral, substitution-internal
+            // `cd` and sourced-`cd` refusals (N10/N11/N13); N12 reuses the
+            // nested-finding fragment and N14 the function fragment above.
+            // The fragments must sit inside a single source literal (the
+            // pin checks the raw script text), so they stop at the wrap.
+            "inside a `trap` action",
+            "inside a command substitution that",
+            "via `.`/`source` of a script",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(
