@@ -1083,6 +1083,61 @@ refusal; the runtime value would be the text `null`); and env `!!int null`,
 which is `StringToken("null")` at runtime, so reading it as present is
 correct.
 
+SHELL ARTIFACT DOWNLOADERS (#399)
+---------------------------------
+Run bodies are blanked before the reconciliation pass, so the YAML model
+never reads shell text. A `gh run download` in a `run:` scalar, or in a
+`scripts/ci/*.sh` body the run scalar delegates to (the #249/#396
+extraction pattern), would bypass the job-ordering rule entirely. The pass
+therefore tokenizes every parsed run body PER PHYSICAL LINE (a whole-body
+`_shell_tokens` call is measurably fail-open: an indented `#` truncates the
+rest), adds the #350 item-12 continuation joins (the raw
+`_joined_continuation_segments` plus the bash-faithful
+`_bash_joined_continuation_segments`; a chain beyond the 64-line analysis
+bound refuses rather than yielding the joins' empty fail-open, mirroring
+`_run_id_continuation_bound_refusal`), and refuses on the token model. The
+token model is the `gh run download` command only. Branch A is a `gh` word
+(after stripping a leading `(` run and backslash escapes) followed later in the
+same segment by the adjacent `run`/`download` pair, so
+`gh -R owner/repo run download` matches. Branch B is any word containing
+the literal substring `gh run download`, so `bash -c "gh run download …"`,
+`eval '…'` and `$(…)`/backtick regions kept verbatim in one word match.
+The `-artifact@ref` action shape is deliberately NOT a token: a shell body
+cannot execute a GitHub Action, so the ref is data there, and treating the
+shape as a downloader flips the pinned
+`accept-run-line-mentioning-action` control. Comments never match
+(`_shell_tokens` stops at an unquoted `#`).
+
+The delegation model scans EVERY word token of EVERY segment (not
+`_argv_operand_words`, which drops redirect targets and would miss
+`bash < scripts/ci/x.sh`) for the right-anchored
+`scripts/ci/[A-Za-z0-9_.-]+\\.sh(?![A-Za-z0-9_.-])` subpath, with NO left
+boundary so `$(scripts/ci/x.sh)`, backticks, `SELF=…` and quoted words
+match. The matched subpath is resolved under the scanned root, must be a
+file inside that root (canonical containment), and is read with a strict
+UTF-8 decode; a missing, outside-root, loop or unreadable target refuses.
+Nested delegations recurse with a visited set of canonical paths and a
+depth cap of 4; beyond the cap refuses. A finding is anchored at the
+delegating run body's `run:` line and names
+`scripts/ci/<name>.sh:<line>` for a nested script finding. Over-refusal is
+the accepted failure mode: a quoted/echoed mention of the command, or a
+message naming a `.sh` path whose target is missing, refuses.
+
+The class is narrowed, not closed. Named residuals: assembled tokens
+(`CMD=gh; $CMD run download`), `printf`/base64 assembly piped to `bash`,
+interpreter payloads (`python3 -c`, `node -e`, `ruby`, `perl`), process
+substitution (`bash <(scripts/ci/x.sh)`), redirect-fed scripts not matching
+the path shape, `PATH`-invoked scripts, dynamic paths (`$NAME`/`${NAME}`),
+raw REST downloads (`gh api …/artifacts`), heredoc/message text naming a
+`.sh` path (it is resolved and scanned; a missing target refuses),
+non-`.sh` wrappers, and orphan scripts. The whole
+attribute-to-the-delegating-job arm (scanning a delegated downloader under
+the existing transitive-`needs:` rule) is declined by design: an executable
+shell downloader refuses regardless of the `needs:` graph. The
+delegated-script floor (`MIN_SCANNED_DELEGATED_SCRIPTS`) is enforced on
+distinct canonical paths after the per-file loop and only when
+`enforce_floor` is set, so `reject-scan-floor` keeps its single diagnostic.
+
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
     python3 scripts/ci/check-artifact-dependencies.py --selftest
@@ -1117,6 +1172,13 @@ EXPECTED_MANIFEST_CASES = 802
 # like a pass; update this constant only when workflows are intentionally
 # removed (and then update the pin suite too).
 MIN_SCANNED_WORKFLOW_FILES = 12
+# The delegated-script floor (issue #399): a distinct-canonical-path count of
+# the `scripts/ci/*.sh` scripts resolved from workflow run bodies. The real
+# tree resolves 9, so a typo'd `--root` or a truncated tree cannot make the
+# delegation scan vacuous. Enforced only under `enforce_floor` and only
+# after the workflow floor, so `reject-scan-floor` keeps its single
+# diagnostic.
+MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # A12's fixtures (45 at the round-1 fold + 24 at the round-2 fold + 15 at
 # the round-3 fold + 15 at the round-4 fold) each declare the measured
 # exit of the pre-fold gate
@@ -1350,6 +1412,13 @@ class ScanResult:
     # this so a vacuous accept (a download that never reached the cross-run
     # path) cannot pass (#342).
     excluded: int = 0
+    # Issue #399, additive counters for the shell-downloader pass:
+    # `delegated_scripts` counts DISTINCT canonical `scripts/ci/*.sh` paths
+    # resolved from workflow run bodies (the delegated-script floor unit),
+    # `delegation_refs` counts the resolved (run body, subpath) references
+    # at the workflow level. The summary line prints both.
+    delegated_scripts: int = 0
+    delegation_refs: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -7801,6 +7870,260 @@ def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int
 
 
 # ---------------------------------------------------------------------------
+# Shell artifact downloaders (issue #399)
+# ---------------------------------------------------------------------------
+
+# The token model's literal command. Branch B (containment) is tested with
+# this string; branch A (the `gh` + adjacent `run`/`download` pair) is tested
+# structurally because `gh -R owner/repo run download` separates the words.
+_SHELL_DOWNLOAD_COMMAND = "gh run download"
+
+# The delegation predicate (issue #399, plan v2 §3.3): no left boundary (so
+# `$(scripts/ci/x.sh)`, backticks, `SELF=…` and quoted/space-joined words all
+# match — a left-bounded predicate measurably missed the `$(…)` shape), and
+# right-anchored (so `x.sh.bak` cannot resolve to `x.sh`). The matched text is
+# always the relative `scripts/ci/…​.sh` subpath, never an absolute path.
+_SHELL_DELEGATION_RE = re.compile(r"scripts/ci/[A-Za-z0-9_.-]+\.sh(?![A-Za-z0-9_.-])")
+
+# The nested-delegation analysis bound (plan v2 §3.3): the real tree nests
+# zero levels (`check-isolated-deinit-census.sh` self-references resolve and
+# are cut by the visited set), so a chain this deep is refused rather than
+# analysed. Depth counts entered scripts; the workflow run body is depth 0.
+_SHELL_DELEGATION_MAX_DEPTH = 4
+
+_SHELL_DOWNLOADER_REFUSAL = (
+    "shell artifact downloader (`gh run download`) in {location} — shell text is "
+    "refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs "
+    "in shell bodies. Keep the download in a `uses: actions/download-artifact` step "
+    "(or extend the gate)"
+)
+
+_SHELL_DELEGATION_UNRESOLVED_REFUSAL = (
+    "delegation to `{subpath}`{provenance} — the gate cannot resolve the referenced "
+    "script (refusing rather than skipping)"
+)
+
+_SHELL_DELEGATION_DEPTH_REFUSAL = (
+    "delegation to `{subpath}`{provenance} exceeds the nested-delegation depth cap "
+    f"({_SHELL_DELEGATION_MAX_DEPTH}) — the gate cannot prove the referenced "
+    "script's body (refusing rather than skipping)"
+)
+
+_SHELL_CONTINUATION_BOUND_REFUSAL = (
+    f"shell text in {{location}} has a backslash continuation chain longer than "
+    f"the physical-line analysis bound ({_CONTINUATION_JOIN_MAX_LINES} lines), so a "
+    "joined downloader or delegation cannot be extracted (refusing rather than "
+    "guessing; split the chain into shorter logical lines)"
+)
+
+
+@dataclass
+class ShellDownloaderScan:
+    """The #399 pass's result for one workflow file. `findings` are
+    `(run_body.line, message)` anchors, `delegated` the DISTINCT canonical
+    `scripts/ci/*.sh` paths resolved (including nested scripts), and
+    `references` the count of `(run body, subpath)` references found in the
+    workflow run bodies themselves (nested references are recursion, not
+    resolution roots)."""
+
+    root: Path
+    findings: list[tuple[int, str]] = field(default_factory=list)
+    delegated: set[Path] = field(default_factory=set)
+    references: int = 0
+
+
+def _shell_body_location(origin: str | None, line: int) -> str:
+    """The refusal location: `scripts/ci/<name>.sh:<line>` for a finding
+    inside a delegated script, or `this run: body` for one in the workflow."""
+    if origin is None:
+        return "this `run:` body"
+    return f"`{origin}:{line}`"
+
+
+def _shell_word_is_gh(word: str) -> bool:
+    """A word equal to `gh` after stripping a leading `(` run and backslash
+    escapes (an unquoted escape is already resolved by `_shell_tokens`,
+    while a quoted one survives), so `(gh` and a quoted `gh` participate in
+    branch A of the token model."""
+    candidate = word
+    while candidate[:1] in ("(", "\\"):
+        candidate = candidate[1:]
+    return candidate == "gh"
+
+
+def _shell_segment_is_artifact_downloader(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """The #399 token model over one joined segment. Branch B first (the
+    literal substring in any word covers `bash -c "gh run download …"`,
+    `eval '…'` and `$(…)`/backtick regions kept verbatim in one word), then
+    branch A (a `gh` word followed later by the adjacent `run`/`download`
+    pair, which also matches `gh -R owner/repo run download`)."""
+    words = [token[1] for token in segment if token[0] == "word"]
+    for word in words:
+        if _SHELL_DOWNLOAD_COMMAND in word:
+            return True
+    for index, word in enumerate(words):
+        if not _shell_word_is_gh(word):
+            continue
+        for later in range(index + 1, len(words) - 1):
+            if words[later] == "run" and words[later + 1] == "download":
+                return True
+    return False
+
+
+def _delegation_provenance(origin: str | None, line: int) -> str:
+    """The refusal provenance for a nested delegation: ` from
+    `scripts/ci/<parent>.sh:<line>``, or the empty string at the workflow
+    level (plan v2 §3.3/F9)."""
+    if origin is None:
+        return ""
+    return f" from `{origin}:{line}`"
+
+
+def _read_delegated_script(
+    subpath: str,
+    origin: str | None,
+    origin_line: int,
+    root: Path,
+) -> tuple[Path | None, str | None, str | None]:
+    """Resolve a `scripts/ci/…​.sh` delegation under `root`: canonicalize,
+    require a file inside the root (canonical containment), then read it with
+    a strict UTF-8 decode. Returns `(canonical_path, text, refusal_message)`;
+    exactly one of the path and the message is set. Missing, outside-root,
+    loop and unreadable targets refuse rather than skip (plan v2 §3.3).
+    `Path.resolve()` raises `OSError` (ELOOP) on current Pythons and
+    `RuntimeError` / `OSError` across the supported versions, so both are
+    caught — fail-closed either way."""
+    provenance = _delegation_provenance(origin, origin_line)
+    refusal = _SHELL_DELEGATION_UNRESOLVED_REFUSAL.format(
+        subpath=subpath, provenance=provenance
+    )
+    try:
+        root_resolved = root.resolve()
+        candidate = (root / subpath).resolve()
+        if not candidate.is_relative_to(root_resolved) or not candidate.is_file():
+            return None, None, refusal
+        raw = candidate.read_bytes()
+    except (OSError, RuntimeError):
+        return None, None, refusal
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, None, refusal
+    return candidate, text, None
+
+
+def _scan_shell_body(
+    lines: list[str],
+    content_indent: int,
+    origin: str | None,
+    scanner: ShellDownloaderScan,
+    visited: set[Path],
+    depth: int,
+) -> tuple[str | None, set[str]]:
+    """Scan one shell body — a workflow `run:` body (`origin is None`) or a
+    delegated script (origin = the `scripts/ci/…​.sh` subpath) — for the #399
+    token model and delegations. Returns `(first refusal message, referenced
+    subpaths)`. Per-physical-line tokenization is mandated (plan v2 §3.1);
+    the additive continuation joins run after it and a chain beyond their
+    analysis bound refuses (plan v2 §3.4, mirroring
+    `_run_id_continuation_bound_refusal`)."""
+    referenced: set[str] = set()
+
+    def scan_segment(
+        segment: list[tuple[str, str, int, int]], line: int
+    ) -> str | None:
+        if _shell_segment_is_artifact_downloader(segment):
+            return _SHELL_DOWNLOADER_REFUSAL.format(
+                location=_shell_body_location(origin, line)
+            )
+        for token in segment:
+            if token[0] != "word":
+                continue
+            for match in _SHELL_DELEGATION_RE.finditer(token[1]):
+                subpath = match.group(0)
+                referenced.add(subpath)
+                canonical, text, refusal = _read_delegated_script(
+                    subpath, origin, line, scanner.root
+                )
+                if refusal is not None:
+                    return refusal
+                assert canonical is not None and text is not None
+                if canonical in visited:
+                    continue
+                scanner.delegated.add(canonical)
+                if depth >= _SHELL_DELEGATION_MAX_DEPTH:
+                    return _SHELL_DELEGATION_DEPTH_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                visited.add(canonical)
+                nested_message, _nested_referenced = _scan_shell_body(
+                    text.split("\n"), 0, subpath, scanner, visited, depth + 1
+                )
+                if nested_message is not None:
+                    return nested_message
+        return None
+
+    pending = _whole_body_continuation_state(lines, content_indent, set())
+    for index in range(len(lines)):
+        if _raw_continuation_bound_exceeded(
+            lines, index
+        ) or _bash_continuation_bound_exceeded(lines, index, pending):
+            return (
+                _SHELL_CONTINUATION_BOUND_REFUSAL.format(
+                    location=_shell_body_location(origin, index + 1)
+                ),
+                referenced,
+            )
+    for index, line in enumerate(lines):
+        for segment in _shell_segments(_shell_tokens(line)):
+            message = scan_segment(segment, index + 1)
+            if message is not None:
+                return message, referenced
+    for index in range(len(lines)):
+        for segment in _joined_continuation_segments(lines, index):
+            message = scan_segment(segment, index + 1)
+            if message is not None:
+                return message, referenced
+        for segment in _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        ):
+            message = scan_segment(segment, index + 1)
+            if message is not None:
+                return message, referenced
+    return None, referenced
+
+
+def _check_shell_artifact_downloaders(
+    file_result: FileResult, root: Path
+) -> ShellDownloaderScan:
+    """The #399 pass: scan every parsed `run:` body for the shell artifact
+    downloader token model and for delegated `scripts/ci/…​.sh` scripts
+    (transitively, visited set + depth cap). Findings are anchored at the run
+    body's `run:` line; a nested finding names `scripts/ci/<name>.sh:<line>`.
+    Appending the findings to `file_result.diagnostics` makes `scan_root`'s
+    second loop skip the file's `checked_downloads` accounting and
+    `_evaluate_rules` — the same fail-closed path as any refusal."""
+    scan = ShellDownloaderScan(root=root)
+    for job in file_result.jobs:
+        for body in job.run_bodies:
+            message, referenced = _scan_shell_body(
+                body.body_text.split("\n"),
+                body.scalar_content_indent,
+                None,
+                scan,
+                set(),
+                0,
+            )
+            scan.references += len(referenced)
+            if message is not None:
+                scan.findings.append((body.line, message))
+    return scan
+
+
+# ---------------------------------------------------------------------------
 # File / root scan
 # ---------------------------------------------------------------------------
 
@@ -7908,12 +8231,39 @@ def scan_root(root: Path, enforce_floor: bool = True) -> ScanResult:
         f"artifact-dependency gate: scanning {len(files)} workflow file(s) under {WORKFLOWS_RELPATH}"
     )
     file_results: list[FileResult] = []
+    delegated_scripts: set[Path] = set()
     for path in files:
         relpath = str(path.relative_to(directory))
         file_result = process_file(relpath, path.read_bytes())
+        if not file_result.diagnostics:
+            # Issue #399: the shell-downloader pass runs only for a file the
+            # subset parser accepted, and its findings join the same
+            # `file_result.diagnostics` list so the second loop skips the
+            # file's accounting and rules evaluation.
+            shell_scan = _check_shell_artifact_downloaders(file_result, root)
+            delegated_scripts.update(shell_scan.delegated)
+            result.delegation_refs += shell_scan.references
+            file_result.diagnostics.extend(shell_scan.findings)
         file_results.append(file_result)
         for line, message in file_result.diagnostics:
             result.diagnostics.append(f"{relpath}:{line}: {message}")
+    result.delegated_scripts = len(delegated_scripts)
+    result.summary.append(
+        "artifact-dependency gate: resolved "
+        f"{result.delegated_scripts} distinct delegated script(s) from "
+        f"{result.delegation_refs} reference(s)"
+    )
+    if enforce_floor and result.delegated_scripts < MIN_SCANNED_DELEGATED_SCRIPTS:
+        # Issue #399: the delegate-scan floor. Deliberately after the
+        # workflow-floor early return above, so `reject-scan-floor` keeps its
+        # single diagnostic.
+        result.diagnostics.append(
+            "delegated-script floor: only "
+            f"{result.delegated_scripts} distinct delegated script(s) resolved from "
+            f"workflow run bodies; the floor is {MIN_SCANNED_DELEGATED_SCRIPTS} — update "
+            "the floor constant only if the delegations were intentionally removed "
+            "(refusing rather than passing a tree where the delegation scan is vacuous)"
+        )
     # Global producer index for cross-file diagnostics: artifacts are
     # run-scoped, so a name whose only producer lives in another file cannot
     # satisfy a `needs:` path in this file.
@@ -8078,8 +8428,13 @@ def run_selftest() -> int:
     referenced: set[str] = set()
     for case in cases:
         referenced.update(case["files"])
-    on_disk = {p.name for p in FIXTURES_DIR.glob("*.yml")} | {
-        p.name for p in FIXTURES_DIR.glob("*.yaml")
+        # Issue #399: `extra_files` sources are fixtures too, so an orphan or
+        # deleted `.sh` fixture is visible to the orphan check.
+        referenced.update(case.get("extra_files", {}).values())
+    on_disk = {
+        p.name
+        for pattern in ("*.yml", "*.yaml", "*.sh")
+        for p in FIXTURES_DIR.glob(pattern)
     }
     unreferenced = sorted(on_disk - referenced)
     if unreferenced:
@@ -8093,12 +8448,27 @@ def run_selftest() -> int:
         try:
             workflows = tempdir / WORKFLOWS_RELPATH
             workflows.mkdir(parents=True)
+            missing_fixture: str | None = None
             for filename in case["files"]:
                 source = FIXTURES_DIR / filename
                 if not source.is_file():
-                    failures.append(f"{case_id}: fixture file missing: {filename}")
+                    missing_fixture = filename
                     break
                 shutil.copyfile(source, workflows / filename)
+            if missing_fixture is None:
+                # Issue #399: `extra_files` copies `{"scripts/ci/foo.sh":
+                # "<fixture>.sh"}` into `<tempdir>/<dest>` (parents created)
+                # so a delegated-script fixture is visible to the pass.
+                for destination, filename in case.get("extra_files", {}).items():
+                    source = FIXTURES_DIR / filename
+                    if not source.is_file():
+                        missing_fixture = filename
+                        break
+                    target = tempdir / destination
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+            if missing_fixture is not None:
+                failures.append(f"{case_id}: fixture file missing: {missing_fixture}")
             else:
                 scan = scan_root(tempdir, enforce_floor=case.get("floor", False))
                 actual_lines = list(scan.diagnostics)
