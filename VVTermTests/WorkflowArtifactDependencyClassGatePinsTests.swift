@@ -1488,9 +1488,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             // #399 fold round 3: the trap-deferral, substitution-internal
             // `cd` and sourced-`cd` refusals (N10/N11/N13); N12 reuses the
             // nested-finding fragment and N14 the function fragment above.
-            "inside a `trap` action whose shell body or action contains a `cd`",
-            "inside a command substitution that also contains a `cd`",
-            "via `.`/`source` of a script whose body contains a `cd`",
+            // The fragments must sit inside a single source literal (the
+            // pin checks the raw script text), so they stop at the wrap.
+            "inside a `trap` action",
+            "inside a command substitution that",
+            "via `.`/`source` of a script",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(
