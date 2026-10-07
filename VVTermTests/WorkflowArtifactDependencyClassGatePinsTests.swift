@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 851
-    private static let expectedBaseVerdictCases = 420
+    private static let expectedManifestCases = 856
+    private static let expectedBaseVerdictCases = 425
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1091,6 +1091,15 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-shell-delegation-continuation.yml",
         "reject-shell-gh-run-download-ansic-hex-assembly.yml",
         "accept-shell-delegation-cd-after-candidate.yml",
+        // #399 fold round 3 (closure re-lens N10-N14): the deferred `trap`
+        // action, the substitution-internal `cd`, the ANSI-C delegation
+        // path, the sourced-helper `cd` and the continuation-split
+        // function-definition opener.
+        "reject-shell-delegation-trap-exit.yml",
+        "reject-shell-delegation-cmdsub-cd.yml",
+        "reject-shell-delegation-ansic-path.yml",
+        "reject-shell-delegation-sourced-cd.yml",
+        "reject-shell-delegation-cd-deferred-function-split.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
@@ -1117,6 +1126,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         // #399 fold round 2: the order-aware `cd` accept control's
         // self-referencing delegated script.
         "shell-self-cd.sh",
+        // #399 fold round 3, N13: the sourced helper whose `cd` propagates
+        // into the sourcing shell.
+        "shell-source-cd.sh",
     ]
 
     // MARK: - P1: the gate and its inputs exist
@@ -1473,6 +1485,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             // the existing cd fragment, and the defaults/indented-scalar
             // capture reuses the working-directory fragment).
             "inside a function body, in a shell body",
+            // #399 fold round 3: the trap-deferral, substitution-internal
+            // `cd` and sourced-`cd` refusals (N10/N11/N13); N12 reuses the
+            // nested-finding fragment and N14 the function fragment above.
+            "inside a `trap` action whose shell body or action contains a `cd`",
+            "inside a command substitution that also contains a `cd`",
+            "via `.`/`source` of a script whose body contains a `cd`",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(
