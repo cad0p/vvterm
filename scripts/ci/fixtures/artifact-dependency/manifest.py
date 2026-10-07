@@ -7727,6 +7727,10 @@ CASES = [
     {
         "id": "reject-shell-defaults-working-directory",
         "files": ["reject-shell-defaults-working-directory.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
