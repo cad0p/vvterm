@@ -7430,11 +7430,16 @@ CASES = [
         "diagnostics": [],
     },
     {
-        "id": "accept-shell-delegation-prefixed-path",
-        "files": ["accept-shell-delegation-prefixed-path.yml"],
-        "extra_files": {"scripts/ci/shell-benign.sh": "shell-benign.sh"},
-        "exit": 0,
+        "id": "reject-shell-delegation-prefixed-path",
+        "files": ["reject-shell-delegation-prefixed-path.yml"],
+        "extra_files": {
+            "dir/scripts/ci/shell-evil.sh": "shell-evil.sh",
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+        },
+        "exit": 1,
         "base_exit": 0,
-        "diagnostics": [],
+        "diagnostics": [
+            "reject-shell-delegation-prefixed-path.yml:8: shell artifact downloader (`gh run download`) in `dir/scripts/ci/shell-evil.sh:6` — shell text is refused fail-closed; the gate does not model `run-id:`/`github-token:` handoffs in shell bodies. Keep the download in a `uses: actions/download-artifact` step (or extend the gate)",
+        ],
     },
 ]

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 1): the executed file is the `dir/` copy, so the
+# downloader there is found; v2 resolved the benign root copy instead.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: dir/scripts/ci/shell-evil.sh

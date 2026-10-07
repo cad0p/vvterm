@@ -1150,6 +1150,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import posixpath
 import re
 import shutil
 import sys
@@ -7884,12 +7885,16 @@ _SHELL_GH_WORD_RE = re.compile(r"\bgh\b")
 _SHELL_RUN_WORD_RE = re.compile(r"\brun\b")
 _SHELL_DOWNLOAD_WORD_RE = re.compile(r"\bdownload\b")
 
-# The delegation predicate (issue #399, plan v2 §3.3): no left boundary (so
-# `$(scripts/ci/x.sh)`, backticks, `SELF=…` and quoted/space-joined words all
-# match — a left-bounded predicate measurably missed the `$(…)` shape), and
-# right-anchored (so `x.sh.bak` cannot resolve to `x.sh`). The matched text is
-# always the relative `scripts/ci/…​.sh` subpath, never an absolute path.
-_SHELL_DELEGATION_RE = re.compile(r"scripts/ci/[A-Za-z0-9_.-]+\.sh(?![A-Za-z0-9_.-])")
+# The delegation predicate (issue #399, fold round 1): a path-like match with
+# optional leading path components (`dir/scripts/ci/x.sh`, `/tmp/…`), matched
+# case-insensitively and right-anchored, so `x.sh.bak` cannot resolve to
+# `x.sh`. The candidate is read from the quote-stripped word after
+# `posixpath.normpath`, so `//`, `.` and `..` spellings read as the executed
+# path, and each match is normalized again.
+_SHELL_DELEGATION_RE = re.compile(
+    r"(?:/|[A-Za-z0-9_.-]+/)*scripts/ci/[A-Za-z0-9_.-]+\.sh(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
 
 # The nested-delegation analysis bound (plan v2 §3.3): the real tree nests
 # zero levels (`check-isolated-deinit-census.sh` self-references resolve and
@@ -7907,6 +7912,12 @@ _SHELL_DOWNLOADER_REFUSAL = (
 _SHELL_DELEGATION_UNRESOLVED_REFUSAL = (
     "delegation to `{subpath}`{provenance} — the gate cannot resolve the referenced script "
     "(refusing rather than skipping)"
+)
+
+_SHELL_DELEGATION_ESCAPE_REFUSAL = (
+    "delegation to `{subpath}`{provenance} resolves outside the scanned root — "
+    "the gate resolves `scripts/ci/*.sh` delegations under the scanned root only "
+    "(refusing rather than guessing)"
 )
 
 _SHELL_DELEGATION_DEPTH_REFUSAL = (
@@ -8051,6 +8062,35 @@ def _delegation_provenance(origin: str | None, line: int) -> str:
     return f" from `{origin}:{line}`"
 
 
+def _shell_delegation_candidates(word: str) -> list[str]:
+    """Every `scripts/ci/*.sh` candidate in one quote-stripped word as the
+    normalized path the shell would execute (issue #399 fold round 1). The
+    word is `posixpath.normpath`-normalized BEFORE matching so
+    `scripts/ci//x.sh`, `scripts/./ci/x.sh` and `scripts/ci/../ci/x.sh` all
+    read as the executed path; each match is normalized again so a candidate
+    found in an unnormalized word (a `$()` payload) is normalized too."""
+    stripped = _shell_strip_quotes(word)
+    if not stripped:
+        return []
+    normalized = posixpath.normpath(stripped)
+    return [
+        posixpath.normpath(match.group(0))
+        for match in _SHELL_DELEGATION_RE.finditer(normalized)
+    ]
+
+
+def _shell_delegation_escapes_root(subpath: str) -> bool:
+    """True when a normalized delegation candidate is absolute or climbs
+    out of the scanned root (a `..` segment left after `posixpath.normpath`),
+    so the gate refuses rather than resolving a path outside the tree
+    (issue #399 fold round 1)."""
+    return (
+        subpath.startswith("/")
+        or subpath == ".."
+        or subpath.startswith("../")
+    )
+
+
 def _read_delegated_script(
     subpath: str,
     origin: str | None,
@@ -8111,9 +8151,13 @@ def _scan_shell_body(
         for token in segment:
             if token[0] != "word":
                 continue
-            for match in _SHELL_DELEGATION_RE.finditer(token[1]):
-                subpath = match.group(0)
+            for subpath in _shell_delegation_candidates(token[1]):
                 referenced.add(subpath)
+                if _shell_delegation_escapes_root(subpath):
+                    return _SHELL_DELEGATION_ESCAPE_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
                 canonical, text, refusal = _read_delegated_script(
                     subpath, origin, line, scanner.root
                 )
@@ -8122,12 +8166,12 @@ def _scan_shell_body(
                 assert canonical is not None and text is not None
                 if canonical in visited:
                     continue
-                scanner.delegated.add(canonical)
                 if depth >= _SHELL_DELEGATION_MAX_DEPTH:
                     return _SHELL_DELEGATION_DEPTH_REFUSAL.format(
                         subpath=subpath,
                         provenance=_delegation_provenance(origin, line),
                     )
+                scanner.delegated.add(canonical)
                 visited.add(canonical)
                 nested_message, _nested_referenced = _scan_shell_body(
                     text.split("\n"), 0, subpath, scanner, visited, depth + 1
