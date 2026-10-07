@@ -1088,21 +1088,26 @@ SHELL ARTIFACT DOWNLOADERS (#399)
 Run bodies are blanked before the reconciliation pass, so the YAML model
 never reads shell text. A `gh run download` in a `run:` scalar, or in a
 `scripts/ci/*.sh` body the run scalar delegates to (the #249/#396
-extraction pattern), would bypass the job-ordering rule entirely. The pass
-therefore tokenizes every parsed run body PER PHYSICAL LINE (a whole-body
+extraction pattern), would bypass the job-ordering rule entirely; the pass
+refuses a run body containing the modeled spellings of the shell artifact
+downloader. The pass therefore tokenizes every parsed run body PER PHYSICAL
+LINE (a whole-body
 `_shell_tokens` call is measurably fail-open: an indented `#` truncates the
 rest), adds the #350 item-12 continuation joins (the raw
 `_joined_continuation_segments` plus the bash-faithful
 `_bash_joined_continuation_segments`; a chain beyond the 64-line analysis
 bound refuses rather than yielding the joins' empty fail-open, mirroring
 `_run_id_continuation_bound_refusal`), and refuses on the token model. The
-token model is the `gh run download` command only. Branch A is a `gh` word
-(after stripping a leading `(` run and backslash escapes) followed later in the
-same segment by the adjacent `run`/`download` pair, so
-`gh -R owner/repo run download` matches. Branch B is any word containing
-the literal substring `gh run download`, so `bash -c "gh run download …"`,
-`eval '…'` and `$(…)`/backtick regions kept verbatim in one word match.
-The `-artifact@ref` action shape is deliberately NOT a token: a shell body
+token model is one normalized phrase test per segment: each word is
+quote-stripped, a backslash followed by whitespace and every whitespace run
+collapse to one space, and the segment refuses when a `\bgh\b` word is
+followed (in order) by a `\brun\b` word and a `\bdownload\b` word. That
+covers `gh  run  download`, tab-separated and `$(…)`/backtick payloads,
+`gh run -R owner/repo download`, `gh$IFS run download` and the
+single-quoted `bash -c` continuation payload (the outer joins deliberately
+skip a backslash inside single quotes, so a dedicated payload join feeds
+the interpreter's view of the text). The `-artifact@ref` action shape is
+deliberately NOT a token: a shell body
 cannot execute a GitHub Action, so the ref is data there, and treating the
 shape as a downloader flips the pinned
 `accept-run-line-mentioning-action` control. Comments never match
@@ -1110,33 +1115,51 @@ shape as a downloader flips the pinned
 
 The delegation model scans EVERY word token of EVERY segment (not
 `_argv_operand_words`, which drops redirect targets and would miss
-`bash < scripts/ci/x.sh`) for the right-anchored
-`scripts/ci/[A-Za-z0-9_.-]+\\.sh(?![A-Za-z0-9_.-])` subpath, with NO left
-boundary so `$(scripts/ci/x.sh)`, backticks, `SELF=…` and quoted words
-match. The matched subpath is resolved under the scanned root, must be a
-file inside that root (canonical containment), and is read with a strict
-UTF-8 decode; a missing, outside-root, loop or unreadable target refuses.
-Nested delegations recurse with a visited set of canonical paths and a
-depth cap of 4; beyond the cap refuses. A finding is anchored at the
-delegating run body's `run:` line and names
+`bash < scripts/ci/x.sh`). Each word is quote-stripped and normalized with
+`posixpath.normpath`, then every match of the case-insensitive,
+right-anchored `(?:/|[A-Za-z0-9_.-]+/)*scripts/ci/[A-Za-z0-9_.-]+\\.sh`
+candidate is resolved as the path the shell would execute, so
+`dir/scripts/ci/x.sh` scans the `dir/` copy and `scripts/ci//x.sh`,
+`scripts/./ci/x.sh` and `scripts/ci/../ci/x.sh` all read as
+`scripts/ci/x.sh`. The resolved path must be a file inside the scanned root
+(canonical containment) and is read with a strict UTF-8 decode; an
+absolute or root-escaping candidate, or a missing, loop or unreadable
+target, refuses. A step whose `working-directory:` is not the repository
+root, or a body whose `cd` precedes the delegation, refuses too: the
+executed path is cwd-relative and the gate resolves delegations relative
+to the repository root only (the live `check-license-headers.sh` `SELF=`
+mention sits before its own `cd`, so the `cd` test is order-aware). Nested
+delegations recurse with a visited set of canonical paths and a depth cap
+of 4; beyond the cap refuses without counting the target as resolved. A
+finding is anchored at the delegating run body's `run:` line and names
 `scripts/ci/<name>.sh:<line>` for a nested script finding. Over-refusal is
 the accepted failure mode: a quoted/echoed mention of the command, or a
 message naming a `.sh` path whose target is missing, refuses.
 
 The class is narrowed, not closed. Named residuals: assembled tokens
-(`CMD=gh; $CMD run download`), `printf`/base64 assembly piped to `bash`,
+(`CMD="gh run"; $CMD download`), `printf`/base64 assembly piped to `bash`,
 interpreter payloads (`python3 -c`, `node -e`, `ruby`, `perl`), process
-substitution (`bash <(scripts/ci/x.sh)`), redirect-fed scripts not matching
-the path shape, `PATH`-invoked scripts, dynamic paths (`$NAME`/`${NAME}`),
-raw REST downloads (`gh api …/artifacts`), heredoc/message text naming a
-`.sh` path (it is resolved and scanned; a missing target refuses),
-non-`.sh` wrappers, and orphan scripts. The whole
+substitution with a computed payload (`bash <(printf 'gh run %s download'
+x)`; the literal `<(scripts/ci/x.sh)` shape IS resolved and scanned),
+redirect-fed scripts not matching the path shape, `PATH`-invoked scripts,
+dynamic paths (`$NAME`/`${NAME}`), a `scripts/ci/<name>.sh` subpath glued
+to a preceding non-`/` path component (`xscripts/ci/x.sh` matches the root
+copy, not the executed file), `.sh` wrappers outside `scripts/ci/` (and
+outside the workflow's `working-directory`) are not followed (the real tree
+delegates to four, all clean), raw REST downloads (`gh api …/artifacts`),
+heredoc/message text naming a `.sh` path (it is resolved and scanned; a
+missing target refuses), non-`.sh` wrappers, and orphan scripts.
+Delegations under a non-root `working-directory:` or after a `cd` are
+refused, not resolved. The whole
 attribute-to-the-delegating-job arm (scanning a delegated downloader under
 the existing transitive-`needs:` rule) is declined by design: an executable
 shell downloader refuses regardless of the `needs:` graph. The
 delegated-script floor (`MIN_SCANNED_DELEGATED_SCRIPTS`) is enforced on
 distinct canonical paths after the per-file loop and only when
 `enforce_floor` is set, so `reject-scan-floor` keeps its single diagnostic.
+The real-scan summary prints both units: `resolved N distinct delegated
+script(s) from M distinct run-body reference(s)`, where M counts distinct
+`(run body, subpath)` pairs up to the first finding per body.
 
 Usage:
     python3 scripts/ci/check-artifact-dependencies.py [--root DIR]
@@ -7971,10 +7994,12 @@ _SHELL_CONTINUATION_BOUND_REFUSAL = (
 class ShellDownloaderScan:
     """The #399 pass's result for one workflow file. `findings` are
     `(run_body.line, message)` anchors, `delegated` the DISTINCT canonical
-    `scripts/ci/*.sh` paths resolved (including nested scripts), and
-    `references` the count of `(run body, subpath)` references found in the
-    workflow run bodies themselves (nested references are recursion, not
-    resolution roots)."""
+    `scripts/ci/*.sh` paths resolved (including nested scripts, excluding a
+    target the depth cap refused), and `references` the count of `(run body,
+    subpath)` references found in the workflow run bodies themselves
+    (nested references are recursion, not resolution roots), up to the
+    first finding per body — reporting stops at the first refusal, so a
+    failing file's count can be partial."""
 
     root: Path
     findings: list[tuple[int, str]] = field(default_factory=list)
@@ -8511,7 +8536,7 @@ def scan_root(root: Path, enforce_floor: bool = True) -> ScanResult:
     result.summary.append(
         "artifact-dependency gate: resolved "
         f"{result.delegated_scripts} distinct delegated script(s) from "
-        f"{result.delegation_refs} reference(s)"
+        f"{result.delegation_refs} distinct run-body reference(s)"
     )
     if enforce_floor and result.delegated_scripts < MIN_SCANNED_DELEGATED_SCRIPTS:
         # Issue #399: the delegate-scan floor. Deliberately after the
