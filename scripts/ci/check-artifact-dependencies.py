@@ -7873,10 +7873,16 @@ def reconcile(lines: list[str], artifact_step_lines: set[int]) -> list[tuple[int
 # Shell artifact downloaders (issue #399)
 # ---------------------------------------------------------------------------
 
-# The token model's literal command. Branch B (containment) is tested with
-# this string; branch A (the `gh` + adjacent `run`/`download` pair) is tested
-# structurally because `gh -R owner/repo run download` separates the words.
-_SHELL_DOWNLOAD_COMMAND = "gh run download"
+# The v3 token model's normalized phrase test (issue #399 fold round 1): each
+# word is quote-stripped, `\`+whitespace and every whitespace run collapse to
+# one space, then the segment refuses when a `\bgh\b` word is followed (in
+# order) by a `\brun\b` word and a `\bdownload\b` word. The whitespace
+# collapse covers the double-space/tab/`$( )`/backtick payloads; the
+# `\`+whitespace collapse covers the single-quoted `bash -c` continuation
+# remnant; `\b` (not word equality) covers `gh$IFS` and `${x}gh`.
+_SHELL_GH_WORD_RE = re.compile(r"\bgh\b")
+_SHELL_RUN_WORD_RE = re.compile(r"\brun\b")
+_SHELL_DOWNLOAD_WORD_RE = re.compile(r"\bdownload\b")
 
 # The delegation predicate (issue #399, plan v2 §3.3): no left boundary (so
 # `$(scripts/ci/x.sh)`, backticks, `SELF=…` and quoted/space-joined words all
@@ -7940,36 +7946,100 @@ def _shell_body_location(origin: str | None, line: int) -> str:
     return f"`{origin}:{line}`"
 
 
-def _shell_word_is_gh(word: str) -> bool:
-    """A word equal to `gh` after stripping a leading `(` run and backslash
-    escapes (an unquoted escape is already resolved by `_shell_tokens`,
-    while a quoted one survives), so `(gh` and a quoted `gh` participate in
-    branch A of the token model."""
-    candidate = word
-    while candidate[:1] in ("(", "\\"):
-        candidate = candidate[1:]
-    return candidate == "gh"
+def _shell_strip_quotes(word: str) -> str:
+    """Remove the quote characters from one tokenizer word. `_shell_tokens`
+    already removes the quotes of an ordinary word, but keeps the content of
+    a `$(…)`/backtick region verbatim (so `$(scripts/ci/"evil".sh)` and
+    `$(gh run download)` survive with their inner quotes); the #399 token and
+    delegation models read the quote-stripped word so those spellings are
+    visible (fold round 1, lens-1 BLOCKER 1 / MAJOR 4)."""
+    return word.replace("'", "").replace('"', "")
+
+
+def _normalize_shell_word(word: str) -> str:
+    """The v3 token model's word normalization (issue #399 fold round 1):
+    quote characters removed, a backslash followed by whitespace collapsed
+    to one space (the single-quoted `bash -c` continuation remnant joined by
+    `_quoted_payload_joined_segments`), then every whitespace run collapsed
+    to one space so `gh  run  download` and tab-separated payloads read as
+    one phrase."""
+    normalized = _shell_strip_quotes(word)
+    normalized = re.sub(r"\\\s+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized)
+
+
+def _ordered_word_positions(
+    words: list[str], pattern: re.Pattern[str]
+) -> list[tuple[int, int]]:
+    """Every `(word index, match start)` of `pattern` over `words`, in
+    source order, so the phrase test can require a strictly later match."""
+    return [
+        (word_index, match.start())
+        for word_index, word in enumerate(words)
+        for match in pattern.finditer(word)
+    ]
 
 
 def _shell_segment_is_artifact_downloader(
     segment: list[tuple[str, str, int, int]],
 ) -> bool:
-    """The #399 token model over one joined segment. Branch B first (the
-    literal substring in any word covers `bash -c "gh run download …"`,
-    `eval '…'` and `$(…)`/backtick regions kept verbatim in one word), then
-    branch A (a `gh` word followed later by the adjacent `run`/`download`
-    pair, which also matches `gh -R owner/repo run download`)."""
-    words = [token[1] for token in segment if token[0] == "word"]
-    for word in words:
-        if _SHELL_DOWNLOAD_COMMAND in word:
-            return True
-    for index, word in enumerate(words):
-        if not _shell_word_is_gh(word):
-            continue
-        for later in range(index + 1, len(words) - 1):
-            if words[later] == "run" and words[later + 1] == "download":
-                return True
+    """The v3 token model over one joined segment (issue #399 fold round
+    1): within the normalized word list, a `\bgh\b` word is followed (in
+    order) by a `\brun\b` word and a `\bdownload\b` word. The match is
+    positional, so `gh run -R owner/repo download` matches, `run … gh …
+    download` does not, and a single word that carries the whole phrase
+    (`bash -c "gh  run  download …"`, `$(gh run download)`, the joined
+    single-quoted payload) matches too."""
+    words = [
+        _normalize_shell_word(token[1])
+        for token in segment
+        if token[0] == "word"
+    ]
+    gh_positions = _ordered_word_positions(words, _SHELL_GH_WORD_RE)
+    run_positions = _ordered_word_positions(words, _SHELL_RUN_WORD_RE)
+    download_positions = _ordered_word_positions(words, _SHELL_DOWNLOAD_WORD_RE)
+    for gh_position in gh_positions:
+        for run_position in run_positions:
+            if run_position <= gh_position:
+                continue
+            for download_position in download_positions:
+                if download_position > run_position:
+                    return True
     return False
+
+
+def _quoted_payload_joined_segments(
+    lines: list[str], index: int, content_indent: int
+) -> list[list[tuple[str, str, int, int]]]:
+    """Issue #399 fold round 1: the single-quoted payload join. A
+    backslash+newline inside a single-quoted region is literal for the OUTER shell,
+    so neither `_joined_continuation_segments` nor
+    `_bash_joined_continuation_segments` joins it; but the interpreter that
+    receives the string (`bash -c '…'`) removes the pair and runs the joined
+    command. The caller runs this pass only where the whole-body quote state
+    at the line end is `'` (an open single-quoted payload); the join keeps
+    the backslash and the newline so `_normalize_shell_word` collapses the
+    remnant to one space. Intervening blanks are skipped, and a chain that
+    ends at EOF drops the trailing backslash (the inner interpreter drops it
+    too)."""
+    if not _line_has_continuation(lines[index]):
+        return []
+    parts = [_strip_continuation_indent(lines[index], content_indent)]
+    cursor = index
+    while _line_has_continuation(parts[-1]):
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            parts[-1] = parts[-1][:-1]
+            break
+        parts.append(_strip_continuation_indent(lines[nxt], content_indent))
+        cursor = nxt
+    return [
+        segment
+        for segment in _shell_segments(_shell_tokens("\n".join(parts)))
+        if segment
+    ]
 
 
 def _delegation_provenance(origin: str | None, line: int) -> str:
@@ -8089,6 +8159,19 @@ def _scan_shell_body(
                 return message, referenced
         for segment in _bash_joined_continuation_segments(
             lines, index, content_indent, pending
+        ):
+            message = scan_segment(segment, index + 1)
+            if message is not None:
+                return message, referenced
+    for index in range(len(lines)):
+        # Issue #399 fold round 1: the single-quoted `bash -c` payload join.
+        # The whole-body quote state at the line end is `'` exactly when the
+        # outer joins deliberately skip this backslash; `pending[index + 1]`
+        # is the next line's start state, i.e. this line's end state.
+        if index + 1 >= len(pending) or pending[index + 1][1] != "'":
+            continue
+        for segment in _quoted_payload_joined_segments(
+            lines, index, content_indent
         ):
             message = scan_segment(segment, index + 1)
             if message is not None:
