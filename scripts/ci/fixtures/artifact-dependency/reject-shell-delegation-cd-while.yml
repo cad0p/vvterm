@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): a `while cd` loop body runs the delegation
+# after the cwd changed; the first-word-only predicate missed it.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          while cd sub; do bash scripts/ci/shell-evil.sh; break; done

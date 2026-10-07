@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N6): ANSI-C hex assembly of the command name —
+# `g$'\x68'` and `$'\x67\x68'` both expand to `gh` before bash runs them.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          g$'\x68' run download 1 -n x
+      - run: |
+          $'\x67\x68' run download 1 -n x

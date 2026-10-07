@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N7): the delegated script mentions its own
+# `scripts/ci/…` path BEFORE its own `cd`, mirroring
+# `check-license-headers.sh`; the order-aware `cd` rule keeps this green.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash scripts/ci/shell-self-cd.sh

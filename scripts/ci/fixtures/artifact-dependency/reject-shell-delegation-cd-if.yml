@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): an `if cd` still changes the shell cwd; the
+# fold-round-1 predicate only read the first word of a segment.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if cd sub; then bash scripts/ci/shell-evil.sh; fi

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N3): `working-directory:` with an empty inline
+# value reads the indented scalar `sub`, not the repository root.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - working-directory:
+          sub
+        run: bash scripts/ci/shell-evil.sh

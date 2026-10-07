@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N5): a delegation path split across a `\`+newline
+# is joined by bash before execution; the bash-faithful join is load-bearing.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          bash scripts/ci/evil\
+          .sh

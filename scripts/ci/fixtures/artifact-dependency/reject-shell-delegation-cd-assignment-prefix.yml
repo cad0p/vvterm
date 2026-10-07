@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): an assignment prefix (`FOO=1 cd`) still
+# executes the cd before the delegation.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          FOO=1 cd sub; bash scripts/ci/shell-evil.sh

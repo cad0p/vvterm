@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#399 fold round 2, N1): `command cd` bypasses functions/aliases
+# but still changes the cwd before the delegation.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          command cd sub; bash scripts/ci/shell-evil.sh
