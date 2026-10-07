@@ -1426,6 +1426,10 @@ class Job:
     # Every parsed `run:` step's location/mention record, in step order
     # (the #339 same-job, preceding-position scan).
     run_bodies: list[RunBody] = field(default_factory=list)
+    # Issue #399 fold round 2: the job-level `defaults.run.working-directory`
+    # value (None when the job declares none), resolved into a run body that
+    # does not carry its own `working-directory:`.
+    defaults_working_directory: str | None = None
 
 
 @dataclass
@@ -2177,6 +2181,10 @@ class WorkflowParser:
         # The top-level `env:` block, as an inclusive line range: workflow
         # env is visible to every step, so it stays in scope everywhere.
         self.workflow_env_range: tuple[int, int] | None = None
+        # Issue #399 fold round 2: the workflow-level
+        # `defaults.run.working-directory` value (None when absent), the
+        # fallback for a run body whose job and step declare none.
+        self.workflow_defaults_working_directory: str | None = None
 
     # -- small helpers -----------------------------------------------------
 
@@ -2213,6 +2221,7 @@ class WorkflowParser:
     def parse(self) -> list[Job]:
         self._scan_top_level_duplicates()
         self.workflow_env_range = self._find_workflow_env_range()
+        self.workflow_defaults_working_directory = self._find_workflow_defaults()
         jobs_index = self._find_jobs_key()
         end = self._jobs_region_end(jobs_index)
         self._parse_job_region(list(range(jobs_index + 1, end)), jobs_index + 1)
@@ -2244,6 +2253,133 @@ class WorkflowParser:
                 return None
             return (index + 1, end)
         return None
+
+    def _find_workflow_defaults(self) -> str | None:
+        """The top-level `defaults:` block's `run.working-directory` value,
+        or None when no top-level `defaults:` key exists (issue #399 fold
+        round 2, N2). GitHub applies this default to every job's run steps
+        that do not override it, so the parser must see it: an opaque
+        consume would resolve delegations against the repository root while
+        GitHub executes them in the default directory."""
+        for key, line in self._top_level_keys():
+            if key != "defaults":
+                continue
+            index = line - 1
+            kv = split_key_value(self._body(index))
+            assert kv is not None
+            value = kv[1].strip()
+            if value not in ("", "{}"):
+                raise Refusal(
+                    index + 1,
+                    "top-level 'defaults:' must be a block mapping — refusing rather than guessing",
+                )
+            end = self._top_level_block_end(index)
+            body = list(range(index + 1, end))
+            return self._defaults_working_directory(body, 0, len(body))
+        return None
+
+    def _defaults_working_directory(
+        self, body: list[int], start: int, end: int
+    ) -> str | None:
+        """Parse a `defaults:` block's region `[start, end)` of `body` and
+        return its `run.working-directory` value (None when absent). Only
+        the two GitHub `defaults.run` keys are modeled; any other key
+        refuses, because an unmodeled shape could hide the cwd default
+        (issue #399 fold round 2, N2)."""
+        working_directory: str | None = None
+        child_col: int | None = None
+        seen: dict[str, int] = {}
+        i = start
+        while i < end:
+            index = body[i]
+            if is_blank(self.lines[index]):
+                i += 1
+                continue
+            indent = self._indent(index)
+            if child_col is None:
+                child_col = indent
+            if indent != child_col:
+                raise Refusal(index + 1, UNCONSUMED_REFUSAL)
+            key, value = self._kv(index, self._body(index))
+            if key in seen:
+                raise Refusal(
+                    index + 1,
+                    f"duplicate mapping key '{key}' under 'defaults:' "
+                    f"(lines {seen[key]} and {index + 1}) — remove one (GitHub's "
+                    "duplicate-key semantics are unverified, so the gate refuses)",
+                )
+            seen[key] = index + 1
+            if key != "run":
+                raise Refusal(
+                    index + 1,
+                    f"unmodeled '{key}:' under 'defaults:' — the gate models only "
+                    "defaults.run.working-directory (refusing rather than guessing)",
+                )
+            if value.strip():
+                raise Refusal(
+                    index + 1,
+                    "'run:' under 'defaults:' must be a block mapping — refusing rather than guessing",
+                )
+            run_end = self._consume_opaque(body, i, child_col)
+            run_working_directory = self._defaults_run_working_directory(
+                body, i + 1, run_end
+            )
+            if run_working_directory is not None:
+                working_directory = run_working_directory
+            i = run_end
+        return working_directory
+
+    def _defaults_run_working_directory(
+        self, body: list[int], start: int, end: int
+    ) -> str | None:
+        """The `working-directory` value inside a `defaults.run:` block
+        region `[start, end)` (None when absent). `shell` is modeled as a
+        cwd-free key; any other key refuses (issue #399 fold round 2, N2)."""
+        working_directory: str | None = None
+        child_col: int | None = None
+        seen: dict[str, int] = {}
+        i = start
+        while i < end:
+            index = body[i]
+            if is_blank(self.lines[index]):
+                i += 1
+                continue
+            indent = self._indent(index)
+            if child_col is None:
+                child_col = indent
+            if indent != child_col:
+                raise Refusal(index + 1, UNCONSUMED_REFUSAL)
+            key, value = self._kv(index, self._body(index))
+            if key in seen:
+                raise Refusal(
+                    index + 1,
+                    f"duplicate mapping key '{key}' under 'defaults.run:' "
+                    f"(lines {seen[key]} and {index + 1}) — remove one (GitHub's "
+                    "duplicate-key semantics are unverified, so the gate refuses)",
+                )
+            seen[key] = index + 1
+            if key == "working-directory":
+                end_pos = i + 1 if value else self._consume_opaque(body, i, child_col)
+                # Fold round 2, N3: an empty inline value is not proof of the
+                # root — YAML reads the indented scalar, so capture it.
+                working_directory = (
+                    decode_scalar(value)
+                    if value
+                    else self._plain_block_scalar_text(body, i, end_pos)
+                )
+                i = end_pos
+                continue
+            if key == "shell":
+                # `shell:` never changes the working directory; consume it
+                # opaquely whatever its shape.
+                i = i + 1 if value else self._consume_opaque(body, i, child_col)
+                continue
+            raise Refusal(
+                index + 1,
+                f"unmodeled '{key}:' under 'defaults.run:' — the gate models only "
+                "run.working-directory and run.shell (refusing rather than guessing)",
+            )
+        return working_directory
 
     def _top_level_keys(self) -> list[tuple[str, int]]:
         keys: list[tuple[str, int]] = []
@@ -2396,6 +2532,21 @@ class WorkflowParser:
             if key == "env":
                 i, job.env_range = self._consume_env_block(body, i, body_col)
                 continue
+            if key == "defaults":
+                # Issue #399 fold round 2 (N2): the job-level
+                # `defaults.run.working-directory` is an executable cwd, so
+                # it must be parsed rather than consumed opaquely.
+                if value.strip() not in ("", "{}"):
+                    raise Refusal(
+                        index + 1,
+                        "job 'defaults:' must be a block mapping — refusing rather than guessing",
+                    )
+                end = self._consume_opaque(body, i, body_col)
+                job.defaults_working_directory = self._defaults_working_directory(
+                    body, i + 1, end
+                )
+                i = end
+                continue
             if key == "needs":
                 _refuse_block_scalar_header(index, key, value)
                 _refuse_non_string_value_tag(index, key, value)
@@ -2415,6 +2566,17 @@ class WorkflowParser:
                 f"job '{name}' has both 'uses:' (line {job.uses_line}) and 'steps:' "
                 f"(line {job.steps_line}) — a reusable-workflow call cannot declare steps",
             )
+        # Issue #399 fold round 2 (N2): resolve the cwd chain after the whole
+        # job is walked, so a `defaults:` key in any position still reaches
+        # the run bodies parsed before it. A step's own value wins; then the
+        # job default; then the workflow default.
+        for body in job.run_bodies:
+            if body.working_directory is not None:
+                continue
+            if job.defaults_working_directory is not None:
+                body.working_directory = job.defaults_working_directory
+            elif self.workflow_defaults_working_directory is not None:
+                body.working_directory = self.workflow_defaults_working_directory
         return job
 
     def _consume_opaque(self, body: list[int], key_pos: int, parent_col: int) -> int:
@@ -2607,10 +2769,18 @@ class WorkflowParser:
         if key == "working-directory":
             # Issue #399 fold round 1: captured (not refused) here; the
             # shell-downloader pass refuses a `scripts/ci/*.sh` delegation in
-            # a step whose effective cwd is not the repository root.
-            step.working_directory = decode_scalar(value)
+            # a step whose effective cwd is not the repository root. Fold
+            # round 2 (N3): an empty inline value is captured from the
+            # consumed scalar too, so `working-directory:` + an indented
+            # `sub` is not read as the repository root.
+            end = pos + 1 if value else self._consume_opaque(body, pos, col)
+            step.working_directory = (
+                decode_scalar(value)
+                if value
+                else self._plain_block_scalar_text(body, pos, end)
+            )
             step.working_directory_line = index + 1
-            return pos + 1 if value else self._consume_opaque(body, pos, col)
+            return end
         if key == "run":
             step.run_line = index + 1
             end = pos + 1 if value else self._consume_opaque(body, pos, col)
@@ -2618,6 +2788,22 @@ class WorkflowParser:
             step.run_mentions_github_env = _mentions_github_env(step.run_body_text)
             return end
         return pos + 1 if value else self._consume_opaque(body, pos, col)
+
+    def _plain_block_scalar_text(
+        self, body: list[int], pos: int, end: int
+    ) -> str:
+        """The folded plain-scalar text of a key's consumed block (issue
+        #399 fold round 2, N3): `working-directory:` with an empty inline
+        value and an indented scalar (`working-directory:` newline `  sub`).
+        YAML folds those lines with spaces; the gate only needs the decoded
+        string, because any non-root value refuses a delegation. An empty
+        block decodes to the empty string, i.e. the repository root."""
+        parts = [
+            self._body(body[j]).strip()
+            for j in range(pos + 1, end)
+            if not is_blank(self.lines[body[j]])
+        ]
+        return decode_scalar(" ".join(parts))
 
     def _run_body_text(
         self, index: int, value: str, body: list[int], pos: int, end: int
@@ -7965,7 +8151,7 @@ _SHELL_DELEGATION_ESCAPE_REFUSAL = (
 )
 
 _SHELL_DELEGATION_WORKING_DIR_REFUSAL = (
-    "delegation to `{subpath}`{provenance} in a step with "
+    "delegation to `{subpath}`{provenance} under "
     "`working-directory: {working_directory}` — the gate resolves delegations "
     "relative to the repository root only (refusing rather than guessing)"
 )
@@ -7974,6 +8160,12 @@ _SHELL_DELEGATION_CD_REFUSAL = (
     "delegation to `{subpath}`{provenance} after a `cd` in the same shell body — "
     "the gate resolves delegations relative to the repository root only "
     "(refusing rather than guessing)"
+)
+
+_SHELL_DELEGATION_DEFERRED_FUNCTION_REFUSAL = (
+    "delegation to `{subpath}`{provenance} inside a function body, in a shell body "
+    "that also contains a `cd` — the gate cannot prove the deferred body's "
+    "effective cwd (refusing rather than guessing)"
 )
 
 _SHELL_DELEGATION_DEPTH_REFUSAL = (
@@ -8152,9 +8344,40 @@ def _shell_delegation_escapes_root(subpath: str) -> bool:
 def _shell_segment_is_cd(
     segment: list[tuple[str, str, int, int]],
 ) -> bool:
-    """The #399 cwd predicate over one segment (fold round 1): the verb word
-    is `cd`, or the two words are `builtin cd`. Leading `(`/backslash runs
-    are stripped like the phrase test, so `(cd sub` is a cwd change."""
+    """The #399 cwd predicate over one segment (fold round 2): ANY
+    quote-stripped word whose leading `(`/backslash run is stripped equals
+    `cd` is a cwd change. The fold-round-1 first-word-only predicate missed
+    every executable spelling whose `cd` is not the first normalized word:
+    `if cd sub`, `while cd sub`, `{ cd sub`, `! cd sub`, `( cd sub`,
+    `FOO=1 cd sub`, `command cd sub`, `time cd sub` and `builtin cd sub` all
+    change the shell cwd, so all of them refuse a later delegation
+    (closure re-lens N1). A `cd` inside a `$(…)`/backtick region does NOT
+    change the shell cwd: the tokenizer keeps the whole substitution in one
+    word, so a word that merely CONTAINS `cd` is not the word `cd`
+    (`teleport-server.sh:114` and `check-ghostty-config.sh:80-81,256`
+    rely on that exclusion)."""
+    for token in segment:
+        if token[0] != "word":
+            continue
+        if _normalize_shell_word(token[1]).lstrip("(\\") == "cd":
+            return True
+    return False
+
+
+# A function-definition opener: the segment's first word is `function`, or a
+# leading `name()`/`name(){` word, or `name` followed by a `()…` word
+# (`f () {`). Only the leading word(s) count, so a quoted `f()` argument
+# cannot flip the predicate.
+_SHELL_FUNCTION_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)")
+
+
+def _shell_segment_defines_function(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """True when the segment opens a function definition (fold round 2,
+    N1c). The deferred-function rule needs this because a bash function body
+    executes whenever the function is called, not where it is defined (the
+    closure re-lens' `f() { bash scripts/ci/evil.sh; } ; cd sub ; f` proof)."""
     words = [
         _normalize_shell_word(token[1])
         for token in segment
@@ -8162,14 +8385,109 @@ def _shell_segment_is_cd(
     ]
     if not words:
         return False
-    first = words[0].lstrip("(\\")
-    if first == "cd":
+    if words[0] == "function":
+        return True
+    if _SHELL_FUNCTION_DEF_RE.match(words[0]):
         return True
     return (
         len(words) > 1
-        and first == "builtin"
-        and words[1].lstrip("(\\") == "cd"
+        and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", words[0]) is not None
+        and words[1].startswith("()")
     )
+
+
+def _shell_body_has_cd(
+    lines: list[str],
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> bool:
+    """True when any segment of the body is a cwd change under
+    `_shell_segment_is_cd` — per physical line or on either continuation
+    join. Read by the deferred-function rule (fold round 2, N1c): a body
+    that defines a function AND changes cwd anywhere cannot prove the cwd
+    its candidates run under, so a candidate the body could defer refuses."""
+    for index in range(len(lines)):
+        for segment in _shell_segments(_shell_tokens(lines[index])):
+            if _shell_segment_is_cd(segment):
+                return True
+    for index in range(len(lines)):
+        for segment in _joined_continuation_segments(lines, index):
+            if _shell_segment_is_cd(segment):
+                return True
+        for segment in _bash_joined_continuation_segments(
+            lines, index, content_indent, pending
+        ):
+            if _shell_segment_is_cd(segment):
+                return True
+    return False
+
+
+def _shell_function_def_lines(lines: list[str]) -> list[int]:
+    """The 0-based line indices carrying a function-definition spelling
+    (fold round 2, N1c), ascending. A continuation-split definition is still
+    visible on its anchor line (`f() \\` keeps `f()` on the first physical
+    line), and a definition whose opener is on an earlier line than a
+    candidate makes every later candidate potentially deferred."""
+    found: list[int] = []
+    for index in range(len(lines)):
+        for segment in _shell_segments(_shell_tokens(lines[index])):
+            if _shell_segment_defines_function(segment):
+                found.append(index)
+                break
+    return found
+
+
+def _raw_join_last_line(lines: list[str], index: int) -> int:
+    """The last 0-based physical line of the raw continuation join anchored
+    at `index`; the walk mirrors `_joined_continuation_segments`, so the span
+    tracks the join the scanner actually reads."""
+    if not _line_continuation_pending(lines[index]):
+        return index
+    if _raw_continuation_bound_exceeded(lines, index):
+        return index
+    cursor = index
+    while cursor < len(lines) and _line_continuation_pending(lines[cursor]):
+        cursor += 1
+    return min(cursor, len(lines) - 1)
+
+
+def _bash_join_last_line(
+    lines: list[str], index: int, pending: list[tuple[bool, str | None]]
+) -> int:
+    """The last 0-based physical line of the bash-faithful join anchored at
+    `index`; the walk mirrors `_bash_joined_continuation_segments` (blank
+    lines skipped, a trailing `\\` at EOF dropped by the join)."""
+    if index >= len(pending) or not pending[index][0]:
+        return index
+    if _bash_continuation_bound_exceeded(lines, index, pending):
+        return index
+    cursor = index
+    while True:
+        if cursor >= len(pending) or not pending[cursor][0]:
+            return cursor
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            return cursor
+        cursor = nxt
+
+
+def _payload_join_last_line(lines: list[str], index: int) -> int:
+    """The last 0-based physical line of the single-quoted `bash -c`
+    payload join anchored at `index`; the walk mirrors
+    `_quoted_payload_joined_segments` (intervening blanks skipped)."""
+    if not _line_has_continuation(lines[index]):
+        return index
+    cursor = index
+    while _line_has_continuation(lines[cursor]):
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            return cursor
+        cursor = nxt
+    return cursor
 
 
 def _shell_cd_before_lines(
@@ -8265,7 +8583,10 @@ def _scan_shell_body(
     referenced: set[str] = set()
 
     def scan_segment(
-        segment: list[tuple[str, str, int, int]], line: int, cwd_unknown: bool
+        segment: list[tuple[str, str, int, int]],
+        line: int,
+        last_line: int,
+        cwd_unknown: bool,
     ) -> str | None:
         if _shell_segment_is_artifact_downloader(segment):
             return _SHELL_DOWNLOADER_REFUSAL.format(
@@ -8288,6 +8609,19 @@ def _scan_shell_body(
                     )
                 if cwd_unknown:
                     return _SHELL_DELEGATION_CD_REFUSAL.format(
+                        subpath=subpath,
+                        provenance=_delegation_provenance(origin, line),
+                    )
+                if (
+                    function_def_lines
+                    and body_has_cd
+                    and function_def_lines[0] <= last_line
+                ):
+                    # Fold round 2, N1c: the candidate sits at or after a
+                    # function definition (so the function body may contain
+                    # it) and the body changes cwd somewhere, so the cwd it
+                    # runs under when the function is called is unprovable.
+                    return _SHELL_DELEGATION_DEFERRED_FUNCTION_REFUSAL.format(
                         subpath=subpath,
                         provenance=_delegation_provenance(origin, line),
                     )
@@ -8326,6 +8660,8 @@ def _scan_shell_body(
 
     pending = _whole_body_continuation_state(lines, content_indent, set())
     cd_before_lines = _shell_cd_before_lines(lines, content_indent, pending)
+    body_has_cd = _shell_body_has_cd(lines, content_indent, pending)
+    function_def_lines = _shell_function_def_lines(lines)
     for index in range(len(lines)):
         if _raw_continuation_bound_exceeded(
             lines, index
@@ -8340,7 +8676,9 @@ def _scan_shell_body(
         cwd_unknown = index in cd_before_lines
         for segment in _shell_segments(_shell_tokens(line)):
             segment_is_cd = _shell_segment_is_cd(segment)
-            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
+            message = scan_segment(
+                segment, index + 1, index, cwd_unknown or segment_is_cd
+            )
             if message is not None:
                 return message, referenced
             cwd_unknown = cwd_unknown or segment_is_cd
@@ -8348,7 +8686,12 @@ def _scan_shell_body(
         cwd_unknown = index in cd_before_lines
         for segment in _joined_continuation_segments(lines, index):
             segment_is_cd = _shell_segment_is_cd(segment)
-            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _raw_join_last_line(lines, index),
+                cwd_unknown or segment_is_cd,
+            )
             if message is not None:
                 return message, referenced
             cwd_unknown = cwd_unknown or segment_is_cd
@@ -8357,7 +8700,12 @@ def _scan_shell_body(
             lines, index, content_indent, pending
         ):
             segment_is_cd = _shell_segment_is_cd(segment)
-            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _bash_join_last_line(lines, index, pending),
+                cwd_unknown or segment_is_cd,
+            )
             if message is not None:
                 return message, referenced
             cwd_unknown = cwd_unknown or segment_is_cd
@@ -8373,7 +8721,12 @@ def _scan_shell_body(
             lines, index, content_indent
         ):
             segment_is_cd = _shell_segment_is_cd(segment)
-            message = scan_segment(segment, index + 1, cwd_unknown or segment_is_cd)
+            message = scan_segment(
+                segment,
+                index + 1,
+                _payload_join_last_line(lines, index),
+                cwd_unknown or segment_is_cd,
+            )
             if message is not None:
                 return message, referenced
             cwd_unknown = cwd_unknown or segment_is_cd

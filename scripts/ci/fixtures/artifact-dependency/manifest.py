@@ -7585,7 +7585,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-shell-delegation-working-directory.yml:10: delegation to `scripts/ci/shell-evil.sh` in a step with `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+            "reject-shell-delegation-working-directory.yml:10: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
         ],
     },
     {
