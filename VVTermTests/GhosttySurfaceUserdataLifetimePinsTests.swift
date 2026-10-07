@@ -48,12 +48,17 @@
 //    P-H  (#329) both `Ghostty.Surface` free paths order invalidate → drain →
 //         `ghostty_surface_free` (the deinit drain inside
 //         `withExtendedLifetime(context)`); `complete` orders its nil-state
-//         guard → claim → C call with the claim's guard `else` between them;
-//         both `confirmReadClipboard` branches register after their own resolve
-//         guard (the prompt branch also after the payload copy); and
-//         `invalidate()` never clears the registry while the drain never
-//         consults `isValid`, never calls C under the lock, and keeps the deny
-//         literal arguments.
+//         guard → non-optional-context claim → C call with the claim's guard
+//         `else` between them; both `confirmReadClipboard` branches register
+//         after their own resolve guard (the prompt branch also after the
+//         payload copy); and `invalidate()` never clears the registry while
+//         the drain never consults `isValid`, keeps the deny literal
+//         arguments, and (tripwire, not a guarantee) no direct C completion
+//         sits in the scanned `withLock` bodies. There is no behavioural
+//         deinit-drain test: the deferred drain needs a real core-allocated
+//         request state, and every available seam lets the completion Task
+//         claim before the deferred free runs — coverage is the registry
+//         invalidate-then-drain test plus the P-H1 ordering pin.
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
@@ -83,13 +88,20 @@
 //    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
 //         completion gate (keeping the resolve) → the comparison count drops
 //         to 0.
-//    P-H  (#329, each mutation verified on a mutated source copy with
-//         `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`): delete the free-path drain or
-//         move it after the free → P-H1; delete the claim or discard its result
-//         with `_ =` → P-H2; delete a branch registration or move it above its
-//         resolve guard → P-H3; make `invalidate()` clear the registry, make
-//         the drain consult `isValid`, move the drain's C call under `withLock`,
-//         or change its deny arguments → P-H4.
+//    P-H  (#329; each row names its harness — "pin" = the pin suite run
+//         against a mutated source copy via `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`,
+//         "behavioural" = a rebuilt mutated copy): delete the free-path drain →
+//         behavioural (seam-death test); move the drain after the free → pin
+//         P-H1; delete the claim → behavioural (no-double-complete test, a
+//         clean pre-teardown assertion since fold round 1); discard the claim
+//         result with `_ =` → pin P-H2; delete a branch registration → pin
+//         P-H3; move a registration above its resolve guard → pin P-H3
+//         (non-minimal mutation; P-B/P-E also red on the extra route); make
+//         `invalidate()` clear the registry → behavioural (registry test 3);
+//         make the drain consult `isValid` → pin P-H4 (measured in fold round
+//         1); move the drain's C call under `withLock` → pin P-H4 (synthetic
+//         stand-in that inserts a C call into the lock body, not the real
+//         relocation); change the drain's deny arguments → pin P-H4.
 
 import Foundation
 import Testing
@@ -660,8 +672,9 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     /// #329 claim discipline in `complete`: the nil-state guard precedes the
     /// claim, the claim's guard `else`/`return` sits between the claim and the
-    /// C completion, and the claim result is consumed (a `_ =` discard would
-    /// let the double completion the claim exists to prevent).
+    /// C completion, the claim result is consumed (a `_ =` discard would let
+    /// the double completion the claim exists to prevent), and the `context`
+    /// parameter is non-optional (a `nil` context would bypass the claim).
     @Test
     func testPHCompletionClaimsBeforeTheCCompletion() throws {
         let appText = Self.strippingComments(try source(Self.appSource))
@@ -705,6 +718,22 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         #expect(
             Self.occurrences(of: "_ =", in: appText, range: completeBody).isEmpty,
             "P-H: the claim result must be consumed by its guard, never discarded with `_ =`"
+        )
+
+        // The context parameter must stay non-optional: a `nil` context would
+        // compile at a future call site and silently bypass the claim.
+        let signatureEnd = try #require(
+            appText[completeAnchor.upperBound...].firstIndex(of: "{"),
+            "P-H: complete's declaration must open a body"
+        )
+        let signature = String(appText[completeAnchor.upperBound..<signatureEnd])
+        #expect(
+            Self.occurrences(of: "context: Ghostty.SurfaceCallbackContext", in: signature).count == 1,
+            "P-H: complete must declare its context parameter"
+        )
+        #expect(
+            Self.occurrences(of: "context: Ghostty.SurfaceCallbackContext?", in: signature).isEmpty,
+            "P-H: complete's context parameter must be non-optional — a nil context would bypass the exactly-once claim"
         )
     }
 
@@ -788,8 +817,12 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     /// #329 registry invariants: `invalidate()` must not clear the registry
     /// (the deferred drain still owes each entry's release), the drain must not
-    /// consult `isValid`, no C completion may sit inside a `withLock` body, and
-    /// the drain's deny literal must stay `("", pending.state, true)`.
+    /// consult `isValid`, no C completion may sit inside a `withLock` body
+    /// (tripwire, not a guarantee: a direct-call scan of the two files, not a
+    /// loop-scoped proof — a C call behind a helper invoked in a lock body
+    /// escapes it), and the drain's deny literal must stay
+    /// `("", pending.state, true)` (also a file-scoped presence check: it does
+    /// not prove the literal sits in the drain helper's body).
     @Test
     func testPHRegistryInvariants() throws {
         let contextText = Self.strippingComments(try source(Self.contextSource))

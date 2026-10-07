@@ -1051,6 +1051,14 @@ struct GhosttySurfaceCallbackRoutingTests {
         )
         #endif
 
+        // #329: the claim must have removed the entry directly. Assert before
+        // `cleanup()`: the free-path drain empties the registry regardless of
+        // whether the completion ever claimed.
+        #expect(
+            surface.callbackContext.drainPendingClipboardRequests().isEmpty,
+            "the completion's claim must have removed the registry entry"
+        )
+
         terminal.cleanup()
 
         #if DEBUG
@@ -1065,7 +1073,7 @@ struct GhosttySurfaceCallbackRoutingTests {
         #endif
         #expect(
             surface.callbackContext.drainPendingClipboardRequests().isEmpty,
-            "the completion's claim must have removed the registry entry"
+            "no retained request state may survive teardown"
         )
     }
 

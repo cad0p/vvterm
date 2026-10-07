@@ -372,4 +372,37 @@ struct GhosttySurfaceCallbackContextTests {
         #expect(kinds[paste] == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
         #expect(kinds[osc52Read] == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ)
     }
+
+    /// #329 registry contract: a multi-entry drain returns every pending entry
+    /// in one snapshot — the `teardownDrains` telemetry order is unspecified
+    /// for more than one entry, so only set-equality is contractual.
+    @Test
+    func registryDrainReturnsEveryPendingEntryInOneSnapshot() throws {
+        let app = Ghostty.App()
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "context-registry-multi-drain")
+        defer {
+            terminal.cleanup()
+            app.cleanup()
+        }
+
+        let context = try #require(terminal.surface?.callbackContext)
+        let paste = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        let osc52Read = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        defer {
+            paste.deallocate()
+            osc52Read.deallocate()
+        }
+
+        #expect(context.registerPendingClipboardRequest(state: paste, kind: GHOSTTY_CLIPBOARD_REQUEST_PASTE))
+        #expect(context.registerPendingClipboardRequest(state: osc52Read, kind: GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ))
+
+        let drained = context.drainPendingClipboardRequests()
+        #expect(drained.count == 2, "the drain must return both pending entries in one snapshot")
+        #expect(
+            Set(drained.map(\.state)) == Set([paste, osc52Read]),
+            "the drain must return exactly the registered request states"
+        )
+        #expect(context.drainPendingClipboardRequests().isEmpty, "a second drain must return nothing")
+    }
 }
