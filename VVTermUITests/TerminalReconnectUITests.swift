@@ -296,16 +296,7 @@ final class TerminalReconnectUITests: XCTestCase {
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
         XCTAssertTrue(tapAndAwaitInput(key, diagnostics: diagnostics, app: app), "The 'z' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
         tapCommandArguments("", diagnostics: diagnostics, app: app)
-        waitForAnyDiagnostics(
-            diagnostics,
-            containing: [
-                "cwd=/tmp/DEV212_INPUT_Z_1",
-                "title=DEV212_INPUT_Z_1",
-                "DEV212_INPUT_Z_1",
-            ],
-            timeout: 8,
-            app: app
-        )
+        XCTAssertTrue(waitForAnyDiagnostics(diagnostics, containing: ["cwd=/tmp/DEV212_INPUT_Z_1", "title=DEV212_INPUT_Z_1", "DEV212_INPUT_Z_1"], timeout: 8, app: app), "No 'DEV212_INPUT_Z_1' receipt arrived after the 'z' command. \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]")
 
         assertKeyboardAndAccessoryVisible(diagnostics: diagnostics, app: app)
         assertSameSession(as: beforeCodex, diagnostics: diagnostics, app: app)
@@ -421,20 +412,11 @@ final class TerminalReconnectUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
 
-        let key = app.keys["x"]
+        let key = app.keys["z"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
-        XCTAssertTrue(tapAndAwaitInput(key, diagnostics: diagnostics, app: app), "The repaired keyboard's 'x' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
+        XCTAssertTrue(tapAndAwaitInput(key, diagnostics: diagnostics, app: app), "The repaired keyboard's 'z' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
         tapCommandArguments("", diagnostics: diagnostics, app: app)
-        waitForAnyDiagnostics(
-            diagnostics,
-            containing: [
-                "cwd=/tmp/DEV212_INPUT_X_1",
-                "title=DEV212_INPUT_X_1",
-                "DEV212_INPUT_X_1",
-            ],
-            timeout: 8,
-            app: app
-        )
+        XCTAssertTrue(waitForAnyDiagnostics(diagnostics, containing: ["cwd=/tmp/DEV212_INPUT_Z_1", "title=DEV212_INPUT_Z_1", "DEV212_INPUT_Z_1"], timeout: 8, app: app), "No 'DEV212_INPUT_Z_1' receipt arrived after the repaired keyboard's 'z' command. \(diagnosticText(in: app)) sshdLog=[\(sshdLogTail())]")
         assertSameSession(
             terminalId: beforeLoss.terminalId,
             shellId: beforeLoss.shellId,
