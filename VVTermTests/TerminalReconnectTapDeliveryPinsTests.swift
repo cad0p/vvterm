@@ -51,12 +51,13 @@
 //    - A4 proves the text, not runtime liveness (that is CF-R2);
 //    - a coherent edit paired with a pin update is inherent to an
 //      update-on-purpose pin;
-//    - the retry sites' control flow is text-pinned by A5, not runtime-proven;
-//      CF-R4 (the `return false` helper mutation on the session test) is what
-//      demonstrates the retry body executes and the pre-existing
-//      `XCTAssertTrue(delivered, …)` reds — its result is recorded in the
-//      evidence bundle at
-//      `assets/vvterm-issue220-evidence/README.md`.
+//    - the retry sites' control flow is text-pinned by A5; CF-R4's literal
+//      `key.tap(); return false` mutation reds at the added initial-x assert
+//      (:144) before the retry loop can run, so the retry path was covered by
+//      a retry-reachable variant (the helper gates delivery on the pre-tap
+//      baseline `before == 0`): it executes both retry iterations and reds at
+//      the pre-existing `XCTAssertTrue(delivered, …)`. Raw logs and the exact
+//      failure text live in `assets/vvterm-issue220-evidence/README.md`.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as
