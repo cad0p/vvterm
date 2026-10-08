@@ -37,6 +37,10 @@
 //    A6  the four bare taps in `tapCommandArguments` keep their delivery
 //        backing: exactly two `containing: enterTarget` waits (the Return
 //        key/button path) and the `terminal.typeText("\n")` IME fallback.
+//    A7  no `tapAndAwaitInput` call site passes its own `timeout:` — a
+//        balanced-paren extraction of every call's argument text (the
+//        declaration is excluded by its `private func ` prefix), so a
+//        `timeout: 1` site override cannot keep A1-A6 green.
 //
 //  Scans run over the comment-stripped, whitespace-normalized source: a
 //  comment-embedded decoy is not code, and a multi-line call site normalizes
@@ -45,8 +49,10 @@
 //
 //  Honest defeat list:
 //    - a differently-spelled wall-clock read (`CFAbsoluteTimeGetCurrent`,
-//      `ProcessInfo.systemUptime`) escapes A1's token count — but the
-//      `XCTAssertLessThan(` half still catches it as an assertion;
+//      `ProcessInfo.systemUptime`) escapes A1's token count; the
+//      `XCTAssertLessThan(` half catches it only when the re-added threshold
+//      is spelled `XCTAssertLessThan(` — an
+//      `XCTAssert(CFAbsoluteTimeGetCurrent() - t0 < 10)` escapes both halves;
 //    - a tap-latency assertion in another file is out of scope;
 //    - A4 proves the text, not runtime liveness (that is CF-R2);
 //    - a coherent edit paired with a pin update is inherent to an
@@ -172,7 +178,54 @@ struct TerminalReconnectTapDeliveryPinsTests {
         )
     }
 
+    /// A7: no call site overrides the helper's bounded wait.
+    @Test
+    func testA7CallSitesDoNotOverrideTheTimeout() throws {
+        let source = try Self.normalizedSource()
+        let arguments = Self.callArgumentTexts(in: source)
+        #expect(
+            arguments.count == 5,
+            "the balanced-paren scan must cover the five `tapAndAwaitInput(` call sites — found \(arguments.count) (issue #220)"
+        )
+        let overrides = arguments.filter { $0.contains("timeout:") }
+        #expect(
+            overrides.isEmpty,
+            "no `tapAndAwaitInput` call site may pass its own `timeout:` (the helper's 30 s default is the only bounded-wait authority; A3 pins the declaration, A7 pins the call sites) — overrides: \(overrides) (issue #220)"
+        )
+    }
+
     // MARK: - Source helpers
+
+    /// The argument text of every `tapAndAwaitInput(` call site — the
+    /// declaration is excluded by its `private func ` prefix — extracted with
+    /// a balanced-paren scan over the whitespace-normalized source. The
+    /// comment stripper copies string contents verbatim, so an unbalanced
+    /// paren inside a literal would mis-slice; that is the same text-parser
+    /// heuristic class the header names.
+    private static func callArgumentTexts(in source: String) -> [String] {
+        let token = "tapAndAwaitInput("
+        var sites: [String] = []
+        var searchStart = source.startIndex
+        while let range = source.range(of: token, range: searchStart..<source.endIndex) {
+            searchStart = range.upperBound
+            if source[..<range.lowerBound].hasSuffix("private func ") { continue }
+            var depth = 1
+            var index = range.upperBound
+            while index < source.endIndex, depth > 0 {
+                let character = source[index]
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth -= 1
+                }
+                if depth == 0 { break }
+                index = source.index(after: index)
+            }
+            guard depth == 0 else { continue }
+            sites.append(String(source[range.upperBound..<index]))
+        }
+        return sites
+    }
 
     /// The window around the first occurrence of `token` (for the elapsed-print
     /// context assertion).
