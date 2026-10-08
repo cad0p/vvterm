@@ -1184,8 +1184,8 @@ Delegations under a non-root `working-directory:` or after a modeled `cd`
 are refused, not resolved; a cwd change the tokenizer cannot see — inside
 an interpreter payload (`bash -c 'cd sub; …'`), through an assembled
 command (`CMD=cd; $CMD sub`), through a dynamic `.`/`source` target, or
-spelled `pushd`/`popd` — is a named
-residual. The whole
+spelled `pushd`/`popd`, or a `cd` on the opening line of a `$()`/backtick
+that closes on a later physical line — is a named residual. The whole
 attribute-to-the-delegating-job arm (scanning a delegated downloader under
 the existing transitive-`needs:` rule) is declined by design: an executable
 shell downloader refuses regardless of the `needs:` graph. The
@@ -1226,7 +1226,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 856
+EXPECTED_MANIFEST_CASES = 859
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1251,7 +1251,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 425
+EXPECTED_BASE_VERDICT_CASES = 428
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign

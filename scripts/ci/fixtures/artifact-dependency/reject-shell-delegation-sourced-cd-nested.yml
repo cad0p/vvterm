@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#403, N18): the sourced `cd` is two source hops deep
+# (caller → helper2 → helper → `cd sub`); the recursion makes THIS
+# sourced-`cd` diagnostic fire; without it the case refuses differently.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          . scripts/ci/helper2.sh
+          bash scripts/ci/shell-evil.sh
