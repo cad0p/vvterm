@@ -5,9 +5,10 @@
 #   1. build       — compiles the VVTerm app for iOS Simulator (no signing),
 #                    then uploads the compiled products as an artifact so the
 #                    fan-out ui-tests shards skip recompilation.
-#   2. unit-tests  — runs VVTermTests (fast, pure logic). Downloads the
-#                    build artifact so it reuses the prebuilt app + SPM deps
-#                    and only compiles the VVTermTests target.
+#   2. unit-tests  — runs the prebuilt VVTermTests bundle from the build
+#                    artifact (`test-without-building`, zero compilation),
+#                    and fails a vacuous green via
+#                    scripts/ci/assert-unit-tests-ran.sh.
 #   3. ui-tests    — matrix of 4 parallel shard jobs (shard-0..shard-3),
 #                    each downloading the build artifact and running a
 #                    subset of VVTermUITests via -only-testing:. fail-fast
@@ -50,16 +51,16 @@
 #
 # Build-once-fanout architecture:
 #   - The `build` job compiles the app once and uploads Build/Products +
-#     Build/Intermediates.noindex from DerivedData (ui-tests uses
-#     test-without-building; unit-tests reuses the compiled SPM
-#     intermediates instead of rebuilding swift-nio/MLX from scratch).
+#     Build/Intermediates.noindex from DerivedData; every test consumer runs
+#     the prebuilt bundles with `test-without-building` (zero compilation).
 #   - Each `ui-tests` shard downloads that artifact into the same
-#     -derivedDataPath the build used, so `xcodebuild test` finds the prebuilt
-#     app and skips compilation. Each shard then runs only its assigned tests
-#     via `-only-testing:Target/Class/method,...`.
-#   - The `unit-tests` job downloads the same artifact, so it reuses the
-#     prebuilt app + Cmlx/mlx-swift deps and only compiles the VVTermTests
-#     target (fast), then runs the `VVTermUnitTests` suite (~30 s).
+#     -derivedDataPath the build used, so `test-without-building` finds the
+#     prebuilt app. Each shard then runs only its assigned tests via
+#     `-only-testing:Target/Class/method,...`.
+#   - The `unit-tests` job downloads the same artifact and runs
+#     `test-without-building -only-testing:VVTermTests` on the prebuilt
+#     bundle (zero compilation); its guard requires non-zero XCTest and
+#     Swift Testing summary counts (scripts/ci/assert-unit-tests-ran.sh).
 #   - Shard split is a measured assignment over the 41-run clean population
 #     (issue #248): every attempt-1 `pull_request` run whose four shard logs
 #     parse to exactly the 88-method universe at the last `only-testing`
@@ -250,12 +251,11 @@ jobs:
         # simulated executable: no file found at .../VVTerm.app"). Tar
         # preserves symlinks + permissions.
         #
-        # Intermediates.noindex (.o files, .swiftmodule, build intermediates)
-        # IS included — unit-tests needs the compiled SPM modules to skip
-        # recompiling swift-nio/MLX/etc. from scratch (~6m). The SPM cache
-        # (SourcePackages) alone is insufficient; the compiled artifacts live
-        # in Intermediates.noindex. ui-tests ignores this (test-without-building
-        # does zero compilation).
+        # Intermediates.noindex is still included because trimming it from the
+        # artifact is a recorded follow-up (issue #416): every consumer
+        # (ui-tests, unit-tests, debug-test) now runs `test-without-building`
+        # off the prebuilt products, so no consumer compiles and the
+        # intermediate objects are dead weight in transit.
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/DerivedData/Build"
@@ -389,11 +389,14 @@ jobs:
 
   unit-tests:
     runs-on: xcode-27
-    # Keep comfortably above the measured 19-21m runtime (compile + full
-    # suite + pool contention). timeout-minutes: 20 was killing the job at
-    # the 20m mark exactly when the runner was slow (observed 2026-08-14:
-    # every run >20m was cancelled, every run <20m passed — perfect
-    # correlation, three consecutive failures on PR #167).
+    # Kill cap for a wedged runner, not expected runtime: this job no longer
+    # compiles (`test-without-building` off the artifact), so the expected
+    # wall clock is artifact download/extract + Metal toolchain + simulator
+    # boot + the suite ≈ 10m30s-11m40s (issue #416). Keep 30m:
+    # timeout-minutes: 20 was killing the job at the 20m mark exactly when the
+    # runner was slow (observed 2026-08-14: every run >20m was cancelled, every
+    # run <20m passed — perfect correlation, three consecutive failures on
+    # PR #167).
     timeout-minutes: 30
     needs: [build, wait-for-ota-publish]
     # Per-PR job (issue #315): a debug dispatch (`debug_test` set) must cost only
@@ -410,34 +413,69 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare Xcode build (mtimes, caches, Metal toolchain)
-        # NOTE: This job does NOT download the build artifact (unlike
-        # ui-tests). The cache alone provides Products + Intermediates.noindex
-        # + SourcePackages with correct mtimes — the artifact's fresh tar
-        # mtimes would make xcodebuild re-validate and recompile all SPM deps
-        # (~6m waste). The cache's mtime sidecar is the source of truth.
-        uses: ./.github/actions/prepare-xcode-build
+      - name: Download build products
+        # Same prebuilt-bundle model as the ui-tests shards and debug-test:
+        # download the tarball the build job uploaded and extract it into the
+        # same -derivedDataPath the build used. Tar preserves the symlinks
+        # inside .app bundles that actions/download-artifact would flatten.
+        uses: actions/download-artifact@v8
         with:
-          deriveddata-key-prefix: xcode27-deriveddata-ct
-          deriveddata-restore-keys: xcode27-deriveddata-ct-${{ github.workflow }}-
+          name: vvterm-build
+          path: ${{ runner.temp }}
+
+      - name: Extract build products
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/DerivedData/Build"
+          tar -xzf "$RUNNER_TEMP/vvterm-build.tar.gz" -C "$RUNNER_TEMP/DerivedData/Build"
+
+      - name: Download Metal toolchain
+        # The xcode-27 public-preview image does not ship the Metal toolchain.
+        # Required by mlx-swift Cmlx shaders + libghostty Metal renderer.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Pre-boot the simulator
+        # Mirror scripts/ci/run-ui-tests.sh: boot the destination simulator and
+        # bounded-poll until it reports Booted, so the test session never starts
+        # against a still-initializing boot (the #43 wedge family). Bounded poll —
+        # do NOT use `bootstatus -b` (it can block forever on a wedged
+        # CoreSimulator).
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "iPhone 17" >/dev/null 2>&1 || true
+          BOOTED=0
+          for _ in $(seq 1 60); do
+            if xcrun simctl list devices booted 2>/dev/null | grep -q "iPhone 17"; then
+              BOOTED=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$BOOTED" -ne 1 ]; then
+            echo "::warning::iPhone 17 did not report Booted within 120s; continuing (xcodebuild will retry its own boot)."
+          fi
 
       - name: Run unit tests (VVTermTests)
+        # The composite prepare-xcode-build action is deliberately NOT used:
+        # there is no build, so its source-mtime restore, DerivedData/SPM
+        # cache, and stale-PCM clearing are all inert (issue #416).
         run: |
           set -euo pipefail
 
-          # `test -scheme VVTermUnitTests` (NOT test-without-building).
-          # test-without-building crashes on Xcode 27 due to a duplicate-symbol
-          # conflict: the test bundle and app host both statically link
-          # SwiftProtobuf, and `test-without-building` loads both into the
-          # same process → "Class ... is implemented in both" → crash before
-          # tests connect. This is an Xcode 27-specific regression (Xcode 26
-          # doesn't exhibit it). The regular `test` command builds+runs in a
-          # mode that uses the app's copy, avoiding the conflict.
+          # `test-without-building` off the artifact's .xctestrun manifest: the
+          # shard model, with ZERO compilation. The Xcode-27 duplicate-symbol
+          # crash that blocked this form (the test bundle and app host both
+          # statically link SwiftProtobuf) is measured gone — dispatch
+          # 37787530259's debug-test ran test-without-building off the
+          # extracted artifact and passed (recorded on #42, comment 6061888842).
           #
-          # The build artifact (tar + extract) IS still reused: xcodebuild finds
-          # the prebuilt app + Cmlx in the extracted DerivedData and skips
-          # recompiling them, compiling only the VVTermTests target (~3m).
-          # The VVTermUnitTests scheme is scoped to VVTermTests only.
+          # Flag delta from the former build-and-test invocation:
+          # CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- and
+          # IgnoreFileSystemDeviceInodeChanges=YES were BUILD settings — inert
+          # under `test-without-building` because no build runs. The precedent
+          # jobs (ui-tests, debug-test) pass CODE_SIGNING_ALLOWED=NO with the
+          # prebuilt artifact; pass it explicitly here too.
+          #
           # -test-timeouts-enabled + 180s execution allowance: a hanging test
           # is KILLED and recorded as a failure BY NAME ("Exceeded execution
           # time allowance") instead of running to the 30m job timeout with no
@@ -446,43 +484,40 @@ jobs:
           # Placement matters: `-parallel-testing-enabled` consumes a following
           # `-option` token as its value, so the timeout flags must precede it.
           #
-          # Ad-hoc sign, matching the build job (CODE_SIGNING_ALLOWED=YES
-          # CODE_SIGN_IDENTITY=-). `xcodebuild test` BUILDS the app, so an
-          # unsigned build here is NOT harmless: an unsigned sim app carries no
-          # entitlements, and the test host then dies before the tests connect.
-          # Observed 2026-09-24 (run 36053966722): the log showed the
-          # entitlements stripped (`Removed stale file '…/VVTerm.app.xcent'`),
-          # then `[CK] … your process must have a
-          # com.apple.developer.icloud-services entitlement`, a 600 s
-          # diagnostics timeout, and finally "Early unexpected exit … The test
-          # runner crashed before establishing connection". The bare
-          # `-parallel-testing-enabled` used to swallow this setting, so the job
-          # silently built signed and passed; making the flag explicit exposed
-          # it. Matching the build job's flags also lets the extracted
-          # DerivedData be reused rather than rebuilt.
+          # `-collect-test-diagnostics never`: a diagnostics timeout occurs even
+          # on a fully green run (#251) — the suites finish, then collection
+          # waits 600 s for a simulator response that never arrives. Full
+          # diagnostics stay available through the `debug-test` dispatch input.
           #
-          # The 600 s diagnostics timeout in that run was a *symptom* of the
-          # crash, not part of its cause — and a diagnostics timeout also occurs
-          # on a fully green run (#251): the suites finish, then collection waits
-          # 600 s for a simulator response that never arrives, ~37% of the job.
-          # So this invocation passes `-collect-test-diagnostics never`,
-          # matching the UI shards. Full diagnostics stay available through the
-          # `debug-test` dispatch input, which is what that path exists for.
-          xcodebuild test -collect-test-diagnostics never \
-            -scheme VVTermUnitTests \
-            -configuration Debug \
+          # `-only-testing:VVTermTests` (no slash) selects exactly the
+          # VVTermTests bundle's XCTest and Swift Testing tests. The next step
+          # guards against a filter that resolves to an empty test set while
+          # xcodebuild still exits 0.
+          rm -rf "$RUNNER_TEMP/TestResults.xcresult"
+          XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | sort | head -1)
+          echo "Using xctestrun manifest: $XCRUN"
+          xcodebuild test-without-building -collect-test-diagnostics never \
+            -xctestrun "$XCRUN" \
             -destination "platform=iOS Simulator,name=iPhone 17,arch=arm64" \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -only-testing:VVTermTests \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 180 \
             -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
-            IgnoreFileSystemDeviceInodeChanges=YES \
+            CODE_SIGNING_ALLOWED=NO \
             | tee "$RUNNER_TEMP/test.log"
 
-      - name: Upload test results on failure
-        if: failure()
+      - name: Assert tests actually ran
+        # Count-based vacuous-green guard (issue #416): a filter/target
+        # mismatch can make xcodebuild exit 0 having executed zero tests.
+        # Requires BOTH the XCTest and the Swift Testing summary with non-zero
+        # counts; fails closed if either is absent or unparseable.
+        run: bash scripts/ci/assert-unit-tests-ran.sh "$RUNNER_TEMP/test.log"
+
+      - name: Upload test results
+        # always(): keep TestResults.xcresult + test.log from green runs too,
+        # matching the UI-shard idiom.
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: unit-test-results
