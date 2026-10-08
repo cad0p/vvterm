@@ -1396,6 +1396,16 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             script.contains("EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases)"),
             "\(Self.scriptPath) must state EXPECTED_BASE_VERDICT_CASES = \(Self.expectedBaseVerdictCases) — the selftest's base-verdict transition check would otherwise be a no-op (issue #346+#347 fold round 2)"
         )
+        // Issue #403, N16: the header residual sentence must NAME the
+        // bare-newline `$()`/backtick `cd` spelling as one contiguous
+        // fragment, so the accepted fail-open boundary is documented where
+        // the class rule is defined. The ACCEPT fixture pins the behavior;
+        // this pins the name (P4's raw read — the header is a module
+        // docstring and would not survive `strippingPythonComments`).
+        #expect(
+            script.contains("a `cd` on the opening line of a `$()`/backtick"),
+            "\(Self.scriptPath) must name the bare-newline `$()`/backtick `cd` residual as one contiguous fragment (issue #403, N16)"
+        )
         let manifestCaseCount = manifest.components(separatedBy: "\"id\"").count - 1
         let baseVerdictCount = manifest.components(separatedBy: "\"base_exit\"").count - 1
         #expect(

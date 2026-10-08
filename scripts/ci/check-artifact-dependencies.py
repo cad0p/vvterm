@@ -1184,8 +1184,8 @@ Delegations under a non-root `working-directory:` or after a modeled `cd`
 are refused, not resolved; a cwd change the tokenizer cannot see — inside
 an interpreter payload (`bash -c 'cd sub; …'`), through an assembled
 command (`CMD=cd; $CMD sub`), through a dynamic `.`/`source` target, or
-spelled `pushd`/`popd` — is a named
-residual. The whole
+spelled `pushd`/`popd`, or a `cd` on the opening line of a `$()`/backtick
+that closes on a later physical line — is a named residual. The whole
 attribute-to-the-delegating-job arm (scanning a delegated downloader under
 the existing transitive-`needs:` rule) is declined by design: an executable
 shell downloader refuses regardless of the `needs:` graph. The
