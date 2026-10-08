@@ -83,7 +83,7 @@ final class ServerNavigationUITests: XCTestCase {
         let terminal = productionTerminal(in: app)
         XCTAssertTrue(terminal.waitForExistence(timeout: 10), diagnosticText(in: app))
         wait(for: diagnostics, containing: "setup=ready state=connected", timeout: 45, app: app)
-        wait(for: diagnostics, containing: "shell=true", app: app)
+        wait(for: diagnostics, containing: "shell=true", timeout: Self.diagnosticsWaitBudget, app: app)
         let terminalID = try XCTUnwrap(diagnosticValue("terminalId", in: diagnostics))
         let shellID = try XCTUnwrap(diagnosticValue("shellId", in: diagnostics))
 
@@ -108,7 +108,7 @@ final class ServerNavigationUITests: XCTestCase {
         let app = resetToServerList(in: launchNavigationHarness())
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
-        wait(for: diagnostics, containing: "setup=ready", app: app)
+        wait(for: diagnostics, containing: "setup=ready", timeout: Self.diagnosticsWaitBudget, app: app)
 
         let activeRow = app.descendants(matching: .any)
             .matching(
@@ -127,25 +127,26 @@ final class ServerNavigationUITests: XCTestCase {
         // reproduces exactly; the other three are wall-clock deltas within
         // 0.5 s). 90 s is the largest defensible budget — ~7.3 s above that
         // tail. Allowance arithmetic (enumerated scopes, pre-#387): the 12
-        // in-body waits before `popTerminal` budget 280 s, + the final 8 s
-        // discard = 288 s, + `popTerminal`'s 8+15+5 = 316 s; #387's pair
-        // calibration (8→30 twice) adds exactly +44 s → 324/332/360 s. Worst
-        // single expiry at the pair, composed from measured extrema: 122.85 s
-        // max observed pre-background wait start + 90 s + ≤26 s (terminal 10 +
-        // keyboard label 8 + keyboard element 8) + 30 s + the 22.56 s
-        // failure-path `current=` read + ~1 s ≈ 292 s; margin ~8 s. That read
-        // is unbounded by design, so this is an estimate, not a bound; a
-        // later-calibrated-wait expiry after several near-deadline successes
-        // can exceed 300 s — the stop rule's `elapsed=` ≥250 s trigger is the
-        // catch. `continueAfterFailure = false` keeps it to one expiry per
-        // run.
-        // Stacked-success can reach ~306-376 s: that residual predates #387
+        // in-body waits before `popTerminal` budget 300 s (#400 routed `:111`
+        // 10→30, +20 s), + the final 8 s discard = 308 s, + `popTerminal`'s
+        // 8+15+5 = 336 s; #387's pair calibration (8→30 twice) adds exactly
+        // +44 s → 344/352/380 s. Worst single expiry at the pair, composed
+        // from measured extrema: 122.85 s max observed pre-background wait
+        // start + 20 s (#400's `:111` budget delta, ahead of the recorded
+        // start) + 90 s + ≤26 s (terminal 10 + keyboard label 8 + keyboard
+        // element 8) + 30 s + the 22.56 s failure-path `current=` read + ~1 s
+        // ≈ 312 s; margin ~8 s. That read is unbounded by design, so this is
+        // an estimate, not a bound; a later-calibrated-wait expiry after
+        // several near-deadline successes can exceed 300 s — the stop rule's
+        // `elapsed=` ≥250 s trigger is the catch. `continueAfterFailure =
+        // false` keeps it to one expiry per run.
+        // Stacked-success can reach ~326-396 s: that residual predates #387
         // (~262-332 s) and is accepted. Stop rule (home: this comment, plus
-        // #387 while open; owner: the next agent touching this method; shrink
-        // target: 15-20 s waits or a fail-fast guard): any shard-3 run of this
-        // method >250 s, any `elapsed=` ≥250 s, or an allowance kill →
-        // reopen #387 and shrink; record runtimes on #248 and reds on #257. A
-        // stall beyond a budget can still red here and stays on #257.
+        // #387/#400 while open; owner: the next agent touching this method;
+        // shrink target: 15-20 s waits or a fail-fast guard): any shard-3 run
+        // of this method >250 s, any `elapsed=` ≥250 s, or an allowance kill →
+        // reopen #387/#400 and shrink; record runtimes on #248 and reds on
+        // #257. A stall beyond a budget can still red here and stays on #257.
         wait(for: diagnostics, containing: "state=connected", timeout: 90, app: app)
 
         let terminal = productionTerminal(in: app)
@@ -166,8 +167,8 @@ final class ServerNavigationUITests: XCTestCase {
         // #232: measured slippage for the post-background wait is ~22.2 s
         // (n=1, job 111071659829) against the old 10 s budget; 45 s leaves
         // ~22.7 s above that sample. The stacked-success allowance arithmetic
-        // (~306-376 s after #387) is documented at the pre-background site
-        // above; the residual is accepted there via the stop rule.
+        // (~326-396 s after #387 and #400) is documented at the pre-background
+        // site above; the residual is accepted there via the stop rule.
         wait(for: diagnostics, containing: "state=connected", timeout: 45, app: app)
         XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalId)
         XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellId)
@@ -178,12 +179,13 @@ final class ServerNavigationUITests: XCTestCase {
         // #232: measured slippage here is ~8.7 s (n=1, job 108860967255)
         // against the old 8 s budget; 30 s leaves ~21 s of room. Same-trip
         // rule (the `runningBackground`/`runningForeground` pair left this set
-        // when #387 calibrated it via `appStateWaitBudget`): the uncalibrated
-        // 8 s waits near the keyboard labels — the pre-background
-        // `keyboardVisible=true` label wait and the two
-        // `app.keyboards.firstMatch.waitForExistence` waits — plus the shared
-        // helper's 10 s default are left alone; if any of them reds, calibrate
-        // it on its own measured evidence in the same trip.
+        // when #387 calibrated it via `appStateWaitBudget`; #400 calibrated
+        // the shared helper's four 10 s defaults via `diagnosticsWaitBudget`):
+        // the uncalibrated 8 s waits near the keyboard labels — the
+        // pre-background `keyboardVisible=true` label wait and the two
+        // `app.keyboards.firstMatch.waitForExistence` waits — are left alone;
+        // if any of them reds, calibrate it on its own measured evidence in
+        // the same trip.
         wait(for: diagnostics, containing: "keyboardVisible=true", timeout: 30, app: app)
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForExistence(timeout: 8),
@@ -256,7 +258,17 @@ final class ServerNavigationUITests: XCTestCase {
         let app = resetToServerList(in: launchNavigationHarness())
         let diagnostics = app.staticTexts["vvterm.reconnectTest.diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 45))
-        wait(for: diagnostics, containing: "setup=ready", app: app)
+        // #400: this shared wait (both #227 methods) moved from the helper's
+        // 10 s default to `diagnosticsWaitBudget` (30 s). Shard-0 exposure:
+        // the #227 pair's 41-run maxima are 244.008 s (session) and 274.228 s
+        // (list-position) against the 300 s allowance; this change's
+        // worst-case budget-inventory deltas are +60 s (session: `:86` + this
+        // wait + `assertSession`) and +20 s (list-position: this wait). Stop
+        // rule (home: this comment; owner: the next agent touching the #227
+        // pair; shrink target: per-site 15-20 s waits or a fail-fast guard):
+        // any shard-0 run of either #227 method >250 s, or an allowance kill →
+        // reopen #400 and shrink/cap; record runtimes on #248 and reds on #257.
+        wait(for: diagnostics, containing: "setup=ready", timeout: Self.diagnosticsWaitBudget, app: app)
 
         let serverRow = app.descendants(matching: .any)
             .matching(
@@ -497,7 +509,7 @@ final class ServerNavigationUITests: XCTestCase {
         diagnostics: XCUIElement,
         app: XCUIApplication
     ) {
-        wait(for: diagnostics, containing: "setup=ready state=connected", app: app)
+        wait(for: diagnostics, containing: "setup=ready state=connected", timeout: Self.diagnosticsWaitBudget, app: app)
         XCTAssertEqual(diagnosticValue("terminalId", in: diagnostics), terminalID)
         XCTAssertEqual(diagnosticValue("shellId", in: diagnostics), shellID)
     }
@@ -537,11 +549,26 @@ final class ServerNavigationUITests: XCTestCase {
         )
     }
 
+    /// The diagnostics-label wait budget (issue #400): 30 s is the #387-calibrated
+    /// host-stall floor — the same host measured a 22.557 s AX observation stall,
+    /// so a 20 s budget can still red — and the issue's own first suggestion was
+    /// `appStateWaitBudget` (= 30), kept as a separate constant because that one is
+    /// scoped to `XCUIApplication.State` waits. The red that prompted this was
+    /// right-censored at 10.34 s (`budget=10s elapsed=10.34s`, the token already
+    /// present in the post-wait dump) — a lower bound, not a completion. 45 s (the
+    /// `:85`/`:42`/`:57`/`:171` sibling budget) was rejected: no measured stall
+    /// lands in the 30-45 s band, and shard-0's #227 maxima (244.008 / 274.228 s
+    /// against the 300 s allowance) make the +15 s per site a pure exposure cost.
+    /// 30 s is also below the 54.0-82.661 s worst-stall tail, so a worse-stall
+    /// episode can still red and stays on #257. The wait still fails on a genuine
+    /// absence: the token is the session identity.
+    private static let diagnosticsWaitBudget: TimeInterval = 30
+
     @MainActor
     private func wait(
         for element: XCUIElement,
         containing expected: String,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval,
         app: XCUIApplication
     ) {
         let predicate = NSPredicate(format: "label CONTAINS %@", expected)
