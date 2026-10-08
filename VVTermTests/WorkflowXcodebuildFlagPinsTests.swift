@@ -59,8 +59,18 @@
 //  `-only-testing:VVTermTests` (and not to match `xcodebuild test`), to keep
 //  the timeout flags before `-parallel-testing-enabled NO`, and to invoke the
 //  count-based guard whose script carries both `[1-9][0-9]*` floor
-//  predicates. The job block is sliced by an exact-indent key scan that
-//  fails closed on a quoted/flow/duplicate job-key shape.
+//  predicates, now line-anchored to the summary shape. The job block is
+//  sliced by an exact-indent key scan (a trailing comment on the job key is
+//  cut first) that fails closed on a quoted/flow/duplicate job-key shape;
+//  because `strippingYAMLComments` can be left stuck by a quoted line
+//  earlier in the workflow (wait-for-ota-publish's `--jq` expression), every
+//  sliced job line is cut per line again before the content scans, so a
+//  comment can neither satisfy nor false-red the pin (fold round 1, impl
+//  lens 2). The guard is also pinned as load-bearing at runtime, not just
+//  present as text: its step carries no `if:` / `continue-on-error:`, its
+//  invocation line carries no `||`, and the script's `failed=1` markers plus
+//  its anchored `if [ "$failed" -ne 0 ]` -> `exit 1` branch must stay (fold
+//  round 1, impl lens 1/2).
 //
 //  FORMATTING HEURISTIC, NOT A PROOF: these pins parse the workflow and script
 //  as text. A real YAML parse would be sounder, but a YAML toolchain (`yq`/`jq`)
@@ -551,11 +561,27 @@ struct WorkflowXcodebuildFlagPinsTests {
             "the `unit-tests` job must contain exactly one `uses: actions/download-artifact@v8` step, found \(downloadIndices.count) — re-derive this pin (issue #416)"
         )
         if let downloadIndex = downloadIndices.first?.offset {
-            let downloadBlock = jobLines[downloadIndex..<min(downloadIndex + 6, jobLines.count)]
+            // Fold round 1 (impl lens 2): the artifact name is bound to the
+            // download step's own block (step item to the next `- ` at the
+            // step indent), not a fixed 6-line window, so an added comment
+            // inside the `with:` block cannot false-red required CI.
+            var downloadEnd = jobLines.count
+            var downloadProbe = downloadIndex + 1
+            while downloadProbe < jobLines.count {
+                let line = jobLines[downloadProbe]
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let indent = line.prefix { $0 == " " }.count
+                if trimmed.hasPrefix("- ") && indent == 6 {
+                    downloadEnd = downloadProbe
+                    break
+                }
+                downloadProbe += 1
+            }
+            let downloadBlock = jobLines[downloadIndex..<downloadEnd]
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             #expect(
                 downloadBlock.contains("name: vvterm-build"),
-                "the `unit-tests` download step must request the `vvterm-build` artifact inside its own `with:` block (found \(downloadBlock.filter { !$0.isEmpty }.joined(separator: " | "))) — re-derive this pin (issue #416)"
+                "the `unit-tests` download step must request the `vvterm-build` artifact inside its own step block (found \(downloadBlock.filter { !$0.isEmpty }.joined(separator: " | "))) — re-derive this pin (issue #416)"
             )
         }
 
@@ -661,11 +687,46 @@ struct WorkflowXcodebuildFlagPinsTests {
                 guardLines.first?.element.contains(#""$RUNNER_TEMP/test.log""#) == true,
                 "the guard invocation must be passed `\"$RUNNER_TEMP/test.log\"` (the log the xcodebuild pipeline tees) — re-derive this pin (issue #416)"
             )
+            // Fold round 1 (impl lens 1/2): the guard path being present is
+            // not load-bearing if a `|| true` tail swallows its failure.
+            #expect(
+                !jobLines[guardIndex].contains("||"),
+                "the guard invocation line must not contain `||` (a `|| true` tail swallows the guard failure while the pinned path substring survives) — re-derive this pin (issue #416)"
+            )
+        }
+        // Fold round 1 (impl lens 1/2): bind the `Assert tests actually ran`
+        // step's execution semantics — a step-level `if:` or
+        // `continue-on-error:` lets a zero-test run finish green while every
+        // pinned string survives.
+        let guardStepIndices = jobLines.enumerated().filter {
+            $0.element.contains("- name: Assert tests actually ran")
         }
         #expect(
-            jobLines.contains { $0.contains("- name: Assert tests actually ran") },
-            "the guard must stay a named step (`- name: Assert tests actually ran`) so its failure is legible — re-derive this pin (issue #416)"
+            guardStepIndices.count == 1,
+            "the guard must stay exactly one named step (`- name: Assert tests actually ran`) so its failure is legible, found \(guardStepIndices.count) — re-derive this pin (issue #416)"
         )
+        if let guardStepStart = guardStepIndices.first?.offset {
+            var guardStepEnd = jobLines.count
+            var guardStepProbe = guardStepStart + 1
+            while guardStepProbe < jobLines.count {
+                let line = jobLines[guardStepProbe]
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let indent = line.prefix { $0 == " " }.count
+                if trimmed.hasPrefix("- ") && indent == 6 {
+                    guardStepEnd = guardStepProbe
+                    break
+                }
+                guardStepProbe += 1
+            }
+            let forbiddenGuardKeys = jobLines[guardStepStart..<guardStepEnd].filter {
+                let trimmed = $0.trimmingCharacters(in: .whitespaces)
+                return trimmed.hasPrefix("if:") || trimmed.hasPrefix("continue-on-error:")
+            }
+            #expect(
+                forbiddenGuardKeys.isEmpty,
+                "the `Assert tests actually ran` step must stay unconditional (`if:` / `continue-on-error:` would let a zero-test run finish green while every pinned string survives), found \(forbiddenGuardKeys.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " | ")) — re-derive this pin (issue #416)"
+            )
+        }
 
         // 4. The script carries the count-floor predicates on its running
         // `grep -E` lines — a bare presence check anywhere (the error message
@@ -674,23 +735,45 @@ struct WorkflowXcodebuildFlagPinsTests {
         let strippedGuard = Self.strippingYAMLComments(guardSource)
         let guardScriptLines = strippedGuard.components(separatedBy: "\n")
         let xctestPredicateLines = guardScriptLines.filter {
-            $0.contains("grep -E 'Executed [1-9][0-9]* tests'")
+            $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'")
         }
         #expect(
             xctestPredicateLines.count == 1,
-            "\(guardPath) must bind the XCTest count-floor predicate to exactly one `grep -E 'Executed [1-9][0-9]* tests'` line, found \(xctestPredicateLines.count) — the `[1-9]` rejects a zero count, and a presence check anywhere (the error message echoes the same literal) is not the running predicate — re-derive this pin (issue #416)"
+            "\(guardPath) must bind the line-anchored XCTest count-floor predicate to exactly one `grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'` line, found \(xctestPredicateLines.count) — the `[1-9]` rejects a zero count, the line anchor rejects summary prose a test prints, and a presence check anywhere (the error message echoes the same literal) is not the running predicate — re-derive this pin (issue #416)"
         )
         let swiftPredicateLines = guardScriptLines.filter {
-            $0.contains("grep -E 'Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'")
+            $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'")
         }
         #expect(
             swiftPredicateLines.count == 1,
-            "\(guardPath) must bind the Swift Testing count-floor predicate to exactly one `grep -E 'Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'` line, found \(swiftPredicateLines.count) — the `[1-9]` rejects a zero count — re-derive this pin (issue #416)"
+            "\(guardPath) must bind the line-anchored Swift Testing count-floor predicate to exactly one `grep -E '^[[:space:]]*[^[:alnum:]]*Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'` line, found \(swiftPredicateLines.count) — the `[1-9]` rejects a zero count and the line anchor rejects summary prose — re-derive this pin (issue #416)"
         )
+        // Fold round 1 (impl lens 1/2): `exit 1` anywhere is not the
+        // fail-closed branch — deleting the final `if [ "$failed" -ne 0 ]`
+        // group left this pin green while the guard always exited 0. Bind
+        // both absent-summary markers and the anchored condition + its exit.
+        let failedMarkerLines = guardScriptLines.filter {
+            $0.trimmingCharacters(in: .whitespaces) == "failed=1"
+        }
         #expect(
-            strippedGuard.contains("exit 1"),
-            "\(guardPath) must fail closed (`exit 1`) when either summary is absent or unparseable — re-derive this pin (issue #416)"
+            failedMarkerLines.count == 2,
+            "\(guardPath) must mark `failed=1` in exactly the two absent-summary branches (found \(failedMarkerLines.count)): deleting one marker lets a missing summary exit 0 — re-derive this pin (issue #416)"
         )
+        let failClosedConditionLines = guardScriptLines.enumerated().filter {
+            $0.element.trimmingCharacters(in: .whitespaces) == #"if [ "$failed" -ne 0 ]; then"#
+        }
+        #expect(
+            failClosedConditionLines.count == 1,
+            "\(guardPath) must carry exactly one anchored `if [ \"$failed\" -ne 0 ]; then` fail-closed branch, found \(failClosedConditionLines.count) — re-derive this pin (issue #416)"
+        )
+        if let failClosedIndex = failClosedConditionLines.first?.offset {
+            let failClosedWindow = guardScriptLines[failClosedIndex..<min(failClosedIndex + 4, guardScriptLines.count)]
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            #expect(
+                failClosedWindow.contains("exit 1"),
+                "\(guardPath)'s fail-closed branch at line \(failClosedIndex + 1) must `exit 1` within the next lines (found \(failClosedWindow.joined(separator: " | "))): the condition without its exit lets a zero-test run finish green — re-derive this pin (issue #416)"
+            )
+        }
     }
 
     /// The #396 shape pin: the ghostty probe's bump-PR step must stay a small
@@ -1207,11 +1290,19 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// `  <name>:` key line (indent 2). Fail-closed text heuristic: a quoted
     /// or flow-style spelling, a duplicate job key, or a missing block throws
     /// `PinFailure` instead of scanning the wrong region. Comment-stripped
-    /// first, so the scan reads the region GitHub runs.
+    /// first, then cut again per line: the file-level YAML stripper can be
+    /// left stuck by a quoted line earlier in the workflow (the wait-for-ota
+    /// `--jq` expression), so every scan reads comment-cut code only (fold
+    /// round 1, impl lens 2). A trailing comment on the job key itself is
+    /// cut before matching, so `  unit-tests:  # note` still resolves.
     private static func jobBlock(named job: String, in source: String) throws -> [String] {
-        let lines = Self.strippingYAMLComments(source).components(separatedBy: "\n")
+        let lines = Self.strippingYAMLComments(source)
+            .components(separatedBy: "\n")
+            .map(Self.cuttingLineComment)
         let keyLine = "  \(job):"
-        let matches = lines.enumerated().filter { $0.element == keyLine }
+        let matches = lines.enumerated().filter {
+            $0.element.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) == keyLine
+        }
         guard matches.count == 1, let start = matches.first?.offset else {
             throw PinFailure(
                 "expected exactly one unquoted `\(keyLine)` job key at indent 2 in the workflow, found \(matches.count) — a quoted/flow/duplicate job-key shape is not scannable (issue #416); re-derive this pin"
