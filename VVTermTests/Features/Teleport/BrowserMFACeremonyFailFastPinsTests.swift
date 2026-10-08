@@ -14,9 +14,9 @@
 //
 //  1. the fail-fast method carries no wall clock — `Task.sleep`/`sleep`,
 //     `ContinuousClock`, `Date`, `DispatchTime`, `Timer` — the deleted
-//     `failFastBudget` is refused file-wide (a nested declaration inside
-//     the method would truncate the slice scan), and the method still
-//     drives `StubBrowserMFAListener` / `waitCount`, keeps one bare
+//     `failFastBudget` is refused file-wide (the body is the brace-depth
+//     block, so nested declarations are inside the scan), and the method
+//     still drives `StubBrowserMFAListener` / `waitCount`, keeps one bare
 //     catch-all (`catch {`), and asserts the typed `.safariFailed` contract
 //     with the exact A7 message;
 //  2. `BrowserMFACeremony.run` builds its listener through
@@ -24,14 +24,23 @@
 //     reds);
 //  3. the init's `makeListener` parameter default still constructs the real
 //     `BrowserMFAListener(`, so the seam cannot silently become a no-op in
-//     production.
+//     production;
+//  4. the #405 approval-page presentation test carries no wall clock and no
+//     polling shape, drives the injected `StubBrowserMFAListener` seam, and
+//     the deleted #397 `approvalPagePresentationTolerance` is refused
+//     file-wide;
+//  5. the #405 redaction-suite ceremony test carries no wall clock, no
+//     `presentDeadline`, no `run.cancel()` and no `try?`, and keeps the
+//     injected stub plus its `waitForLog` leak scans.
 //
-//  FORMATTING HEURISTIC, NOT A PROOF: these pins parse source as text. Pin
-//  1's slice ends at the next `\n    func ` / `\n    private static let `
-//  declaration, so any nested declaration inserted inside the method
-//  truncates the negative scan (the file-wide `failFastBudget` refusal
-//  cannot be truncated); any wall clock outside the pinned spellings —
-//  a helper, or an API such as `clock_gettime` — still escapes. A listener
+//  FORMATTING HEURISTIC, NOT A PROOF: these pins parse source as text. Pins
+//  1/4/5's body is the brace-depth block after the declaration anchor, so
+//  nested declarations are inside the negative scan (the file-wide
+//  `failFastBudget` / `approvalPagePresentationTolerance` refusals cannot be
+//  truncated); any wall clock outside the pinned spellings — a helper, or
+//  an API such as `clock_gettime` — still escapes, and a helper-mediated
+//  wait outside a pinned method body is not covered (the redaction suite's
+//  `waitForLog` is exactly that; #405 §3.4 names it). A listener
 //  obtained through a renamed factory escapes pin 2's token; a second
 //  initializer written with a declaration keyword (`convenience init(` /
 //  `override init(` / `required init(`) is refused explicitly (the
@@ -261,9 +270,9 @@ struct BrowserMFACeremonyFailFastPinsTests {
 
     /// Pin 1 (issue #401): the fail-fast test must drive the A7 guard through
     /// the injected listener, with no wall clock racing the product path. The
-    /// method slice runs from its declaration to the next `func` /
-    /// `private static let`, so a `Task.sleep`/`ContinuousClock` budget
-    /// re-added inside it reds; a deleted method reds the anchor count.
+    /// body is the brace-depth block after the declaration anchor (#405), so
+    /// a `Task.sleep`/`ContinuousClock` budget re-added anywhere inside it
+    /// reds; a deleted method reds the anchor count.
     @Test
     func testTheFailFastTestKeepsTheStructuralShape() throws {
         let path = "VVTermTests/Features/Teleport/BrowserMFACeremonyLoopbackURLTests.swift"
@@ -298,18 +307,12 @@ struct BrowserMFACeremonyFailFastPinsTests {
         )
         let anchor = try #require(anchors.first)
 
-        let nextFunc = text.range(of: "\n    func ", range: anchor.upperBound..<text.endIndex)
-        let nextStatic = text.range(of: "\n    private static let ", range: anchor.upperBound..<text.endIndex)
-        let boundaries = [nextFunc?.lowerBound, nextStatic?.lowerBound].compactMap { $0 }
-        let boundary = try #require(
-            boundaries.min(),
-            "the fail-fast method must be followed by a `func` or `private static let` declaration — re-derive this pin (issue #401)"
-        )
-        let slice = text[anchor.lowerBound..<boundary]
-
-        let open = try #require(slice.firstIndex(of: "{"), "the fail-fast method must open a body — re-derive this pin")
-        let close = try #require(slice.lastIndex(of: "}"), "the fail-fast method body must close — re-derive this pin")
-        let body = String(slice[slice.index(after: open)..<close])
+        // #405 lens 1 F1: the body is the brace-depth block after the
+        // declaration anchor. Unlike the #401 boundary search (next `func` /
+        // `private static let`), this is invariant to what follows the method
+        // and scans nested declarations too (counterfactual CF-6).
+        let bodyRange = try Self.bracedBlock(after: anchor, in: text)
+        let body = String(text[bodyRange])
         #expect(
             body.contains { !$0.isWhitespace },
             "the fail-fast method slice must not be empty — re-derive this pin (issue #401)"
@@ -451,6 +454,132 @@ struct BrowserMFACeremonyFailFastPinsTests {
         #expect(
             Self.occurrences(of: "BrowserMFAListener(", in: text).count == 1,
             "the real BrowserMFAListener must be constructed only by the init's default factory; a second construction site means the seam was bypassed — re-derive this pin (issue #401)"
+        )
+    }
+
+    /// Pin 4 (issue #405): the approval-page presentation test must drive the
+    /// ceremony through the injected listener seam, with no wall clock (or
+    /// polling shape) racing the ceremony's MainActor hops. The deleted #397
+    /// `approvalPagePresentationTolerance` is refused file-wide.
+    @Test
+    func testTheApprovalPageTestKeepsTheStructuralShape() throws {
+        let path = "VVTermTests/Features/Teleport/BrowserMFACeremonyLoopbackURLTests.swift"
+        let text = Self.strippingComments(try source(path))
+
+        // File-wide refusal, not body-bounded: the 45 s constant was deleted
+        // in #405 and must not return anywhere in this file.
+        #expect(
+            !text.contains("approvalPagePresentationTolerance"),
+            "the #397 45 s `approvalPagePresentationTolerance` race was deleted in #405; it must not return anywhere in this file"
+        )
+
+        let anchors = Self.occurrences(
+            of: "func testCeremony_opensTheServerApprovalPageForTheChallengeRequestID",
+            in: text
+        )
+        #expect(
+            anchors.count == 1,
+            "the approval-page presentation test must exist exactly once — re-derive this pin (issue #405)"
+        )
+        let anchor = try #require(anchors.first)
+        let bodyRange = try Self.bracedBlock(after: anchor, in: text)
+        let body = String(text[bodyRange])
+        #expect(
+            body.contains { !$0.isWhitespace },
+            "the approval-page test body must not be empty — re-derive this pin (issue #405)"
+        )
+
+        // Negative: no wall clock and no polling shape may compete with the
+        // terminating await (the header defeat list names what escapes).
+        for token in [
+            "ContinuousClock", "Task.sleep", "sleep", "Timer", "DispatchTime",
+            "Date", "deadline", "Tolerance", "presentedURLs.isEmpty", "Task.yield",
+        ] {
+            #expect(
+                !body.contains(token),
+                "the approval-page test must not race `\(token)` — it awaits the terminating stub listener instead (issue #405)"
+            )
+        }
+
+        // Positive: the seam is driven, the terminal error is explicit, and
+        // the exact-URL assertion survives.
+        #expect(
+            body.contains("makeListener:"),
+            "the approval-page test must inject the stub through the ceremony's `makeListener` seam — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("StubBrowserMFAListener"),
+            "the approval-page test must drive the injected StubBrowserMFAListener — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("StubBrowserMFAListenerError"),
+            "the approval-page test must keep the typed terminal-error catch (`catch is StubBrowserMFAListenerError`), not discard the error — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("client.requestID"),
+            "the approval-page test must keep the exact approval-URL assertion (host + request id) — re-derive this pin (issue #405)"
+        )
+    }
+
+    /// Pin 5 (issue #405): the redaction suite's ceremony presentation test
+    /// must drive the ceremony through the injected listener seam, with no
+    /// wall clock, no `presentDeadline` and no `run.cancel()` race, and must
+    /// keep the leak scans (`secret_key=`, the full request id).
+    @Test
+    func testTheRedactionCeremonyTestKeepsTheStructuralShape() throws {
+        let path = "VVTermTests/Features/Teleport/TeleportRedactionTests.swift"
+        let text = Self.strippingComments(try source(path))
+
+        let anchors = Self.occurrences(
+            of: "func testBrowserMFACeremony_neverLogsTheSecretOrTheFullRequestID",
+            in: text
+        )
+        #expect(
+            anchors.count == 1,
+            "the redaction ceremony test must exist exactly once — re-derive this pin (issue #405)"
+        )
+        let anchor = try #require(anchors.first)
+        let bodyRange = try Self.bracedBlock(after: anchor, in: text)
+        let body = String(text[bodyRange])
+        #expect(
+            body.contains { !$0.isWhitespace },
+            "the redaction ceremony test body must not be empty — re-derive this pin (issue #405)"
+        )
+
+        // Negative: pin 1's full wall-clock set, the deleted 15 s
+        // `presentDeadline`, the `run.cancel()` teardown race, `try?`, and
+        // the polling shape.
+        for token in [
+            "ContinuousClock", "Task.sleep", "sleep", "Timer", "DispatchTime",
+            "Date", "deadline", "presentDeadline", "run.cancel()", "try?",
+            "presentedURLs.isEmpty", "Task.yield",
+        ] {
+            #expect(
+                !body.contains(token),
+                "the redaction ceremony test must not race `\(token)` — it awaits the terminating stub listener instead (issue #405)"
+            )
+        }
+
+        // Positive: the seam is driven and the leak scans survive.
+        #expect(
+            body.contains("makeListener:"),
+            "the redaction ceremony test must inject the stub through the ceremony's `makeListener` seam — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("StubBrowserMFAListener"),
+            "the redaction ceremony test must drive the injected StubBrowserMFAListener — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("waitForLog"),
+            "the redaction ceremony test must keep the `waitForLog` readback of the logged payloads — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("fullRequestID"),
+            "the redaction ceremony test must keep the full-request-id leak scan — re-derive this pin (issue #405)"
+        )
+        #expect(
+            body.contains("secret_key="),
+            "the redaction ceremony test must keep the callback-URL leak scan — re-derive this pin (issue #405)"
         )
     }
 }
