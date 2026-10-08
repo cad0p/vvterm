@@ -250,16 +250,23 @@ final class TeleportRedactionTests: XCTestCase {
         let logging = SpySubsystemLogging()
         let client = CeremonyGRPCStub()
         let presenter = RecordingBrowserMFAPresenter()
-        let ceremony = BrowserMFACeremony(logging: logging, presenter: presenter)
+        let stub = StubBrowserMFAListener()
+        let ceremony = BrowserMFACeremony(
+            logging: logging,
+            presenter: presenter,
+            makeListener: { _ in stub }
+        )
 
-        let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
-        let presentDeadline = ContinuousClock.now + .seconds(15)
-        while presenter.presentedURLs.isEmpty, ContinuousClock.now < presentDeadline {
-            await Task.yield()
+        do {
+            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
+            XCTFail("the ceremony must terminate at the stub listener's wait")
+        } catch is StubBrowserMFAListenerError {
+            // expected terminal path: the stub's waitForResponse() throws waitReached
+        } catch {
+            XCTFail("expected StubBrowserMFAListenerError.waitReached, got \(error)")
         }
+
         XCTAssertEqual(presenter.presentedURLs.count, 1, "the ceremony must present the approval page")
-        run.cancel()
-        _ = try? await run.value
 
         let messages = try await waitForLog(
             subsystem: logging.subsystem,
