@@ -252,7 +252,7 @@ jobs:
         # preserves symlinks + permissions.
         #
         # Intermediates.noindex is still included because trimming it from the
-        # artifact is a recorded follow-up (issue #416): every consumer
+        # artifact is a recorded follow-up (issue #420): every consumer
         # (ui-tests, unit-tests, debug-test) now runs `test-without-building`
         # off the prebuilt products, so no consumer compiles and the
         # intermediate objects are dead weight in transit.
@@ -390,9 +390,13 @@ jobs:
   unit-tests:
     runs-on: xcode-27
     # Kill cap for a wedged runner, not expected runtime: this job no longer
-    # compiles (`test-without-building` off the artifact), so the expected
-    # wall clock is artifact download/extract + Metal toolchain + simulator
-    # boot + the suite ≈ 10m30s-11m40s (issue #416). Keep 30m:
+    # compiles (`test-without-building` off the artifact). Floor = base job
+    # wall − the 285.7s compile window: 915s fast base ≈ 10m29s, 976s slow
+    # base ≈ 11m30s. On top: artifact download/extract + Metal toolchain
+    # ≈ 47s (23+6+18), bounded simulator pre-boot 80s, then the suite. The
+    # graded run (run 37802047854) measured 613s (10m13s) wall / 378s test
+    # step — 16s under the fast-base floor, so that floor is conservative.
+    # Keep 30m:
     # timeout-minutes: 20 was killing the job at the 20m mark exactly when the
     # runner was slow (observed 2026-08-14: every run >20m was cancelled, every
     # run <20m passed — perfect correlation, three consecutive failures on
