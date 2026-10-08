@@ -135,18 +135,21 @@ final class ServerNavigationUITests: XCTestCase {
         // start + 20 s (#400's `:111` budget delta, ahead of the recorded
         // start) + 90 s + ≤26 s (terminal 10 + keyboard label 8 + keyboard
         // element 8) + 30 s + the 22.56 s failure-path `current=` read + ~1 s
-        // ≈ 312 s; margin ~8 s. That read is unbounded by design, so this is
-        // an estimate, not a bound; a later-calibrated-wait expiry after
-        // several near-deadline successes can exceed 300 s — the stop rule's
-        // `elapsed=` ≥250 s trigger is the catch. `continueAfterFailure =
+        // ≈ 312 s — ≈12 s OVER the 300 s allowance, so in that composition the
+        // allowance kill, not the wait, is the binding failure (the ~8 s
+        // margin was pre-#400, when the composition summed ~292 s). That read
+        // is unbounded by design, so this is an estimate, not a bound; a
+        // later-calibrated-wait expiry after several near-deadline successes
+        // can exceed 300 s — the stop rule's >250 s method-runtime and
+        // allowance-kill triggers are the catch. `continueAfterFailure =
         // false` keeps it to one expiry per run.
         // Stacked-success can reach ~326-396 s: that residual predates #387
         // (~262-332 s) and is accepted. Stop rule (home: this comment, plus
         // #387/#400 while open; owner: the next agent touching this method;
         // shrink target: 15-20 s waits or a fail-fast guard): any shard-3 run
-        // of this method >250 s, any `elapsed=` ≥250 s, or an allowance kill →
-        // reopen #387/#400 and shrink; record runtimes on #248 and reds on
-        // #257. A stall beyond a budget can still red here and stays on #257.
+        // of this method >250 s, or an allowance kill → reopen #387/#400 and
+        // shrink; record runtimes on #248 and reds on #257. A stall beyond a
+        // budget can still red here and stays on #257.
         wait(for: diagnostics, containing: "state=connected", timeout: 90, app: app)
 
         let terminal = productionTerminal(in: app)
@@ -266,8 +269,10 @@ final class ServerNavigationUITests: XCTestCase {
         // wait + `assertSession`) and +20 s (list-position: this wait). Stop
         // rule (home: this comment; owner: the next agent touching the #227
         // pair; shrink target: per-site 15-20 s waits or a fail-fast guard):
-        // any shard-0 run of either #227 method >250 s, or an allowance kill →
-        // reopen #400 and shrink/cap; record runtimes on #248 and reds on #257.
+        // any NEW (post-#400) run of either #227 method above that method's
+        // recorded pre-#400 41-run max (244.008 s session / 274.228 s
+        // list-position), or an allowance kill → reopen #400 and shrink/cap;
+        // record runtimes on #248 and reds on #257.
         wait(for: diagnostics, containing: "setup=ready", timeout: Self.diagnosticsWaitBudget, app: app)
 
         let serverRow = app.descendants(matching: .any)
@@ -556,9 +561,10 @@ final class ServerNavigationUITests: XCTestCase {
     /// scoped to `XCUIApplication.State` waits. The red that prompted this was
     /// right-censored at 10.34 s (`budget=10s elapsed=10.34s`, the token already
     /// present in the post-wait dump) — a lower bound, not a completion. 45 s (the
-    /// `:85`/`:42`/`:57`/`:171` sibling budget) was rejected: no measured stall
-    /// lands in the 30-45 s band, and shard-0's #227 maxima (244.008 / 274.228 s
-    /// against the 300 s allowance) make the +15 s per site a pure exposure cost.
+    /// `:85`/`:42`/`:57`/`:171` sibling budget) was rejected: it buys no
+    /// measured class closure (no measured stall lands in the 30-45 s band)
+    /// while adding +15 s per site of shard-0 exposure against the #227
+    /// maxima (244.008 / 274.228 s versus the 300 s allowance).
     /// 30 s is also below the 54.0-82.661 s worst-stall tail, so a worse-stall
     /// episode can still red and stays on #257. The wait still fails on a genuine
     /// absence: the token is the session identity.

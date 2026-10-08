@@ -29,15 +29,20 @@
 //  normalizes to one logical line. FORMATTING HEURISTIC, NOT A PROOF: this
 //  file parses Swift as text.
 //
-//  Honest defeat list (plan §3.5):
-//    - a NEW call site with an explicit literal budget (e.g. `timeout: 10`)
-//      passes A1/A2/A4: removing the helper default prevents missing
-//      timeouts, not short literals, and A3 only guards the named constant;
-//    - a re-added default in another file's helper copy is out of scope:
-//      the TerminalZenMode / ZmxScrollbackReload / TerminalReconnect copies
-//      already require `timeout:`; `TerminalScreenAwakeUITests` keeps its
-//      5/8/8 s defaults and `TerminalKeyboardUITests` also has defaults —
-//      neither is this class's hazard.
+//  Honest defeat list (plan §3.5, corrected by impl lens 2 finding 1):
+//    - a NEW call site is caught by A4's 12-count and scan-consistency
+//      checks (both measured red: a literal 13th site and a scan-hidden
+//      one); the residual that DOES escape is a short explicit literal at
+//      the other eight diagnostics sites (`timeout: 45` → 10 keeps all
+//      four pins green) and any edit paired with a deliberate pin-file
+//      update (inherent to an update-on-purpose pin);
+//    - a re-added default in another file's helper copy is out of scope.
+//      Examples, not a census: the TerminalZenMode / ZmxScrollbackReload /
+//      TerminalReconnect copies already require `timeout:`;
+//      `TerminalScreenAwakeUITests` (5/8/8), `TerminalKeyboardUITests`,
+//      `TerminalLinkTapUITests` (8), `NoticePresentationUITests` (30),
+//      `StatsCardsLayoutUITests` (40/5) and `UITestLaunchSupport` (10) keep
+//      their own defaults — none is this class's hazard.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as
@@ -116,6 +121,10 @@ struct ServerNavigationUITestsWaitBudgetPinsTests {
     }
 
     /// A4: every `containing:` call site carries a `timeout:` argument.
+    /// The `missing.isEmpty` check is belt-and-braces: the helper default is
+    /// gone, so no compilable tree reaches this test with a missing timeout.
+    /// The load-bearing checks are the 12-count and the
+    /// `callSites == containingSites` scan-consistency (both measured red).
     @Test
     func testA4EveryDiagnosticsCallSitePassesATimeout() throws {
         let source = try Self.normalizedSource()
