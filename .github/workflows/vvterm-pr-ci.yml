@@ -50,9 +50,10 @@
 #     with .keepAlways lifetime.
 #
 # Build-once-fanout architecture:
-#   - The `build` job compiles the app once and uploads Build/Products +
-#     Build/Intermediates.noindex from DerivedData; every test consumer runs
-#     the prebuilt bundles with `test-without-building` (zero compilation).
+#   - The `build` job compiles the app once and uploads Build/Products from
+#     DerivedData (the prebuilt bundles + the .xctestrun manifest); every test
+#     consumer runs the prebuilt bundles with `test-without-building`
+#     (zero compilation).
 #   - Each `ui-tests` shard downloads that artifact into the same
 #     -derivedDataPath the build used, so `test-without-building` finds the
 #     prebuilt app. Each shard then runs only its assigned tests via
@@ -245,21 +246,25 @@ jobs:
           ./scripts/ci/check-isolated-deinit-census.sh "$RUNNER_TEMP/DerivedData"
 
       - name: Archive build products
-        # Tar Build/Products + Build/Intermediates.noindex. actions/upload-
-        # artifact does NOT preserve symlinks inside .app bundles (Frameworks
-        # symlinks, etc.), which breaks `test-without-building` ("Cannot launch
-        # simulated executable: no file found at .../VVTerm.app"). Tar
-        # preserves symlinks + permissions.
+        # Tar Build/Products. actions/upload-artifact does NOT preserve
+        # symlinks inside .app bundles (Frameworks symlinks, etc.), which
+        # breaks `test-without-building` ("Cannot launch simulated executable:
+        # no file found at .../VVTerm.app"). Tar preserves symlinks +
+        # permissions.
         #
-        # Intermediates.noindex is still included because trimming it from the
-        # artifact is a recorded follow-up (issue #420): every consumer
-        # (ui-tests, unit-tests, debug-test) now runs `test-without-building`
-        # off the prebuilt products, so no consumer compiles and the
-        # intermediate objects are dead weight in transit.
+        # Runtime products only: the prebuilt .app/.xctest bundles and the
+        # .xctestrun manifest every consumer launches. Every consumer runs
+        # `test-without-building` (issue #420), so the top-level link-time
+        # .o/.swiftmodule artifacts stay out of the tar, and Intermediates
+        # (object files, PCMs, build database) is not tarred at all — no
+        # consumer compiles.
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/DerivedData/Build"
-          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" Products Intermediates.noindex
+          tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz" \
+            --exclude 'Products/Debug-iphonesimulator/*.o' \
+            --exclude 'Products/Debug-iphonesimulator/*.swiftmodule' \
+            Products
 
       - name: Upload build products
         uses: actions/upload-artifact@v7
@@ -393,7 +398,8 @@ jobs:
     # compiles (`test-without-building` off the artifact). Floor = base job
     # wall − the 285.7s compile window: 915s fast base ≈ 10m29s, 976s slow
     # base ≈ 11m30s. On top: artifact download/extract + Metal toolchain
-    # ≈ 47s (23+6+18), bounded simulator pre-boot 80s, then the suite. The
+    # (≈47s: 23+6+18 before #420; after-numbers pending the #420 PR run),
+    # bounded simulator pre-boot 80s, then the suite. The
     # graded run (run 37802047854) measured 613s (10m13s) wall / 378s test
     # step — 16s under the fast-base floor, so that floor is conservative.
     # Keep 30m:

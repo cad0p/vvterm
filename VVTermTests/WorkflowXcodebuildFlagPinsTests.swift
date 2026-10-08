@@ -72,6 +72,33 @@
 //  its anchored `if [ "$failed" -ne 0 ]` -> `exit 1` branch must stay (fold
 //  round 1, impl lens 1/2).
 //
+//  Pin 5 (issue #420): the `build` job used to tar Build/Products together
+//  with Build/Intermediates.noindex, a ~177 MiB dead weight once every
+//  consumer moved to `test-without-building` (#416). The trim has two
+//  silent-revert failure modes worth pinning: re-adding the intermediates
+//  operand (the artifact balloons again, no test reds) and dropping an
+//  `--exclude` or the operand (the artifact silently loses the .xctestrun
+//  manifest, so every consumer's `find …/Products -name '*.xctestrun'`
+//  resolves empty). A1–A3 bind the `Archive build products` step's run body
+//  (one `tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz"` invocation, sole file
+//  operand `Products`, exactly the two measured `--exclude` patterns); A4
+//  is a raw-text scan (the existing helpers strip comments and would make
+//  it vacuous): the build-once-fanout header bullet names `Build/Products`
+//  and not `Build/Intermediates.noindex`, and the step-comment region is
+//  non-empty, names `Products` (positive control against an emptied
+//  comment), and contains none of the stale `still included` / `follow-up`
+//  / `#416` shapes. The premise — every consumer runs
+//  `test-without-building` — is NOT asserted here; it is owned by
+//  `testTheDebugTestJobInvokesXcodebuildWithAnAcceptedDiagnosticValue`,
+//  `testTheUITestStepDelegatesToTheScriptAndStaysSmall` (the ui-tests job
+//  delegates to `scripts/ci/run-ui-tests.sh`, whose invocation the pin
+//  reads) and Pin 4. Defeat list: this is a text consistency lock — a
+//  coherent edit of the tar command *and* the pin passes; it cannot see a
+//  future bundle that starts shipping a nested `.o`/`.swiftmodule` (the
+//  patterns are unanchored and `*` crosses `/`, so they would drop it; the
+//  consumer run is that oracle); and it does not re-derive what
+//  `test-without-building` needs at runtime.
+//
 //  FORMATTING HEURISTIC, NOT A PROOF: these pins parse the workflow and script
 //  as text. A real YAML parse would be sounder, but a YAML toolchain (`yq`/`jq`)
 //  is not guaranteed on the `xcode-27` runner (ios-adhoc-pr.yml installs jq
@@ -776,6 +803,167 @@ struct WorkflowXcodebuildFlagPinsTests {
         }
     }
 
+    /// Pin 5 (issue #420): the `build` job's `Archive build products` step
+    /// must tar only the runtime products (`Products`) minus the top-level
+    /// link-time `.o`/`.swiftmodule` artifacts — not `Intermediates.noindex`,
+    /// which no consumer reads since every consumer runs
+    /// `test-without-building` (#416). A re-added intermediates operand or a
+    /// dropped `--exclude`/operand is silent in the test phase, and the prose
+    /// assertions keep the step's own rationale from re-describing the
+    /// removed tree (a no-regression lock, not a fix).
+    @Test
+    func testTheBuildArchiveTarsOnlyTheRuntimeProducts() throws {
+        let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
+        let stepName = "Archive build products"
+        let workflow = try Self.workflowSource(workflowPath)
+
+        // The step must stay unique and stay a `run: |` literal block scalar,
+        // so A1–A3 read the body GitHub actually runs.
+        let stepLines = workflow.components(separatedBy: "\n").enumerated()
+            .filter { $0.element.contains("- name: \(stepName)") }
+        #expect(
+            stepLines.count == 1,
+            "expected exactly one `- name: \(stepName)` step in \(workflowPath), found \(stepLines.count) — re-derive this pin (issue #420)"
+        )
+        let stepLine = try #require(
+            stepLines.first?.offset,
+            "the `\(stepName)` step is missing from \(workflowPath) — re-derive this pin (issue #420)"
+        )
+        let body = try #require(
+            Self.dedentedRunBlockScalar(in: workflow, stepLineIndex: stepLine),
+            "the `\(stepName)` step must keep exactly one step-level `run:` key and stay a `run: |` literal block scalar (not an inline/folded scalar or a duplicate/decoy `run:` key) so #420's tar pins read the body GitHub actually runs — re-derive this pin"
+        )
+
+        // A1 (continuations joined): exactly one tar invocation.
+        let codeLines = body.components(separatedBy: "\n").map(Self.cuttingLineComment)
+        let joinedBody = codeLines.joined(separator: "\n")
+            .replacingOccurrences(of: "\\\n", with: " ")
+        let tarInvocations = joinedBody.components(separatedBy: "\n").filter {
+            $0.contains(#"tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz""#)
+        }
+        #expect(
+            tarInvocations.count == 1,
+            "the `\(stepName)` run body must contain exactly one `tar -czf \"$RUNNER_TEMP/vvterm-build.tar.gz\"` invocation (backslash continuations joined), found \(tarInvocations.count) — re-derive this pin (issue #420)"
+        )
+        let tarCommand = tarInvocations.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        let tokens = Self.shellWords(tarCommand)
+        #expect(
+            tokens.first == "tar",
+            "the `\(stepName)` invocation must be a `tar` command (found `\(tokens.first ?? "<none>")`) — re-derive this pin (issue #420)"
+        )
+
+        var excluded: [String] = []
+        var operands: [String] = []
+        var tokenIndex = 1
+        while tokenIndex < tokens.count {
+            let token = tokens[tokenIndex]
+            if token == "--exclude" {
+                if tokenIndex + 1 < tokens.count { excluded.append(tokens[tokenIndex + 1]) }
+                tokenIndex += 2
+                continue
+            }
+            if token == "-czf" {
+                tokenIndex += 2
+                continue
+            }
+            if token.hasPrefix("-") {
+                tokenIndex += 1
+                continue
+            }
+            operands.append(token)
+            tokenIndex += 1
+        }
+
+        // A2: the sole file operand is `Products`, and the removed directory
+        // is not named in the invocation. `Products/Debug-iphonesimulator` as
+        // the operand drops the top-level `.xctestrun` manifest the consumers
+        // find; `Intermediates.noindex` is dead weight since #416.
+        #expect(
+            operands == ["Products"],
+            "the `\(stepName)` tar invocation's file operands must be exactly [`Products`], found \(operands) — an operand of `Products/Debug-iphonesimulator` drops the top-level `.xctestrun` manifest the consumers' `find …/Products -name '*.xctestrun'` needs, and `Intermediates.noindex` is dead weight since every consumer runs `test-without-building` (#416) — re-derive this pin (issue #420)"
+        )
+        #expect(
+            !tarCommand.contains("Intermediates.noindex"),
+            "the `\(stepName)` tar invocation must not name `Intermediates.noindex`: no consumer reads it since every consumer runs `test-without-building` (#416) — re-derive this pin (issue #420)"
+        )
+
+        // A3: exactly the two measured `--exclude` patterns, and no other.
+        // Order is pinned with the operand because bsdtar rejects `--exclude`
+        // after the operand (measured on bsdtar 3.5.3).
+        let expectedExcludes = [
+            "Products/Debug-iphonesimulator/*.o",
+            "Products/Debug-iphonesimulator/*.swiftmodule",
+        ]
+        let excludeFlags = tokens.filter { $0 == "--exclude" }
+        #expect(
+            excludeFlags.count == 2,
+            "the `\(stepName)` tar invocation must carry exactly two `--exclude` flags (the top-level link-time `.o` and `.swiftmodule` patterns), found \(excludeFlags.count) — re-derive this pin (issue #420)"
+        )
+        #expect(
+            excluded == expectedExcludes,
+            "the `\(stepName)` tar invocation must exclude exactly \(expectedExcludes), found \(excluded): both flags must precede the `Products` operand because bsdtar rejects `--exclude` after an operand — re-derive this pin (issue #420)"
+        )
+
+        // A4 (raw text, comments kept — the existing helpers strip comments and
+        // would make the prose assertions vacuous). The build-once-fanout
+        // header bullet must name `Build/Products` and not
+        // `Build/Intermediates.noindex`; the step-comment region must be
+        // non-empty, name `Products` (positive control against an emptied
+        // comment), and carry none of the stale shapes.
+        let rawLines = workflow.components(separatedBy: "\n")
+        let fanoutHeader = try #require(
+            rawLines.firstIndex { $0.contains("Build-once-fanout architecture:") },
+            "\(workflowPath) must keep the `Build-once-fanout architecture:` header comment — re-derive this pin (issue #420)"
+        )
+        var headerBullet: [String] = []
+        var headerProbe = fanoutHeader + 1
+        while headerProbe < rawLines.count,
+              !rawLines[headerProbe].trimmingCharacters(in: .whitespaces).hasPrefix("#   - ") {
+            headerProbe += 1
+        }
+        while headerProbe < rawLines.count {
+            let line = rawLines[headerProbe]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#") else { break }
+            if !headerBullet.isEmpty, trimmed.hasPrefix("#   - ") { break }
+            headerBullet.append(line)
+            headerProbe += 1
+        }
+        let headerBulletText = headerBullet.joined(separator: "\n")
+        #expect(
+            headerBulletText.contains("Build/Products"),
+            "the build-once-fanout header bullet must name `Build/Products` (the artifact's only directory) — re-derive this pin (issue #420)"
+        )
+        #expect(
+            !headerBulletText.contains("Build/Intermediates.noindex"),
+            "the build-once-fanout header bullet must not name `Build/Intermediates.noindex` (removed in #420) — re-derive this pin (issue #420)"
+        )
+
+        var commentRegion: [String] = []
+        var commentProbe = stepLine + 1
+        while commentProbe < rawLines.count {
+            let trimmed = rawLines[commentProbe].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#") else { break }
+            commentRegion.append(rawLines[commentProbe])
+            commentProbe += 1
+        }
+        #expect(
+            !commentRegion.isEmpty,
+            "the `\(stepName)` step comment region (contiguous `#` lines between the step name and its `run:` key) must be non-empty — re-derive this pin (issue #420)"
+        )
+        let commentText = commentRegion.joined(separator: "\n")
+        #expect(
+            commentText.contains("Products"),
+            "the `\(stepName)` step comment must name `Products` (positive control against an emptied comment) — re-derive this pin (issue #420)"
+        )
+        for staleShape in ["still included", "follow-up", "#416"] {
+            #expect(
+                !commentText.contains(staleShape),
+                "the `\(stepName)` step comment must not contain the stale shape `\(staleShape)`: the comment describes only what ships now (#420 provenance is allowed; #416 and the removed-directory rationale are not) — re-derive this pin (issue #420)"
+            )
+        }
+    }
+
     /// The #396 shape pin: the ghostty probe's bump-PR step must stay a small
     /// delegating `run: |` block scalar, and `scripts/ci/ghostty-bump-pr.sh`
     /// must keep the bump logic that changes behavior silently if lost. The
@@ -1424,6 +1612,47 @@ struct WorkflowXcodebuildFlagPinsTests {
         guard blockIndent != nil, !block.isEmpty else { return nil }
         while let last = block.last, last.isEmpty { block.removeLast() }
         return block.joined(separator: "\n") + "\n"
+    }
+
+    /// Splits one shell command line into words, honoring single/double
+    /// quotes and backslash escapes, so a tar invocation's operands and
+    /// `--exclude` patterns can be bound by position rather than by
+    /// substring (issue #420). Text heuristic: it does not model `$'…'`
+    /// ANSI-C quoting or expansions beyond quote removal.
+    private static func shellWords(_ command: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var inSingleQuoted = false
+        var inDoubleQuoted = false
+        var escaped = false
+        for character in command {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\" {
+                escaped = true
+                continue
+            }
+            if inSingleQuoted {
+                if character == "'" { inSingleQuoted = false } else { current.append(character) }
+                continue
+            }
+            if inDoubleQuoted {
+                if character == "\"" { inDoubleQuoted = false } else { current.append(character) }
+                continue
+            }
+            if character == "'" { inSingleQuoted = true; continue }
+            if character == "\"" { inDoubleQuoted = true; continue }
+            if character.isWhitespace {
+                if !current.isEmpty { words.append(current); current = "" }
+                continue
+            }
+            current.append(character)
+        }
+        if !current.isEmpty { words.append(current) }
+        return words
     }
 
     /// Cuts one YAML/bash-style trailing comment from a single line: a `#`
