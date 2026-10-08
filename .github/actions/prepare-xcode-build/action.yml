@@ -1,7 +1,8 @@
 # Shared Xcode build preparation for xcode-27 jobs: source-mtime
 # restoration, mtime-aware DerivedData/SPM caching, stale PCM cache
 # clearing, and the Metal toolchain download. Used by vvterm-pr-ci.yml
-# (build, debug-test) and vvterm-pr-ota.yml (ota-archive) —
+# (build, debug-test), vvterm-pr-ota.yml (ota-archive),
+# ghostty-upstream-probe.yml, repro-zmx.yml, and teleport-e2e.yml —
 # do not fork these steps back into the workflows. (ui-tests and unit-tests
 # are the jobs NOT using this: they run test-without-building off the
 # downloaded vvterm-build artifact and do zero compilation, so they have no

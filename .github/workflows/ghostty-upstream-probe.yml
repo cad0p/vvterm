@@ -200,16 +200,19 @@ jobs:
           # Probe pre-validation: the FULL VVTermTests suite — incl. the
           # behavioral custom-I/O probes (GhosttyCustomIOProbeTests +
           # GhosttyOSCColorQueryTests) — against the NEW binaries, before
-          # the bump PR is opened. Mirrors vvterm-pr-ci.yml's unit-tests
-          # job (same scheme, destination, resultBundle, parallel testing,
-          # PCM-safe flags). The bump PR's own CI is still the gate for
-          # landing it: `build` + `unit-tests` block, the UI shards report
-          # without gating.
+          # the bump PR is opened. The probe compiles the new binary set
+          # itself (build-and-test against the vendored xctest source),
+          # unlike PR CI's prebuilt-artifact path; the invocation keeps the
+          # house flags (scheme, destination, resultBundle, explicit
+          # `-parallel-testing-enabled NO`, `-collect-test-diagnostics
+          # never`). The bump PR's own CI is still the gate for landing it:
+          # `build` + `unit-tests` block, the UI shards report without
+          # gating.
           #
-          # Ad-hoc sign, matching vvterm-pr-ci.yml: `xcodebuild test` builds
-          # the app, and an unsigned sim app has no entitlements — the host
-          # then fails before the tests connect (see the unit-tests job's
-          # comment for the 2026-09-24 evidence).
+          # Ad-hoc sign: `xcodebuild test` builds the app, and an unsigned
+          # sim app has no entitlements — the host then fails before the
+          # tests connect (measured 2026-09-24; the same reason PR CI's
+          # build job ad-hoc signs its artifact).
           xcodebuild test \
             -scheme VVTermUnitTests \
             -configuration Debug \

@@ -42,11 +42,13 @@ XCRUN=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -name '*.xctestrun' | hea
 echo "Using xctestrun manifest: $XCRUN"
 
 # Inject SCREENSHOT_DIR into the xctestrun plist's
-# EnvironmentVariables dictionary. The TEST_RUNNER_ env-var prefix
-# only works with `xcodebuild test` (which re-resolves the scheme),
-# NOT with `test-without-building -xctestrun` (which uses the
-# pre-baked plist from build-for-testing). The xctestrun v2 format
-# nests env vars at:
+# EnvironmentVariables dictionary. The manifest is the house route for
+# the prebuilt runner — the env must travel with the pre-baked plist
+# from build-for-testing, not with the shell invocation. (#416's probe
+# measured on Xcode 26.3 that the TEST_RUNNER_ prefix DOES arrive under
+# `test-without-building -xctestrun`; this plist route predates that
+# probe and stays as the pinned mechanism — Pin 2 asserts the injected
+# values.) The xctestrun v2 format nests env vars at:
 #   TestConfigurations[0].TestTargets[*].EnvironmentVariables
 # Use python (plistlib) to inject into every test target's dict.
 #
@@ -92,12 +94,13 @@ for cfg in data.get("TestConfigurations", []):
         env = target.setdefault("EnvironmentVariables", {})
         env["SCREENSHOT_DIR"] = screenshot_dir
         env.update(fixture_env)
-        # The UI-test runner's env comes ONLY from this plist
-        # (TEST_RUNNER_ prefixes do not work with
-        # test-without-building -xctestrun), so the shell's CI=true
-        # never reaches the runner. Inject it explicitly so
-        # ProcessInfo checks (e.g. the #45 template-test skip in
-        # VVTermUITests/testExample) actually fire in CI.
+        # The UI-test runner's env comes from this plist (the pinned
+        # mechanism; #416's probe measured the TEST_RUNNER_ prefix also
+        # arriving under `test-without-building -xctestrun` on Xcode
+        # 26.3). The shell's plain CI=true never reaches the runner —
+        # only the plist does. Inject it explicitly so ProcessInfo checks
+        # (e.g. the #45 template-test skip in VVTermUITests/testExample)
+        # actually fire in CI.
         env["CI"] = "1"
         # Keep XCTAttachment screenshots even when tests pass.
         target["UserAttachmentLifetime"] = "keepAlways"
