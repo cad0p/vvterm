@@ -55,6 +55,11 @@
 //      `XCTAssert(CFAbsoluteTimeGetCurrent() - t0 < 10)` escapes both halves;
 //    - a tap-latency assertion in another file is out of scope;
 //    - A4 proves the text, not runtime liveness (that is CF-R2);
+//    - A7's override detection is an exact `timeout:` substring of the
+//      extracted argument text: `timeout : 1` (space before the colon) and a
+//      backticked `` `timeout`: 1 `` are compile-valid spellings that escape
+//      it while A1-A6 stay green (measured by the closure lens; the repo's
+//      formatting emits neither);
 //    - a coherent edit paired with a pin update is inherent to an
 //      update-on-purpose pin;
 //    - the retry sites' control flow is text-pinned by A5; CF-R4's literal
