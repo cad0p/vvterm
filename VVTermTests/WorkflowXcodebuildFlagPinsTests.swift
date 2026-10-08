@@ -47,6 +47,31 @@
 //  documented Trap-3 dispatch-mishap diagnostic). A repo-wide budget guard
 //  caps every `${{`-bearing `run: |` scalar at 10,000 escaped.
 //
+//  Pin 4 (issue #416): the `unit-tests` job used to run `xcodebuild test
+//  -scheme VVTermUnitTests` and recompile (~4m45s) only because
+//  `test-without-building` crashed on Xcode 27; that block is measured gone,
+//  and the job now runs the prebuilt bundle off the `vvterm-build` artifact.
+//  Two silent-revert failure modes make this worth pinning: a fallback to
+//  `xcodebuild test` stays green while recompiling, and a target/filter
+//  mismatch makes `test-without-building` exit 0 having executed zero tests.
+//  The pin therefore requires the `unit-tests` job block to download
+//  `vvterm-build`, to invoke `test-without-building` with `-xctestrun` +
+//  `-only-testing:VVTermTests` (and not to match `xcodebuild test`), to keep
+//  the timeout flags before `-parallel-testing-enabled NO`, and to invoke the
+//  count-based guard whose script carries both `[1-9][0-9]*` floor
+//  predicates, now line-anchored to the summary shape. The job block is
+//  sliced by an exact-indent key scan (a trailing comment on the job key is
+//  cut first) that fails closed on a quoted/flow/duplicate job-key shape;
+//  because `strippingYAMLComments` can be left stuck by a quoted line
+//  earlier in the workflow (wait-for-ota-publish's `--jq` expression), every
+//  sliced job line is cut per line again before the content scans, so a
+//  comment can neither satisfy nor false-red the pin (fold round 1, impl
+//  lens 2). The guard is also pinned as load-bearing at runtime, not just
+//  present as text: its step carries no `if:` / `continue-on-error:`, its
+//  invocation line carries no `||`, and the script's `failed=1` markers plus
+//  its anchored `if [ "$failed" -ne 0 ]` -> `exit 1` branch must stay (fold
+//  round 1, impl lens 1/2).
+//
 //  FORMATTING HEURISTIC, NOT A PROOF: these pins parse the workflow and script
 //  as text. A real YAML parse would be sounder, but a YAML toolchain (`yq`/`jq`)
 //  is not guaranteed on the `xcode-27` runner (ios-adhoc-pr.yml installs jq
@@ -501,6 +526,253 @@ struct WorkflowXcodebuildFlagPinsTests {
                     "the `<<'PY'` heredoc opened at line \(openerIndex + 1) of \(scriptPath) has no column-0 `PY` terminator after it — re-derive this pin (issue #249)"
                 )
             }
+        }
+    }
+
+    /// Pin 4 (issue #416): the `unit-tests` job must run the prebuilt bundle
+    /// (`test-without-building` off the `vvterm-build` artifact), must not
+    /// fall back to `xcodebuild test` (which silently recompiles), and must
+    /// run the count-based guard whose script carries both non-zero summary
+    /// floors. The job block is sliced fail-closed so the scan reads the
+    /// region GitHub actually runs.
+    @Test
+    func testTheUnitTestsJobRunsThePrebuiltBundleAndGuardsTheCounts() throws {
+        let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
+        let guardPath = "scripts/ci/assert-unit-tests-ran.sh"
+        let workflow = try Self.workflowSource(workflowPath)
+        let jobLines = try Self.jobBlock(named: "unit-tests", in: workflow)
+        let jobText = jobLines.joined(separator: "\n")
+
+        // Anti-revert: the build-and-test form this job moved off must not
+        // come back. `xcodebuild\s+test(?:\s|$)` deliberately does not match
+        // `test-without-building` (the character after `test` is `-`).
+        #expect(
+            jobText.range(of: #"xcodebuild\s+test(?:\s|$)"#, options: .regularExpression) == nil,
+            "the `unit-tests` job must not invoke `xcodebuild test …` (the build-and-test form that recompiles): the job runs the prebuilt bundle with `test-without-building` — re-derive this pin (issue #416)"
+        )
+
+        // 1. The `vvterm-build` download: exactly one download-artifact step,
+        // and the artifact name bound inside that step's own `with:` block.
+        let downloadIndices = jobLines.enumerated().filter {
+            $0.element.trimmingCharacters(in: .whitespaces) == "uses: actions/download-artifact@v8"
+        }
+        #expect(
+            downloadIndices.count == 1,
+            "the `unit-tests` job must contain exactly one `uses: actions/download-artifact@v8` step, found \(downloadIndices.count) — re-derive this pin (issue #416)"
+        )
+        if let downloadIndex = downloadIndices.first?.offset {
+            // Fold round 1 (impl lens 2): the artifact name is bound to the
+            // download step's own block (step item to the next `- ` at the
+            // step indent), not a fixed 6-line window, so an added comment
+            // inside the `with:` block cannot false-red required CI.
+            var downloadEnd = jobLines.count
+            var downloadProbe = downloadIndex + 1
+            while downloadProbe < jobLines.count {
+                let line = jobLines[downloadProbe]
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let indent = line.prefix { $0 == " " }.count
+                if trimmed.hasPrefix("- ") && indent == 6 {
+                    downloadEnd = downloadProbe
+                    break
+                }
+                downloadProbe += 1
+            }
+            let downloadBlock = jobLines[downloadIndex..<downloadEnd]
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            #expect(
+                downloadBlock.contains("name: vvterm-build"),
+                "the `unit-tests` download step must request the `vvterm-build` artifact inside its own step block (found \(downloadBlock.filter { !$0.isEmpty }.joined(separator: " | "))) — re-derive this pin (issue #416)"
+            )
+        }
+
+        // 2. The invocation: locate the single `xcodebuild test-without-building`
+        // line, walk its backslash continuation, cut comments locally, cut at
+        // the pipeline's first `|`, and tokenize the argument region so every
+        // pinned flag is bound to a unique occurrence and value.
+        let invocationIndices = jobLines.enumerated().filter {
+            $0.element.contains("xcodebuild test-without-building")
+        }
+        #expect(
+            invocationIndices.count == 1,
+            "the `unit-tests` job must contain exactly one `xcodebuild test-without-building` invocation, found \(invocationIndices.count) — re-derive this pin (issue #416)"
+        )
+        let invocationIndex = try #require(
+            invocationIndices.first?.offset,
+            "the `unit-tests` job no longer contains `xcodebuild test-without-building` — re-derive this pin (issue #416)"
+        )
+        var continuation: [String] = []
+        var cursor = invocationIndex
+        while cursor < jobLines.count {
+            let line = jobLines[cursor]
+            continuation.append(line)
+            if !line.hasSuffix("\\") { break }
+            cursor += 1
+        }
+        let invocationCode = continuation.map(Self.cuttingLineComment).joined(separator: "\n")
+        let pipeIndex = invocationCode.firstIndex(of: "|")
+        let argumentRegion = pipeIndex.map { String(invocationCode[..<$0]) } ?? invocationCode
+        let flagTokens = argumentRegion
+            .replacingOccurrences(of: "\\", with: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        func expectExactlyOneToken(_ token: String) {
+            let count = flagTokens.filter { $0 == token }.count
+            #expect(
+                count == 1,
+                "the xcodebuild invocation in \(workflowPath)'s `unit-tests` job must contain exactly one `\(token)` token, found \(count) — xcodebuild option parsing is last-wins, so a duplicate can silently override the pinned flag — re-derive this pin (issue #416)"
+            )
+        }
+
+        expectExactlyOneToken("test-without-building")
+        expectExactlyOneToken("-xctestrun")
+        expectExactlyOneToken("-only-testing:VVTermTests")
+        expectExactlyOneToken("-collect-test-diagnostics")
+        expectExactlyOneToken("-test-timeouts-enabled")
+        expectExactlyOneToken("-default-test-execution-time-allowance")
+        expectExactlyOneToken("-parallel-testing-enabled")
+        expectExactlyOneToken("CODE_SIGNING_ALLOWED=NO")
+
+        func expectFlagValue(_ flag: String, _ value: String) {
+            guard let index = flagTokens.firstIndex(of: flag) else {
+                Issue.record(
+                    "the `unit-tests` invocation must pass `\(flag) \(value)` — re-derive this pin (issue #416)"
+                )
+                return
+            }
+            let nextToken = index + 1 < flagTokens.count ? flagTokens[index + 1] : "<end of invocation>"
+            #expect(
+                nextToken == value,
+                "the `\(flag)` token in the `unit-tests` invocation is followed by `\(nextToken)`, expected `\(value)` — re-derive this pin (issue #416)"
+            )
+        }
+
+        expectFlagValue("-xctestrun", "\"$XCRUN\"")
+        expectFlagValue("-collect-test-diagnostics", "never")
+        expectFlagValue("-test-timeouts-enabled", "YES")
+        expectFlagValue("-default-test-execution-time-allowance", "180")
+        expectFlagValue("-parallel-testing-enabled", "NO")
+
+        // Placement rule (#219): the timeout flags must precede
+        // `-parallel-testing-enabled NO`, whose bare form consumes the next
+        // option token and silently disables them.
+        if let timeoutIndex = flagTokens.firstIndex(of: "-test-timeouts-enabled"),
+           let allowanceIndex = flagTokens.firstIndex(of: "-default-test-execution-time-allowance"),
+           let parallelIndex = flagTokens.firstIndex(of: "-parallel-testing-enabled") {
+            #expect(
+                timeoutIndex < parallelIndex && allowanceIndex < parallelIndex,
+                "the `unit-tests` timeout flags must precede `-parallel-testing-enabled NO` (indexes \(timeoutIndex), \(allowanceIndex), \(parallelIndex)): a bare or reordered `-parallel-testing-enabled` consumes the following option token and silently disables the timeouts (#219) — re-derive this pin (issue #416)"
+            )
+        } else {
+            Issue.record(
+                "the `unit-tests` invocation must carry both timeout flags and `-parallel-testing-enabled` — re-derive this pin (issue #416)"
+            )
+        }
+
+        // 3. The guard step must run after the invocation and be passed the
+        // log the xcodebuild pipeline tees.
+        let guardLines = jobLines.enumerated().filter {
+            $0.element.contains("scripts/ci/assert-unit-tests-ran.sh")
+        }
+        #expect(
+            guardLines.count == 1,
+            "the `unit-tests` job must invoke `scripts/ci/assert-unit-tests-ran.sh` exactly once, found \(guardLines.count) at line(s) \(guardLines.map { String($0.offset + 1) }.joined(separator: ", ")) — re-derive this pin (issue #416)"
+        )
+        if let guardIndex = guardLines.first?.offset {
+            #expect(
+                guardIndex > invocationIndex,
+                "the count guard must run after the xcodebuild invocation (guard at job line \(guardIndex + 1), invocation at \(invocationIndex + 1)) — re-derive this pin (issue #416)"
+            )
+            #expect(
+                guardLines.first?.element.contains(#""$RUNNER_TEMP/test.log""#) == true,
+                "the guard invocation must be passed `\"$RUNNER_TEMP/test.log\"` (the log the xcodebuild pipeline tees) — re-derive this pin (issue #416)"
+            )
+            // Fold round 1 (impl lens 1/2): the guard path being present is
+            // not load-bearing if a `|| true` tail swallows its failure.
+            #expect(
+                !jobLines[guardIndex].contains("||"),
+                "the guard invocation line must not contain `||` (a `|| true` tail swallows the guard failure while the pinned path substring survives) — re-derive this pin (issue #416)"
+            )
+        }
+        // Fold round 1 (impl lens 1/2): bind the `Assert tests actually ran`
+        // step's execution semantics — a step-level `if:` or
+        // `continue-on-error:` lets a zero-test run finish green while every
+        // pinned string survives.
+        let guardStepIndices = jobLines.enumerated().filter {
+            $0.element.contains("- name: Assert tests actually ran")
+        }
+        #expect(
+            guardStepIndices.count == 1,
+            "the guard must stay exactly one named step (`- name: Assert tests actually ran`) so its failure is legible, found \(guardStepIndices.count) — re-derive this pin (issue #416)"
+        )
+        if let guardStepStart = guardStepIndices.first?.offset {
+            var guardStepEnd = jobLines.count
+            var guardStepProbe = guardStepStart + 1
+            while guardStepProbe < jobLines.count {
+                let line = jobLines[guardStepProbe]
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let indent = line.prefix { $0 == " " }.count
+                if trimmed.hasPrefix("- ") && indent == 6 {
+                    guardStepEnd = guardStepProbe
+                    break
+                }
+                guardStepProbe += 1
+            }
+            let forbiddenGuardKeys = jobLines[guardStepStart..<guardStepEnd].filter {
+                let trimmed = $0.trimmingCharacters(in: .whitespaces)
+                return trimmed.hasPrefix("if:") || trimmed.hasPrefix("continue-on-error:")
+            }
+            #expect(
+                forbiddenGuardKeys.isEmpty,
+                "the `Assert tests actually ran` step must stay unconditional (`if:` / `continue-on-error:` would let a zero-test run finish green while every pinned string survives), found \(forbiddenGuardKeys.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " | ")) — re-derive this pin (issue #416)"
+            )
+        }
+
+        // 4. The script carries the count-floor predicates on its running
+        // `grep -E` lines — a bare presence check anywhere (the error message
+        // echoes the same literal) is not the predicate that executes.
+        let guardSource = try Self.workflowSource(guardPath)
+        let strippedGuard = Self.strippingYAMLComments(guardSource)
+        let guardScriptLines = strippedGuard.components(separatedBy: "\n")
+        let xctestPredicateLines = guardScriptLines.filter {
+            $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'")
+        }
+        #expect(
+            xctestPredicateLines.count == 1,
+            "\(guardPath) must bind the line-anchored XCTest count-floor predicate to exactly one `grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'` line, found \(xctestPredicateLines.count) — the `[1-9]` rejects a zero count, the line anchor rejects summary prose a test prints, and a presence check anywhere (the error message echoes the same literal) is not the running predicate — re-derive this pin (issue #416)"
+        )
+        let swiftPredicateLines = guardScriptLines.filter {
+            $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'")
+        }
+        #expect(
+            swiftPredicateLines.count == 1,
+            "\(guardPath) must bind the line-anchored Swift Testing count-floor predicate to exactly one `grep -E '^[[:space:]]*[^[:alnum:]]*Test run with [1-9][0-9]* tests in [1-9][0-9]* suites'` line, found \(swiftPredicateLines.count) — the `[1-9]` rejects a zero count and the line anchor rejects summary prose — re-derive this pin (issue #416)"
+        )
+        // Fold round 1 (impl lens 1/2): `exit 1` anywhere is not the
+        // fail-closed branch — deleting the final `if [ "$failed" -ne 0 ]`
+        // group left this pin green while the guard always exited 0. Bind
+        // both absent-summary markers and the anchored condition + its exit.
+        let failedMarkerLines = guardScriptLines.filter {
+            $0.trimmingCharacters(in: .whitespaces) == "failed=1"
+        }
+        #expect(
+            failedMarkerLines.count == 2,
+            "\(guardPath) must mark `failed=1` in exactly the two absent-summary branches (found \(failedMarkerLines.count)): deleting one marker lets a missing summary exit 0 — re-derive this pin (issue #416)"
+        )
+        let failClosedConditionLines = guardScriptLines.enumerated().filter {
+            $0.element.trimmingCharacters(in: .whitespaces) == #"if [ "$failed" -ne 0 ]; then"#
+        }
+        #expect(
+            failClosedConditionLines.count == 1,
+            "\(guardPath) must carry exactly one anchored `if [ \"$failed\" -ne 0 ]; then` fail-closed branch, found \(failClosedConditionLines.count) — re-derive this pin (issue #416)"
+        )
+        if let failClosedIndex = failClosedConditionLines.first?.offset {
+            let failClosedWindow = guardScriptLines[failClosedIndex..<min(failClosedIndex + 4, guardScriptLines.count)]
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            #expect(
+                failClosedWindow.contains("exit 1"),
+                "\(guardPath)'s fail-closed branch at line \(failClosedIndex + 1) must `exit 1` within the next lines (found \(failClosedWindow.joined(separator: " | "))): the condition without its exit lets a zero-test run finish green — re-derive this pin (issue #416)"
+            )
         }
     }
 
@@ -1012,6 +1284,46 @@ struct WorkflowXcodebuildFlagPinsTests {
         let description: String
 
         init(_ description: String) { self.description = description }
+    }
+
+    /// Slices one top-level job block out of a workflow by its exact
+    /// `  <name>:` key line (indent 2). Fail-closed text heuristic: a quoted
+    /// or flow-style spelling, a duplicate job key, or a missing block throws
+    /// `PinFailure` instead of scanning the wrong region. Comment-stripped
+    /// first, then cut again per line: the file-level YAML stripper can be
+    /// left stuck by a quoted line earlier in the workflow (the wait-for-ota
+    /// `--jq` expression), so every scan reads comment-cut code only (fold
+    /// round 1, impl lens 2). A trailing comment on the job key itself is
+    /// cut before matching, so `  unit-tests:  # note` still resolves.
+    private static func jobBlock(named job: String, in source: String) throws -> [String] {
+        let lines = Self.strippingYAMLComments(source)
+            .components(separatedBy: "\n")
+            .map(Self.cuttingLineComment)
+        let keyLine = "  \(job):"
+        let matches = lines.enumerated().filter {
+            $0.element.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) == keyLine
+        }
+        guard matches.count == 1, let start = matches.first?.offset else {
+            throw PinFailure(
+                "expected exactly one unquoted `\(keyLine)` job key at indent 2 in the workflow, found \(matches.count) — a quoted/flow/duplicate job-key shape is not scannable (issue #416); re-derive this pin"
+            )
+        }
+        var end = lines.count
+        var cursor = start + 1
+        while cursor < lines.count {
+            let line = lines[cursor]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let indent = line.prefix { $0 == " " }.count
+            if !trimmed.isEmpty, indent <= 2 {
+                end = cursor
+                break
+            }
+            cursor += 1
+        }
+        guard end > start + 1 else {
+            throw PinFailure("the `\(job)` job block is empty — re-derive this pin (issue #416)")
+        }
+        return Array(lines[start..<end])
     }
 
     private static func workflowSource(_ relativePath: String) throws -> String {

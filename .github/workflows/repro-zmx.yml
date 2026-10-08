@@ -21,9 +21,9 @@
 #     per-job arm flag and ZMX_NO_AUTOATTACH)
 #   - the app's TerminalReconnectUITestHarness pointed at the fixture via
 #     launchEnvironment (VVTERM_REPRO_SSH_*), injected into the xctestrun
-#     plist (the house route for UI tests — TEST_RUNNER_ prefix only works
-#     with `xcodebuild test`, which we avoid due to the Xcode 27
-#     test-without-building crash that the unit-tests scheme hits).
+#     plist (the house route for UI tests: the pre-baked manifest carries
+#     the harness env into the prebuilt runner; run-ui-tests.sh injects
+#     the same way).
 #
 # Build/test split follows vvterm-pr-ci.yml: build-for-testing once, then
 # test-without-building against the injected xctestrun. The app is ad-hoc
