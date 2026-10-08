@@ -129,7 +129,11 @@ struct TeleportE2EPhaseFailureTests {
             "drained"
         }
         #expect(drained == "drained")
-        #expect(lines.count == 2)
+        // `#require`, not `#expect`: a missing line must FAIL here — indexing
+        // after a non-aborting `#expect` crashes the test process, and
+        // xcodebuild then restarts the suite (turning one red into a
+        // restart loop with no per-test attribution).
+        try #require(lines.count == 2)
         #expect(lines[0].hasSuffix(" begin"))
         #expect(lines[0].contains("phase=shell"))
         #expect(lines[0].contains("detail=drain"))
@@ -143,7 +147,7 @@ struct TeleportE2EPhaseFailureTests {
             7
         }
         #expect(value == 7)
-        #expect(lines.count == 2)
+        try #require(lines.count == 2)
         #expect(lines[0].hasSuffix(" begin"))
         #expect(lines[0].contains("phase=ceremony"))
         #expect(lines[0].contains("detail=login"))
@@ -157,7 +161,7 @@ struct TeleportE2EPhaseFailureTests {
             }
         }
         #expect(error.phase == .exec)
-        #expect(lines.count == 2)
+        try #require(lines.count == 2)
         #expect(lines[0].hasSuffix(" begin"))
         #expect(lines[0].contains("phase=exec"))
         #expect(lines[0].contains("detail=probe"))
