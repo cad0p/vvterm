@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Fixture (#403, N18): the sourced `cd` is two source hops deep
-# (caller → helper2 → helper → `cd sub`); only the recursion in
-# `_sourced_script_has_cd` makes the refusal fire.
+# (caller → helper2 → helper → `cd sub`); the recursion in
+# `_sourced_script_has_cd` is what makes THIS sourced-`cd` diagnostic fire at
+# the caller. Without the recursion the case still exits 1, but with a
+# different (nested-resolution) diagnostic, so the fixture pins the
+# diagnostic, not the verdict.
 jobs:
   build:
     runs-on: ubuntu-latest
