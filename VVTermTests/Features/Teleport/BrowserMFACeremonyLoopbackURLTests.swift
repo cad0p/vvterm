@@ -21,8 +21,9 @@
 //  `Proto_MFAAuthenticateChallenge()` (no `browserMfaChallenge` set), so the
 //  ceremony throws `noBrowserMFAChallenge` AFTER capturing the URL but BEFORE
 //  opening Safari. This lets us assert the URL without mocking ASWebAuth.
-//  (The listener seam added by #401 is separate: only the fail-fast test
-//  injects a listener stub; the other tests in this class use the real one.)
+//  (The listener seam added by #401 is separate: the fail-fast test and the
+//  #405 presentation tests inject a listener stub; the other tests in this
+//  class use the real one.)
 //
 //  See:
 //  - VVTerm/Features/Teleport/Infrastructure/BrowserMFACeremony.swift
@@ -163,47 +164,42 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     /// truncated request id sends the user to a page that cannot approve the
     /// pending request.
     ///
-    /// Host-state tolerance, not retry machinery: the wait for
-    /// `presenter.presentedURLs` is `approvalPagePresentationTolerance` (45 s),
-    /// not the 15 s this test originally raced with. `BrowserMFACeremony` is
-    /// `@MainActor`, and on a loaded simulator runner the listener bind plus
-    /// the ceremony's MainActor hops can be starved far past 15 s — measured
-    /// 2026-10-07 (PR #395, required `unit-tests` job of run 37577383467, job
-    /// 112652747154; tracked as issue #397): this test ran 103.073 s and
-    /// `presentedURLs` was still
-    /// empty when the 15 s budget expired, while the suite's next case bound
-    /// its listener and passed in 1.4 s. The class is recorded in #326 (the
-    /// fail-fast budget 2 s → 30 s) and #336/#337 (four sequential 15 s
-    /// listener binds starved ≈65 s → a 20 s tolerance). 45 s is 3× the
-    /// product's 15 s single-listener-start timeout (`BrowserMFAListener`
-    /// `.defaultStartTimeout`) and keeps headroom over the measured single-hop
-    /// starvation; it still discriminates, because the URL must be presented
-    /// before the bound (the `XCTUnwrap` below fails otherwise) and the
-    /// product's own listener deadline is 180 s, so the bound still proves
-    /// prompt presentation rather than eventual. The observed failure spent
-    /// 103.073 s on a 15 s budget (the rest was the ceremony's cancel drain);
-    /// 45 s plus the same ≈88 s drain is ≈133 s, inside the job's 180 s
-    /// per-test allowance. Escalation (recorded, not implied): if a stall ever
-    /// survives 45 s, the next step is a structural gate on the ceremony's
-    /// progress, not another increase.
+    /// Issue #405: the presentation is observed through the injected listener
+    /// seam instead of the #397 45 s `approvalPagePresentationTolerance`
+    /// spin. The ceremony records `present` before the stub's
+    /// `waitForResponse()` throws `waitReached`, so the terminating await
+    /// asserts the presentation without racing the ceremony's `@MainActor`
+    /// hops, and the stub's immediate throw keeps a regression red instead of
+    /// hanging into the job's execution allowance. The #397 escalation rule
+    /// ("a stall surviving 45 s needs a structural gate on the ceremony's
+    /// progress, not another increase") is satisfied by construction: the
+    /// tolerance is deleted, not extended.
     func testCeremony_opensTheServerApprovalPageForTheChallengeRequestID() async throws {
         let client = ChallengeReturningGRPCClient(requestID: "abcdefghijklmnopqrstuvwxyz012345")
         let presenter = RecordingBrowserMFAPresenter()
-        let ceremony = BrowserMFACeremony(logging: DefaultTeleportLogging(), presenter: presenter)
+        let stub = StubBrowserMFAListener()
+        let ceremony = BrowserMFACeremony(
+            logging: DefaultTeleportLogging(),
+            presenter: presenter,
+            makeListener: { _ in stub }
+        )
 
-        let run = Task { try await ceremony.run(grpcClient: client, host: "teleport.pcad.it") }
-        let deadline = ContinuousClock.now + Self.approvalPagePresentationTolerance
-        while presenter.presentedURLs.isEmpty, ContinuousClock.now < deadline {
-            await Task.yield()
+        do {
+            _ = try await ceremony.run(grpcClient: client, host: "teleport.pcad.it")
+            XCTFail("the ceremony must terminate at the stub listener's wait")
+        } catch is StubBrowserMFAListenerError {
+            // expected terminal path: the stub's waitForResponse() throws waitReached
+        } catch {
+            XCTFail("expected StubBrowserMFAListenerError.waitReached, got \(error)")
         }
-        run.cancel()
-        _ = try? await run.value
 
+        XCTAssertEqual(presenter.presentedURLs.count, 1, "the ceremony must present the approval page exactly once")
         let presented = try XCTUnwrap(presenter.presentedURLs.first)
         XCTAssertEqual(
             presented.absoluteString,
             "https://teleport.pcad.it/web/mfa/browser/\(client.requestID)"
         )
+        XCTAssertEqual(stub.cancelCount, 1, "the ceremony's defer must cancel the injected listener")
     }
 
     /// A browser session whose `start()` returned false can never deliver an
@@ -261,11 +257,6 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
                        "the ceremony must drive the injected listener's URL into the challenge call")
     }
 
-    /// The host-state-tolerant wait for the approval-page presentation in
-    /// `testCeremony_opensTheServerApprovalPageForTheChallengeRequestID`. See
-    /// that test's doc comment for the measurement and the escalation rule.
-    private static let approvalPagePresentationTolerance: Duration = .seconds(45)
-
     /// A gRPC stub that answers the challenge request with a real
     /// `BrowserMFAChallenge` so the ceremony proceeds to the Safari step.
     private final class ChallengeReturningGRPCClient: TeleportGRPCClienting {
@@ -310,14 +301,17 @@ final class BrowserMFACeremonyLoopbackURLTests: XCTestCase {
     }
 }
 
-/// A listener stub for the fail-fast test (issue #401). It returns a fixed
-/// callback URL and its `waitForResponse()` throws immediately, so the
-/// counterfactual (the A7 guard reverted) reds deterministically instead of
-/// hanging into the job's execution allowance. All calls arrive from the
+/// A listener stub shared by the #401 fail-fast test and the two #405
+/// presentation tests. It returns a per-instance callback URL (a fresh
+/// `UUID` secret keeps the redaction suite's `secret_key` leak oracle
+/// high-entropy) and its `waitForResponse()` throws immediately, so the
+/// tests observe the recorded presentation without racing a wall clock and
+/// the counterfactual (the A7 guard reverted) reds deterministically instead
+/// of hanging into the job's execution allowance. All calls arrive from the
 /// `@MainActor` ceremony, so main-actor serialization is the justification
 /// for `@unchecked Sendable`.
-private final class StubBrowserMFAListener: BrowserMFAListening, @unchecked Sendable {
-    let callbackURL = "http://localhost:54321/callback?secret_key=stub"
+final class StubBrowserMFAListener: BrowserMFAListening, @unchecked Sendable {
+    let callbackURL = "http://localhost:54321/callback?secret_key=\(UUID().uuidString)"
     private(set) var waitCount = 0
     private(set) var cancelCount = 0
 
@@ -331,4 +325,4 @@ private final class StubBrowserMFAListener: BrowserMFAListening, @unchecked Send
     func cancel() { cancelCount += 1 }
 }
 
-private enum StubBrowserMFAListenerError: Error { case waitReached }
+enum StubBrowserMFAListenerError: Error { case waitReached }
