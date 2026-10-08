@@ -141,7 +141,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
         let initialKey = app.keys["x"]
         XCTAssertTrue(initialKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-        tapPromptly(initialKey, diagnostics: diagnostics, app: app)
+        XCTAssertTrue(tapAndAwaitInput(initialKey, diagnostics: diagnostics, app: app), "The initial 'x' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
         tapCommandArguments("1", diagnostics: diagnostics, app: app)
         wait(for: diagnostics, containing: "cwd=/tmp/DEV199_INPUT_X_1", timeout: 8, app: app)
 
@@ -188,19 +188,9 @@ final class TerminalReconnectUITests: XCTestCase {
 
             let key = app.keys["x"]
             XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
-            guard let sentBefore = diagnosticIntegerValue("sentCount", in: diagnostics) else {
-                XCTFail("Missing sentCount baseline. \(diagnosticText(in: app))")
-                return
-            }
-            tapPromptly(key, diagnostics: diagnostics, app: app)
             // The keystroke must at least leave the app toward the terminal
             // (the IME model can hold the char while nothing is delivered).
-            var delivered = waitForDiagnosticsReturningBool(
-                diagnostics,
-                containing: "sentCount=\(sentBefore + 1)",
-                timeout: 5,
-                app: app
-            )
+            var delivered = tapAndAwaitInput(key, diagnostics: diagnostics, app: app)
             tapCommandArguments(
                 String(connectionNumber),
                 diagnostics: diagnostics,
@@ -224,17 +214,7 @@ final class TerminalReconnectUITests: XCTestCase {
                     String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12)
                 )
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-                guard let sentMid = diagnosticIntegerValue("sentCount", in: diagnostics) else {
-                    XCTFail("Missing sentCount mid-retry. \(diagnosticText(in: app))")
-                    return
-                }
-                tapPromptly(key, diagnostics: diagnostics, app: app)
-                delivered = waitForDiagnosticsReturningBool(
-                    diagnostics,
-                    containing: "sentCount=\(sentMid + 1)",
-                    timeout: 5,
-                    app: app
-                )
+                delivered = tapAndAwaitInput(key, diagnostics: diagnostics, app: app)
                 tapCommandArguments(
                     String(connectionNumber),
                     diagnostics: diagnostics,
@@ -314,7 +294,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
         let key = app.keys["z"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
-        tapPromptly(key, diagnostics: diagnostics, app: app)
+        XCTAssertTrue(tapAndAwaitInput(key, diagnostics: diagnostics, app: app), "The 'z' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
         tapCommandArguments("", diagnostics: diagnostics, app: app)
         waitForAnyDiagnostics(
             diagnostics,
@@ -443,7 +423,7 @@ final class TerminalReconnectUITests: XCTestCase {
 
         let key = app.keys["x"]
         XCTAssertTrue(key.waitForExistence(timeout: 5), diagnosticText(in: app))
-        tapPromptly(key, diagnostics: diagnostics, app: app)
+        XCTAssertTrue(tapAndAwaitInput(key, diagnostics: diagnostics, app: app), "The repaired keyboard's 'x' keystroke never left the app toward the terminal. \(diagnosticText(in: app))")
         tapCommandArguments("", diagnostics: diagnostics, app: app)
         waitForAnyDiagnostics(
             diagnostics,
@@ -831,19 +811,53 @@ final class TerminalReconnectUITests: XCTestCase {
         )
     }
 
+    /// The bounded wait for a tapped key's input to leave the app toward the
+    /// terminal. A tap's wall-clock duration is NOT a pass condition: under runner
+    /// load a delivered tap has taken 18.4 s (#220) and 47.16 s (#257) while the
+    /// app stayed healthy. The pass condition is the delivered-input counter
+    /// advancing.
+    ///
+    /// The deadline bounds the wait, not `key.tap()` itself and not a single AX
+    /// query: arm-2 measured ~29 s taps and 30–60 s AX round-trips, so a
+    /// stall-caused false return is possible at the tail; the false path prints
+    /// `elapsed=` + the last observed counter so triage can separate a stall from
+    /// a genuine drop.
+    private static let inputDeliveryBudget: TimeInterval = 30
+
+    /// Taps `key` and waits (bounded) for `sentCount` to advance past its pre-tap
+    /// value. Returns whether delivery was observed; every call site consumes the
+    /// result (asserted or used for a bounded retry). `now > before` (any advance)
+    /// replaces the old strict `== before + 1`: the software-keyboard send is
+    /// synchronous with the tap (verified), so no other input source can satisfy it
+    /// spuriously.
     @MainActor
-    private func tapPromptly(
+    private func tapAndAwaitInput(
         _ key: XCUIElement,
         diagnostics: XCUIElement,
-        app: XCUIApplication
-    ) {
-        let startedAt = Date()
+        app: XCUIApplication,
+        timeout: TimeInterval = TerminalReconnectUITests.inputDeliveryBudget
+    ) -> Bool {
+        guard let before = diagnosticIntegerValue("sentCount", in: diagnostics) else {
+            XCTFail("Missing sentCount baseline before tapping \(key). \(diagnosticText(in: app))")
+            return false
+        }
         key.tap()
-        XCTAssertLessThan(
-            Date().timeIntervalSince(startedAt),
-            10,
-            "Software-keyboard input stalled. \(diagnosticText(in: app))"
-        )
+        let startedWaiting = Date()
+        var lastObserved: Int?
+        let deadline = startedWaiting.addingTimeInterval(timeout)
+        while true {
+            if let now = diagnosticIntegerValue("sentCount", in: diagnostics) {
+                lastObserved = now
+                if now > before { return true }
+            }
+            if Date() >= deadline {
+                print("TAP-DELIVERY timeout before=\(before)"
+                      + " last=\(lastObserved.map(String.init) ?? "nil")"
+                      + " elapsed=\(String(format: "%.2f", Date().timeIntervalSince(startedWaiting)))s")
+                return false
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
     }
 
     /// Waits (bounded) for the element to be hittable; falls through to the
@@ -886,12 +900,12 @@ final class TerminalReconnectUITests: XCTestCase {
             } else {
                 let spaceKey = app.keys["space"]
                 if spaceKey.waitForExistence(timeout: 3) {
-                    tapPromptly(spaceKey, diagnostics: diagnostics, app: app)
+                    spaceKey.tap()
                 }
                 for char in digits {
                     let digitKey = app.keys[String(char)]
                     XCTAssertTrue(digitKey.waitForExistence(timeout: 5), diagnosticText(in: app))
-                    tapPromptly(digitKey, diagnostics: diagnostics, app: app)
+                    digitKey.tap()
                 }
             }
         }
@@ -901,7 +915,7 @@ final class TerminalReconnectUITests: XCTestCase {
         let returnButton = app.buttons["Return"]
         if returnKeyElement.waitForExistence(timeout: 3) {
             waitForHittable(returnKeyElement)
-            tapPromptly(returnKeyElement, diagnostics: diagnostics, app: app)
+            returnKeyElement.tap()
             if waitForDiagnosticsReturningBool(
                 diagnostics,
                 containing: enterTarget,
@@ -913,7 +927,7 @@ final class TerminalReconnectUITests: XCTestCase {
         }
         if returnButton.waitForExistence(timeout: 3) {
             waitForHittable(returnButton)
-            tapPromptly(returnButton, diagnostics: diagnostics, app: app)
+            returnButton.tap()
             if waitForDiagnosticsReturningBool(
                 diagnostics,
                 containing: enterTarget,
