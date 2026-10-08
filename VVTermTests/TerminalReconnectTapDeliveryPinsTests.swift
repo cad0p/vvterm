@@ -88,6 +88,15 @@
 //    - A10 is a text heuristic over one fixture script, not an oracle — it
 //      reds an emission that changes the pinned 3-occurrence map, not every
 //      possible re-vacuuming edit;
+//    - the find site's probe KEY (`app.keys["z"]`) is not pinned: a partial
+//      revert (x probe + the Z_1 assert) passes A8-A10 because the assert
+//      arguments are unchanged, and reds only at runtime (shard-2, report-
+//      only). The runtime assertion is the guard; this pin only guards the
+//      text it pins (measured by the impl lens 2, see the #410 review notes);
+//    - the A8/A9 failure-message wording is not pinned: a coherent reword
+//      that reintroduces a misleading "never reached the shell" phrasing for
+//      the flag-gated `z` branch stays green here (review-only, the impl
+//      lens 1 NIT-3);
 //    - a coherent edit paired with a pin update is inherent to an
 //      update-on-purpose pin;
 //    - the retry sites' control flow is text-pinned by A5; CF-R4's literal
@@ -265,8 +274,8 @@ struct TerminalReconnectTapDeliveryPinsTests {
         let asserted = Self.waitForAnyDiagnosticsCalls(in: source).filter(\.isAsserted)
         let zTokens = asserted.filter { $0.arguments.contains("DEV212_INPUT_Z_1") }
         #expect(
-            zTokens.count == asserted.count,
-            "both asserted receipt waits must use the `DEV212_INPUT_Z_1` marker triple (the `:428` probe was changed from the non-unique `x` to `z`); A8 owns the asserted-count guard — arguments: \(asserted.map(\.arguments)) (issue #410)"
+            zTokens.count == 2,
+            "exactly two asserted receipt waits must use the `DEV212_INPUT_Z_1` marker triple (the find probe at `:419` was changed from the non-unique `x` to `z`); the literal keeps A9 non-vacuous if every assert is reverted — arguments: \(asserted.map(\.arguments)) (issue #410)"
         )
         let xTokens = asserted.filter { $0.arguments.contains("DEV212_INPUT_X_1") }
         #expect(
