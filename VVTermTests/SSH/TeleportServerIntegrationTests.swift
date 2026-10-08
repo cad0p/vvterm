@@ -55,6 +55,27 @@ struct TeleportServerIntegrationTests {
             .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    /// Trace-wrapped `disconnect()` (non-throwing): the `.teardown` trace
+    /// variant names the last teardown step if the test process is killed
+    /// between trace lines.
+    @MainActor
+    private static func disconnect(_ client: SSHClient) async {
+        await traceTeleportE2EPhase(.teardown, detail: "disconnect") {
+            await client.disconnect()
+        }
+    }
+
+    /// Whitespace-collapsed, 48-char-capped command label for `.exec` trace
+    /// lines: a multi-line command must not split the trace line.
+    private static func execDetail(_ command: String) -> String {
+        String(
+            command
+                .split(whereSeparator: \.isWhitespace)
+                .joined(separator: " ")
+                .prefix(48)
+        )
+    }
+
     /// Full E2E connection helper shared by the transport tests: reads the
     /// VVTERM_TELEPORT_* fixtures, seeds the keyring, connects through the
     /// TLS-routing proxy (`proxy:<node>:0` subsystem, outer + inner libssh2
@@ -75,28 +96,32 @@ struct TeleportServerIntegrationTests {
     @MainActor
     private static func makeTeleportClient(hostLogin: String?) async throws -> (client: SSHClient, clusterId: UUID) {
         let environment = ProcessInfo.processInfo.environment
-        guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
-            throw SSHError.connectionFailed(
-                "VVTERM_TELEPORT_CERT missing despite .enabled(if:) — env changed between trait eval and test body"
-            )
+        let fixtures = try await withTeleportE2EPhase(.fixtures, detail: "env") {
+            guard let cert = environment["VVTERM_TELEPORT_CERT"] else {
+                throw SSHError.connectionFailed(
+                    "VVTERM_TELEPORT_CERT missing despite .enabled(if:) — env changed between trait eval and test body"
+                )
+            }
+            let key = environment["VVTERM_TELEPORT_KEY"] ?? ""
+            let caCerts = environment["VVTERM_TELEPORT_CA_CERTS"] ?? ""
+            let checkingKeysRaw = environment["VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS"] ?? ""
+            let checkingKeys = checkingKeysRaw
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let clusterName = environment["VVTERM_TELEPORT_CLUSTER_NAME"] ?? "ci-cluster"
+            guard !checkingKeys.isEmpty else {
+                throw SSHError.connectionFailed(
+                    "VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS missing — run scripts/ci/teleport-server.sh env-export"
+                )
+            }
+            let host = environment["VVTERM_TELEPORT_HOST"] ?? "127.0.0.1"
+            let port = Int(environment["VVTERM_TELEPORT_PORT"] ?? "443") ?? 443
+            let node = environment["VVTERM_TELEPORT_NODE"] ?? "ci-node"
+            let user = environment["VVTERM_TELEPORT_USER"] ?? "ci-user"
+            return (cert, key, caCerts, checkingKeys, clusterName, host, port, node, user)
         }
-        let key = environment["VVTERM_TELEPORT_KEY"] ?? ""
-        let caCerts = environment["VVTERM_TELEPORT_CA_CERTS"] ?? ""
-        let checkingKeysRaw = environment["VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS"] ?? ""
-        let checkingKeys = checkingKeysRaw
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let clusterName = environment["VVTERM_TELEPORT_CLUSTER_NAME"] ?? "ci-cluster"
-        guard !checkingKeys.isEmpty else {
-            throw SSHError.connectionFailed(
-                "VVTERM_TELEPORT_HOST_CA_CHECKING_KEYS missing — run scripts/ci/teleport-server.sh env-export"
-            )
-        }
-        let host = environment["VVTERM_TELEPORT_HOST"] ?? "127.0.0.1"
-        let port = Int(environment["VVTERM_TELEPORT_PORT"] ?? "443") ?? 443
-        let node = environment["VVTERM_TELEPORT_NODE"] ?? "ci-node"
-        let user = environment["VVTERM_TELEPORT_USER"] ?? "ci-user"
+        let (cert, key, caCerts, checkingKeys, clusterName, host, port, node, user) = fixtures
 
         let clusterId = UUID()
         // For Teleport, `Server.name` IS the node name (`proxy:<node>:0`),
@@ -121,32 +146,38 @@ struct TeleportServerIntegrationTests {
         // cert, same validity window. The ed25519 private key goes to the
         // keychain; `clear` wipes both stores.
         let keyRing = TeleportKeyRingHost.shared
-        keyRing.storeClusterTLSState(
-            TeleportClusterTLSState(
-                clusterName: clusterName,
-                clusterCAPEMs: [caCerts],
-                hostCACheckingKeys: checkingKeys
-            ),
-            for: clusterId
-        )
-        let validBefore = Date().addingTimeInterval(3600)
-        keyRing.storeBootstrapCert(cert, validBefore: validBefore, for: clusterId)
-        keyRing.storeLoginCert(cert, validBefore: validBefore, for: clusterId)
-        try keyRing.storeEd25519PrivateKey(Data(key.utf8), for: clusterId)
+        try await withTeleportE2EPhase(.keyring, detail: "seed") {
+            keyRing.storeClusterTLSState(
+                TeleportClusterTLSState(
+                    clusterName: clusterName,
+                    clusterCAPEMs: [caCerts],
+                    hostCACheckingKeys: checkingKeys
+                ),
+                for: clusterId
+            )
+            let validBefore = Date().addingTimeInterval(3600)
+            keyRing.storeBootstrapCert(cert, validBefore: validBefore, for: clusterId)
+            keyRing.storeLoginCert(cert, validBefore: validBefore, for: clusterId)
+            try keyRing.storeEd25519PrivateKey(Data(key.utf8), for: clusterId)
+        }
 
         let client = SSHClient()
-        await client.setConnectTimeout(.seconds(90))
         do {
-            let session = try await client.connect(
-                to: server,
-                credentials: ServerCredentials(serverId: clusterId)
-            )
-            #expect(await session.isConnected)
+            try await withTeleportE2EPhase(.connect, detail: "tlsRouting") {
+                await client.setConnectTimeout(.seconds(90))
+                let session = try await client.connect(
+                    to: server,
+                    credentials: ServerCredentials(serverId: clusterId)
+                )
+                #expect(await session.isConnected)
+            }
             // Open the `proxy:<node>:0` subsystem channel + second libssh2
             // handshake so exec routes to the inner (node) session.
-            try await client.prepareTeleportInnerSession()
+            try await withTeleportE2EPhase(.innerSession, detail: "prepare") {
+                try await client.prepareTeleportInnerSession()
+            }
         } catch {
-            await client.disconnect()
+            await Self.disconnect(client)
             throw error
         }
         return (client, clusterId)
@@ -168,10 +199,10 @@ struct TeleportServerIntegrationTests {
             // process never became ready" after ~20s). The default 20s
             // exec budget is too tight for that — give it headroom; the
             // assertion still verifies the output.
-            let output = try await client.execute(
-                "echo VVTERM_TELEPORT_E2E_OK; id -un",
-                timeout: .seconds(60)
-            )
+            let command = "echo VVTERM_TELEPORT_E2E_OK; id -un"
+            let output = try await withTeleportE2EPhase(.exec, detail: Self.execDetail(command)) {
+                try await client.execute(command, timeout: .seconds(60))
+            }
             #expect(output.contains("VVTERM_TELEPORT_E2E_OK"))
             // Leg 1 (stored host login): the SSH username must be the
             // certificate principal, not the Teleport user. A whole-line
@@ -180,9 +211,9 @@ struct TeleportServerIntegrationTests {
                 Self.remoteLoginLines(in: output).contains(storedLogin),
                 "the remote login must be the certificate principal (\(storedLogin)); got: \(output)"
             )
-            await client.disconnect()
+            await Self.disconnect(client)
         } catch {
-            await client.disconnect()
+            await Self.disconnect(client)
             throw error
         }
     }
@@ -196,14 +227,16 @@ struct TeleportServerIntegrationTests {
         let (client, clusterId) = try await Self.makeTeleportClient(hostLogin: nil)
         defer { TeleportKeyRingHost.shared.clear(for: clusterId) }
         do {
-            let output = try await client.execute("id -un", timeout: .seconds(60))
+            let output = try await withTeleportE2EPhase(.exec, detail: Self.execDetail("id -un")) {
+                try await client.execute("id -un", timeout: .seconds(60))
+            }
             #expect(
                 Self.remoteLoginLines(in: output).contains(storedLogin),
                 "the derived login must be the certificate principal (\(storedLogin)); got: \(output)"
             )
-            await client.disconnect()
+            await Self.disconnect(client)
         } catch {
-            await client.disconnect()
+            await Self.disconnect(client)
             throw error
         }
     }
@@ -234,39 +267,61 @@ struct TeleportServerIntegrationTests {
             // are deliberately not exercised here.)
             let remotePath = "/tmp/vvterm-e2e-\(UUID().uuidString).txt"
             let payload = Data("VVTERM_TELEPORT_SFTP_E2E_OK\n".utf8)
-            try await client.upload(payload, to: remotePath)
-            let readBack = try await client.readFile(at: remotePath, maxBytes: 64 * 1024)
+            try await withTeleportE2EPhase(.sftp, detail: "upload") {
+                try await client.upload(payload, to: remotePath)
+            }
+            let readBack = try await withTeleportE2EPhase(.sftp, detail: "readFile") {
+                try await client.readFile(at: remotePath, maxBytes: 64 * 1024)
+            }
             #expect(readBack == payload, "the SFTP round-trip must read back the uploaded bytes")
-            let entry = try await client.stat(at: remotePath)
+            let entry = try await withTeleportE2EPhase(.sftp, detail: "stat") {
+                try await client.stat(at: remotePath)
+            }
             #expect(
                 entry.name == (remotePath as NSString).lastPathComponent,
                 "stat must report the uploaded file's name; got: \(entry.name)"
             )
-            _ = try await client.listDirectory(at: "/tmp", maxEntries: 256)
-            try await client.deleteFile(at: remotePath)
+            _ = try await withTeleportE2EPhase(.sftp, detail: "listDirectory") {
+                try await client.listDirectory(at: "/tmp", maxEntries: 256)
+            }
+            try await withTeleportE2EPhase(.sftp, detail: "deleteFile") {
+                try await client.deleteFile(at: remotePath)
+            }
 
             // Shell path: start a PTY through the proxy (outer + inner
             // handshakes), resize it, and assert the new geometry reached the
             // remote PTY — `resize`'s EAGAIN loop is one of the two #290
             // loops.
-            let shell = try await client.startShell(cols: 80, rows: 24)
+            let shell = try await withTeleportE2EPhase(.shell, detail: "startShell") {
+                try await client.startShell(cols: 80, rows: 24)
+            }
             do {
-                try await client.resize(cols: 100, rows: 30, for: shell.id)
-                try await client.write(Data("stty size\n".utf8), to: shell.id)
-                let output = await Self.shellOutput(from: shell, until: "30 100", timeoutSeconds: 45)
+                try await withTeleportE2EPhase(.shell, detail: "resize") {
+                    try await client.resize(cols: 100, rows: 30, for: shell.id)
+                }
+                try await withTeleportE2EPhase(.shell, detail: "write") {
+                    try await client.write(Data("stty size\n".utf8), to: shell.id)
+                }
+                let output = await traceTeleportE2EPhase(.shell, detail: "drain") {
+                    await Self.shellOutput(from: shell, until: "30 100", timeoutSeconds: 45)
+                }
                 #expect(
                     output.contains("30 100"),
                     "the PTY resize must reach the remote shell (`stty size` should print `30 100`); got: \(output)"
                 )
-                await client.closeShell(shell.id)
+                await traceTeleportE2EPhase(.shell, detail: "closeShell") {
+                    await client.closeShell(shell.id)
+                }
             } catch {
-                await client.closeShell(shell.id)
+                await traceTeleportE2EPhase(.shell, detail: "closeShell") {
+                    await client.closeShell(shell.id)
+                }
                 throw error
             }
 
-            await client.disconnect()
+            await Self.disconnect(client)
         } catch {
-            await client.disconnect()
+            await Self.disconnect(client)
             throw error
         }
     }
@@ -326,18 +381,18 @@ struct TeleportServerIntegrationTests {
         do {
             // printf (not echo): keeps the escape bytes literal. The remote
             // sh -c wrapper passes the single-quoted string through.
-            let output = try await client.execute(
-                "printf '\\033]8;;https://example.com\\033\\\\VVTERM-OSC8-LINK\\033]8;;\\033\\\\\\n'",
-                timeout: .seconds(60)
-            )
+            let command = "printf '\\033]8;;https://example.com\\033\\\\VVTERM-OSC8-LINK\\033]8;;\\033\\\\\\n'"
+            let output = try await withTeleportE2EPhase(.exec, detail: Self.execDetail(command)) {
+                try await client.execute(command, timeout: .seconds(60))
+            }
             #expect(output.contains("VVTERM-OSC8-LINK"))
             // Open sequence: ESC ] 8 ; ; <url> ESC \
             #expect(output.contains("\u{1B}]8;;https://example.com\u{1B}\\VVTERM-OSC8-LINK"))
             // Close sequence: ESC ] 8 ; ; ESC \
             #expect(output.contains("VVTERM-OSC8-LINK\u{1B}]8;;\u{1B}\\"))
-            await client.disconnect()
+            await Self.disconnect(client)
         } catch {
-            await client.disconnect()
+            await Self.disconnect(client)
             throw error
         }
     }
@@ -437,11 +492,13 @@ struct TeleportServerIntegrationTests {
             signer: signer,
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )
-        await registration.begin(
-            cluster: cluster,
-            deviceName: "ci-app-device",
-            bootstrapResult: bootstrapResult
-        )
+        await traceTeleportE2EPhase(.ceremony, detail: "registration") {
+            await registration.begin(
+                cluster: cluster,
+                deviceName: "ci-app-device",
+                bootstrapResult: bootstrapResult
+            )
+        }
         guard case .success = registration.state else {
             throw TeleportCeremonyError.registrationFailed(String(describing: registration.state))
         }
@@ -456,7 +513,9 @@ struct TeleportServerIntegrationTests {
             signer: signer,
             webAuthnBuilder: TeleportWebAuthnBuilder()
         )
-        await login.begin(cluster: cluster)
+        await traceTeleportE2EPhase(.ceremony, detail: "login") {
+            await login.begin(cluster: cluster)
+        }
         guard case .success = login.state else {
             throw TeleportCeremonyError.loginFailed(String(describing: login.state))
         }
