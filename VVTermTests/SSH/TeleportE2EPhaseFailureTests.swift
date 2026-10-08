@@ -56,11 +56,11 @@ struct TeleportE2EPhaseFailureTests {
         // The historical failure mode (run 36018236342): the exec call's 60 s
         // budget expiring, reported as `.timeout` on the @Test declaration.
         let timeout = try await #require(throws: TeleportE2EPhaseFailure.self) {
-            try await withTeleportE2EPhase(.connect, detail: "tlsRouting") {
+            try await withTeleportE2EPhase(.exec, detail: "echo VVTERM_TELEPORT_E2E_OK; id -un") {
                 throw SSHError.timeout
             }
         }
-        #expect(timeout.description.contains("phase=connect"))
+        #expect(timeout.description.contains("phase=exec"))
         #expect(timeout.description.contains("underlying=timeout"))
     }
 
@@ -168,5 +168,57 @@ struct TeleportE2EPhaseFailureTests {
         #expect(lines[1].contains(" failed elapsed="))
         #expect(lines[1].contains("underlying=boom"))
         #expect(!lines[1].contains(" end elapsed="))
+    }
+
+    @Test
+    func everyPhaseRawValueIsFrozen() {
+        // The rawValues are the tokens a triage greps in a `Caught error:` line,
+        // so pin them literally: renaming a case must be a deliberate, visible
+        // edit (the parameterized description test derives its expectation from
+        // the value under test and stays green on a rename).
+        let rawValues = Set(TeleportE2EPhase.allCases.map(\.rawValue))
+        #expect(rawValues == Set([
+            "fixtures", "keyring", "connect", "innerSession", "exec",
+            "sftp", "shell", "ceremony", "teardown",
+        ]))
+    }
+
+    @Test
+    func defaultTraceSinkFlushesStdout() throws {
+        // Every offline test injects `trace:`, so nothing here exercises the
+        // DEFAULT sink. Pin its shape: the e2e workflow captures test stdout
+        // through a block-buffered `tee` pipe, and a process kill must not lose
+        // the last `begin`, so the sink must print + flush per line and stay the
+        // default for both wrappers.
+        let wrapper = URL(fileURLWithPath: Self.wrapperSourcePath())
+        let source = try String(contentsOf: wrapper, encoding: .utf8)
+        #expect(source.contains("fflush(stdout)"))
+        #expect(
+            source.components(separatedBy: "trace: TeleportE2EPhaseTrace = flushTeleportE2EPhaseTrace").count == 3
+        )
+    }
+
+    @Test
+    func traceOmitsABlankDetail() async throws {
+        // `detail` is optional and the call sites all pass one; this exercises
+        // the nil branch so a blank `detail=` token can never reach a triage.
+        var lines: [String] = []
+        let recorder: TeleportE2EPhaseTrace = { lines.append($0) }
+        _ = await traceTeleportE2EPhase(.shell, trace: recorder) { "x" }
+        try #require(lines.count == 2)
+        #expect(lines.allSatisfy { !$0.contains("detail=") })
+        #expect(lines.allSatisfy { $0.hasPrefix("teleport-e2e ") })
+    }
+
+    /// The wrapper source next to this file, honouring the pin-root override so
+    /// a mutated tree can drive the source-shape counterfactual.
+    private static func wrapperSourcePath() -> String {
+        if let root = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"] {
+            return root + "/VVTermTests/SSH/TeleportE2EPhase.swift"
+        }
+        return URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("TeleportE2EPhase.swift")
+            .path
     }
 }
