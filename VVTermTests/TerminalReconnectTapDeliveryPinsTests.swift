@@ -13,6 +13,9 @@
 //  (`inputDeliveryBudget = 30 s`) for the delivered-input counter `sentCount`
 //  to advance, returning a Bool that every call site consumes (asserted at the
 //  three direct sites, fed into the existing retry at the two session sites).
+//  Issue #410 adds two asserted receipt waits at the codex-mode sites (A8/A9)
+//  and pins the fixture emission map that makes the `z` probe's receipt unique
+//  (A10).
 //
 //    A1  no wall-clock threshold survives: zero `XCTAssertLessThan(` in the
 //        file, and exactly one `timeIntervalSince` read — the helper's
@@ -41,6 +44,22 @@
 //        balanced-paren extraction of every call's argument text (the
 //        declaration is excluded by its `private func ` prefix), so a
 //        `timeout: 1` site override cannot keep A1-A6 green.
+//    A8  the two #410 codex-mode receipt waits assert their returned Bool: a
+//        balanced-paren extraction of every `waitForAnyDiagnostics(` call (the
+//        `private func` declaration excluded), classified by whether the
+//        immediately preceding non-whitespace source ends with
+//        `XCTAssertTrue(`; the asserted subset must be exactly 2. The consumed
+//        shapes stay pinned too: exactly 2 `delivered && waitForAnyDiagnostics(`
+//        and exactly 1 `let markerSeen = waitForAnyDiagnostics(`, plus a
+//        total-occurrence scan-consistency check (5 calls + the declaration).
+//    A9  both asserted #410 receipt arguments contain `DEV212_INPUT_Z_1` and
+//        neither contains `DEV212_INPUT_X_1` — the `:428` probe was changed
+//        from the non-unique `x` to `z` (issue #410).
+//    A10 the fixture emission map (`scripts/ci/repro-sshd-setup.sh`): the
+//        `hello()` definition line emits no `DEV212_INPUT_Z_1`, the
+//        `$HOME/bin/z` heredoc block does, and the script-wide occurrence
+//        count is exactly 3. An emission that introduces Z_1 before the probe
+//        (the re-vacuuming vector) reds A10 (issue #410).
 //
 //  Scans run over the comment-stripped, whitespace-normalized source: a
 //  comment-embedded decoy is not code, and a multi-line call site normalizes
@@ -60,6 +79,15 @@
 //      backticked `` `timeout`: 1 `` are compile-valid spellings that escape
 //      it while A1-A6 stay green (measured by the closure lens; the repo's
 //      formatting emits neither);
+//    - A8's classifier counts `XCTAssertTrue(`-preceded calls, so a
+//      token-matching but weakened assert
+//      (`XCTAssertTrue(waitForAnyDiagnostics(…) || true)`) keeps the count;
+//      the `let receipt = …; XCTAssertTrue(receipt)` re-spelling reds A8
+//      (the asserted count drops) and is not an escape;
+//    - A8-A10 prove text, not runtime liveness (CF-R2/R3/R4 do that);
+//    - A10 is a text heuristic over one fixture script, not an oracle — it
+//      reds an emission that changes the pinned 3-occurrence map, not every
+//      possible re-vacuuming edit;
 //    - a coherent edit paired with a pin update is inherent to an
 //      update-on-purpose pin;
 //    - the retry sites' control flow is text-pinned by A5; CF-R4's literal
@@ -199,6 +227,94 @@ struct TerminalReconnectTapDeliveryPinsTests {
         )
     }
 
+    /// A8: the two #410 codex-mode receipt waits assert their returned Bool.
+    @Test
+    func testA8CodexReceiptWaitsAssertTheirBool() throws {
+        let source = try Self.normalizedSource()
+        let calls = Self.waitForAnyDiagnosticsCalls(in: source)
+        let totalOccurrences = source.components(separatedBy: "waitForAnyDiagnostics(").count - 1
+        #expect(
+            totalOccurrences == 6,
+            "the `waitForAnyDiagnostics(` scan-consistency total must be 5 call sites + the `private func` declaration — found \(totalOccurrences) (issue #220/#410)"
+        )
+        #expect(
+            calls.count == totalOccurrences - 1,
+            "the balanced-paren extraction must resolve every non-declaration `waitForAnyDiagnostics(` call — extracted \(calls.count) of \(totalOccurrences - 1) (issue #220/#410)"
+        )
+        let asserted = calls.filter(\.isAsserted)
+        #expect(
+            asserted.count == 2,
+            "exactly two `waitForAnyDiagnostics(` calls must assert their returned Bool (the two #410 codex-mode receipt waits); an unasserted call or a `let receipt = …; XCTAssertTrue(receipt)` re-spelling reds here — found \(asserted.count) (issue #410)"
+        )
+        let chained = source.components(separatedBy: "delivered && waitForAnyDiagnostics(").count - 1
+        #expect(
+            chained == 2,
+            "exactly two session retry sites must keep chaining `delivered &&` into the receipt wait — found \(chained) (issue #220)"
+        )
+        let markerSeen = source.components(separatedBy: "let markerSeen = waitForAnyDiagnostics(").count - 1
+        #expect(
+            markerSeen == 1,
+            "exactly one `enterCodexModes` site must keep consuming the helper result as `let markerSeen = …` — found \(markerSeen) (issue #220)"
+        )
+    }
+
+    /// A9: the asserted receipts use only the `z`-probe's unique token.
+    @Test
+    func testA9TheAssertedReceiptsUseTheUniqueZToken() throws {
+        let source = try Self.normalizedSource()
+        let asserted = Self.waitForAnyDiagnosticsCalls(in: source).filter(\.isAsserted)
+        let zTokens = asserted.filter { $0.arguments.contains("DEV212_INPUT_Z_1") }
+        #expect(
+            zTokens.count == asserted.count,
+            "both asserted receipt waits must use the `DEV212_INPUT_Z_1` marker triple (the `:428` probe was changed from the non-unique `x` to `z`); A8 owns the asserted-count guard — arguments: \(asserted.map(\.arguments)) (issue #410)"
+        )
+        let xTokens = asserted.filter { $0.arguments.contains("DEV212_INPUT_X_1") }
+        #expect(
+            xTokens.isEmpty,
+            "no asserted receipt wait may keep the `DEV212_INPUT_X_1` marker (`hello()` emits it before the probe, so it is not a receipt) — arguments: \(xTokens.map(\.arguments)) (issue #410)"
+        )
+    }
+
+    /// A10: the fixture emits `DEV212_INPUT_Z_1` only from the probe command.
+    @Test
+    func testA10TheFixtureEmitsZOnlyFromTheProbe() throws {
+        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let helloLines = script.split(separator: "\n", omittingEmptySubsequences: false).filter { $0.contains("hello() {") }
+        #expect(
+            helloLines.count == 1,
+            "the fixture must define `hello()` on exactly one line — found \(helloLines.count) (issue #410)"
+        )
+        #expect(
+            helloLines.allSatisfy { !$0.contains("DEV212_INPUT_Z_1") },
+            "the `hello()` definition must not emit `DEV212_INPUT_Z_1` — it runs before the probe and any emission here re-vacuums the receipt (issue #410)"
+        )
+        let zHeredocStart = script.range(of: #"cat > "$HOME/bin/z" <<'ZEOF'"#)
+        #expect(
+            zHeredocStart != nil,
+            "the fixture must keep the `$HOME/bin/z` heredoc (the `z` probe's codex branch) (issue #410)"
+        )
+        if let zHeredocStart {
+            let tail = script[zHeredocStart.upperBound...]
+            let zHeredocEnd = tail.range(of: "\nZEOF")
+            #expect(
+                zHeredocEnd != nil,
+                "the `$HOME/bin/z` heredoc must terminate with a bare `ZEOF` line (issue #410)"
+            )
+            if let zHeredocEnd {
+                let block = tail[..<zHeredocEnd.lowerBound]
+                #expect(
+                    block.contains("DEV212_INPUT_Z_1"),
+                    "the `$HOME/bin/z` codex branch must emit `DEV212_INPUT_Z_1` — that emission is the probe's unique receipt (issue #410)"
+                )
+            }
+        }
+        let total = script.components(separatedBy: "DEV212_INPUT_Z_1").count - 1
+        #expect(
+            total == 3,
+            "the fixture's `DEV212_INPUT_Z_1` emission map must stay exactly the mkdir, the codex cd and the codex OSC 0 title (3 occurrences) — found \(total); update on purpose if the fixture gains a Z_1 emission (issue #410)"
+        )
+    }
+
     // MARK: - Source helpers
 
     /// The argument text of every `tapAndAwaitInput(` call site — the
@@ -230,6 +346,47 @@ struct TerminalReconnectTapDeliveryPinsTests {
             sites.append(String(source[range.upperBound..<index]))
         }
         return sites
+    }
+
+    /// A8/A9's balanced-paren extraction of every `waitForAnyDiagnostics(`
+    /// call (the `private func` declaration is excluded by its `private func `
+    /// prefix), each classified by whether the immediately preceding
+    /// non-whitespace source ends with `XCTAssertTrue(`.
+    private struct WaitCall {
+        let arguments: String
+        let isAsserted: Bool
+    }
+
+    private static func waitForAnyDiagnosticsCalls(in source: String) -> [WaitCall] {
+        let token = "waitForAnyDiagnostics("
+        var calls: [WaitCall] = []
+        var searchStart = source.startIndex
+        while let range = source.range(of: token, range: searchStart..<source.endIndex) {
+            searchStart = range.upperBound
+            if source[..<range.lowerBound].hasSuffix("private func ") { continue }
+            var depth = 1
+            var index = range.upperBound
+            while index < source.endIndex, depth > 0 {
+                let character = source[index]
+                if character == "(" {
+                    depth += 1
+                } else if character == ")" {
+                    depth -= 1
+                }
+                if depth == 0 { break }
+                index = source.index(after: index)
+            }
+            guard depth == 0 else { continue }
+            var prefix = source[..<range.lowerBound]
+            while let last = prefix.last, last.isWhitespace {
+                prefix = prefix.dropLast()
+            }
+            calls.append(WaitCall(
+                arguments: String(source[range.upperBound..<index]),
+                isAsserted: prefix.hasSuffix("XCTAssertTrue(")
+            ))
+        }
+        return calls
     }
 
     /// The window around the first occurrence of `token` (for the elapsed-print
