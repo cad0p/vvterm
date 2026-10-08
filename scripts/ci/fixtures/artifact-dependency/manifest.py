@@ -7780,6 +7780,19 @@ CASES = [
         ],
     },
     {
+        "id": "reject-shell-defaults-working-directory-indented-scalar",
+        "files": ["reject-shell-defaults-working-directory-indented-scalar.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-defaults-working-directory-indented-scalar.yml:13: delegation to `scripts/ci/shell-evil.sh` under `working-directory: sub` — the gate resolves delegations relative to the repository root only (refusing rather than guessing)",
+        ],
+    },
+    {
         "id": "reject-shell-gh-run-download-cmdsub-quoted-run",
         "files": ["reject-shell-gh-run-download-cmdsub-quoted-run.yml"],
         "exit": 1,
@@ -7864,6 +7877,17 @@ CASES = [
         ],
     },
     {
+        "id": "accept-shell-delegation-cmdsub-cd-bare-newline",
+        "files": ["accept-shell-delegation-cmdsub-cd-bare-newline.yml"],
+        "extra_files": {
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 0,
+        "base_exit": 0,
+        "diagnostics": [],
+    },
+    {
         "id": "reject-shell-delegation-ansic-path",
         "files": ["reject-shell-delegation-ansic-path.yml"],
         "extra_files": {"scripts/ci/shell-evil.sh": "shell-evil.sh"},
@@ -7886,6 +7910,21 @@ CASES = [
         "diagnostics": [
             "reject-shell-delegation-sourced-cd.yml:9: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
             "reject-shell-delegation-sourced-cd.yml:12: delegation to `scripts/ci/helper.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
+        ],
+    },
+    {
+        "id": "reject-shell-delegation-sourced-cd-nested",
+        "files": ["reject-shell-delegation-sourced-cd-nested.yml"],
+        "extra_files": {
+            "scripts/ci/helper2.sh": "shell-source-nested.sh",
+            "scripts/ci/helper.sh": "shell-source-cd.sh",
+            "scripts/ci/shell-evil.sh": "shell-benign.sh",
+            "scripts/ci/shell-benign.sh": "shell-benign.sh",
+        },
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-shell-delegation-sourced-cd-nested.yml:9: delegation to `scripts/ci/helper2.sh` via `.`/`source` of a script whose body contains a `cd` — a sourced script shares this shell's cwd, so the gate cannot prove later delegations' effective cwd (refusing rather than guessing)",
         ],
     },
     {

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#403, N17): a job-level `defaults.run.working-directory:` with an
+# empty inline value reads the indented scalar `sub`; no workflow-level
+# defaults fallback can mask the capture.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory:
+          sub
+    steps:
+      - run: bash scripts/ci/shell-evil.sh

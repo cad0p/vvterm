@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Fixture (#403, N16): a `cd` on the opening line of a `$()`/backtick whose
+# delegation closes on a later bare physical line. Real bash runs the
+# substitution's `cd` in `sub` and then the root `scripts/ci/shell-evil.sh`
+# copy, so this runtime-proven fail-open stays a named residual (#403, N16)
+# and is pinned ACCEPT; a future code fix must update this case deliberately
+# (the #350 boundary-accept idiom). Two spellings: `$()` and backtick.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          x=$(cd sub
+          bash scripts/ci/shell-evil.sh)
+      - run: |
+          x=`cd sub
+          bash scripts/ci/shell-evil.sh`

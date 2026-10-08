@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 856
-    private static let expectedBaseVerdictCases = 425
+    private static let expectedManifestCases = 859
+    private static let expectedBaseVerdictCases = 428
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1086,6 +1086,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-shell-delegation-cd-deferred-function.yml",
         "reject-shell-defaults-working-directory.yml",
         "reject-shell-working-directory-indented-scalar.yml",
+        "reject-shell-defaults-working-directory-indented-scalar.yml",
         "reject-shell-gh-run-download-cmdsub-quoted-run.yml",
         "reject-shell-gh-run-download-backtick-quoted-run.yml",
         "reject-shell-delegation-continuation.yml",
@@ -1097,8 +1098,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         // function-definition opener.
         "reject-shell-delegation-trap-exit.yml",
         "reject-shell-delegation-cmdsub-cd.yml",
+        "accept-shell-delegation-cmdsub-cd-bare-newline.yml",
         "reject-shell-delegation-ansic-path.yml",
         "reject-shell-delegation-sourced-cd.yml",
+        "reject-shell-delegation-sourced-cd-nested.yml",
         "reject-shell-delegation-cd-deferred-function-split.yml",
     ]
 
@@ -1129,6 +1132,10 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         // #399 fold round 3, N13: the sourced helper whose `cd` propagates
         // into the sourcing shell.
         "shell-source-cd.sh",
+        // #403, N18: the nested source hop whose helper sources the
+        // `cd`-bearing helper, pinning the `_sourced_script_has_cd`
+        // recursion.
+        "shell-source-nested.sh",
     ]
 
     // MARK: - P1: the gate and its inputs exist
