@@ -38,7 +38,10 @@
 //  nested declarations are inside the negative scan (the file-wide
 //  `failFastBudget` / `approvalPagePresentationTolerance` refusals cannot be
 //  truncated); any wall clock outside the pinned spellings — a helper, or
-//  an API such as `clock_gettime` — still escapes, and a helper-mediated
+//  an API such as `clock_gettime` — still escapes, a brace inside a string
+//  literal in a pinned body would close the walk early (the pinned bodies
+//  carry none), an `XCTWaiter`/`XCTestExpectation` wait or a
+//  `presentedURLs.count == 0` poll is not refused, and a helper-mediated
 //  wait outside a pinned method body is not covered (the redaction suite's
 //  `waitForLog` is exactly that; #405 §3.4 names it). A listener
 //  obtained through a renamed factory escapes pin 2's token; a second
@@ -48,10 +51,10 @@
 //  any other second construction site reds pin 3's file-wide
 //  `BrowserMFAListener(` count. The pins catch the direct regression shapes
 //  and fail closed when their anchors move. `StubBrowserMFAListenerError`
-//  is asserted file-wide rather than in the method slice because the test
-//  body never names the type (the catch-all prints the thrown value); the
-//  slice's material proof is the injected `StubBrowserMFAListener` plus its
-//  `waitCount` diagnostic token.
+//  is asserted file-wide for pin 1 because the fail-fast body never names
+//  the type (its catch-all prints the thrown value); the #405 pins 4/5
+//  assert the type in-slice. The slice's material proof is the injected
+//  `StubBrowserMFAListener` plus its `waitCount` diagnostic token.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
 //  mutated tree (measured in the #401 PR report). The variable must actually
@@ -307,10 +310,13 @@ struct BrowserMFACeremonyFailFastPinsTests {
         )
         let anchor = try #require(anchors.first)
 
-        // #405 lens 1 F1: the body is the brace-depth block after the
-        // declaration anchor. Unlike the #401 boundary search (next `func` /
-        // `private static let`), this is invariant to what follows the method
-        // and scans nested declarations too (counterfactual CF-6).
+        // #405: the body is the brace-depth block after the declaration
+        // anchor. The #401 boundary search required a following `func` /
+        // `private static let` and hard-failed its `#require` when none
+        // existed (the Option-B stub-move case); this extraction is invariant
+        // to what follows the method. CF-6 proves a nested declaration inside
+        // the body is scanned — it does not discriminate old vs new, because
+        // the old search over-extends here rather than truncating.
         let bodyRange = try Self.bracedBlock(after: anchor, in: text)
         let body = String(text[bodyRange])
         #expect(
@@ -546,12 +552,12 @@ struct BrowserMFACeremonyFailFastPinsTests {
             "the redaction ceremony test body must not be empty — re-derive this pin (issue #405)"
         )
 
-        // Negative: pin 1's full wall-clock set, the deleted 15 s
+        // Negative: pin 4's full wall-clock set, the deleted 15 s
         // `presentDeadline`, the `run.cancel()` teardown race, `try?`, and
         // the polling shape.
         for token in [
             "ContinuousClock", "Task.sleep", "sleep", "Timer", "DispatchTime",
-            "Date", "deadline", "presentDeadline", "run.cancel()", "try?",
+            "Date", "deadline", "Tolerance", "presentDeadline", "run.cancel()", "try?",
             "presentedURLs.isEmpty", "Task.yield",
         ] {
             #expect(
