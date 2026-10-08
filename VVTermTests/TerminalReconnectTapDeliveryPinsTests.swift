@@ -60,6 +60,12 @@
 //        `$HOME/bin/z` heredoc block does, and the script-wide occurrence
 //        count is exactly 3. An emission that introduces Z_1 before the probe
 //        (the re-vacuuming vector) reds A10 (issue #410).
+//    A11 the fixture fragment is shell-correct and install-gated
+//        (`scripts/ci/repro-sshd-setup.sh`): a zsh variant installs the
+//        precmd OSC hook, carries no bash PS1, and uses `${HOST:-}`; the
+//        installer picks it for `.zshrc`/`.zprofile`; the bash PS1 survives;
+//        the append and the ~/bin helpers sit behind the `INSTALL_RC` gate
+//        (CI or `VVTERM_REPRO_RC=1`) (issue #414).
 //
 //  Scans run over the comment-stripped, whitespace-normalized source: a
 //  comment-embedded decoy is not code, and a multi-line call site normalizes
@@ -321,6 +327,62 @@ struct TerminalReconnectTapDeliveryPinsTests {
         #expect(
             total == 3,
             "the fixture's `DEV212_INPUT_Z_1` emission map must stay exactly the mkdir, the codex cd and the codex OSC 0 title (3 occurrences) — found \(total); update on purpose if the fixture gains a Z_1 emission (issue #410)"
+        )
+    }
+
+    /// A11: the repro-rig fragment is shell-correct and install-gated. zsh
+    /// prints bash's PS1 `\[ \] \e \a` escapes literally (no OSC), so
+    /// `.zshrc`/`.zprofile` get a precmd hook instead; off CI the install is
+    /// opt-in (`VVTERM_REPRO_RC=1`) so it cannot silently append to real
+    /// dotfiles (issue #414).
+    @Test
+    func testA11ReproRigFragmentIsShellCorrectAndGated() throws {
+        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let zshMarker = "TITLE_FRAGMENT_ZSH+=\"$(cat <<'ZSH'"
+        let zshStart = script.range(of: zshMarker)
+        #expect(
+            zshStart != nil,
+            "the fixture must define a zsh fragment variant (`TITLE_FRAGMENT_ZSH`) — appending the bash PS1 to .zshrc renders it literally and emits no OSC (issue #414)"
+        )
+        if let zshStart {
+            let tail = script[zshStart.upperBound...]
+            let zshEnd = tail.range(of: "\nZSH")
+            #expect(
+                zshEnd != nil,
+                "the zsh fragment heredoc must terminate with a bare `ZSH` line — re-derive this pin (issue #414)"
+            )
+            if let zshEnd {
+                let zshFragment = tail[..<zshEnd.lowerBound]
+                #expect(
+                    zshFragment.contains("add-zsh-hook precmd _vvterm_repro_osc"),
+                    "the zsh fragment must install the precmd OSC hook — zsh ignores bash PS1 escapes (issue #414)"
+                )
+                #expect(
+                    !zshFragment.contains("PS1="),
+                    "the zsh fragment must not carry the bash PS1 line — zsh prints `\\[ \\e \\a` literally (issue #414)"
+                )
+                #expect(
+                    zshFragment.contains("${HOST:-}"),
+                    "the zsh fragment must use zsh's `HOST` (bash's `HOSTNAME` is empty in zsh) (issue #414)"
+                )
+            }
+        }
+        #expect(
+            script.contains(#"PS1=\"\[\e]0;DEV199_READY_1\a\]"#),
+            "the bash fragment must keep its PS1 OSC marker byte-for-byte — the CI runner's login shell is bash (issue #414)"
+        )
+        #expect(
+            script.contains("*.zshrc|*.zprofile) FRAGMENT=\"$TITLE_FRAGMENT_ZSH\""),
+            "the installer must pick the zsh fragment for .zshrc/.zprofile and the bash fragment for the other rc files (issue #414)"
+        )
+        let gates = script.components(separatedBy: "if [ \"$INSTALL_RC\" -eq 1 ]; then").count - 1
+        #expect(
+            gates == 2,
+            "both the fragment append and the ~/bin helper writes must sit behind the INSTALL_RC gate (CI or VVTERM_REPRO_RC=1) — found \(gates) (issue #414)"
+        )
+        #expect(
+            script.contains("VVTERM_REPRO_RC"),
+            "the install must be opt-in off CI (`VVTERM_REPRO_RC=1`) so a local run cannot silently modify real dotfiles (issue #414)"
         )
     }
 

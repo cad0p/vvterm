@@ -12,8 +12,12 @@
 #   --restart   kill any running rig sshd/dropbear and re-provision from scratch
 #
 # Env:
-#   REPRO_DIR   fixture directory (default $RUNNER_TEMP/vvterm-repro)
-#   SSH_PORT    sshd port (22232)
+#   REPRO_DIR       fixture directory (default $RUNNER_TEMP/vvterm-repro)
+#   SSH_PORT        sshd port (22232)
+#   VVTERM_REPRO_RC dev machines only: set to 1 to install the login-shell
+#                   fragment and ~/bin/x,z into your real dotfiles (off CI the
+#                   install is skipped by default; a gated run still removes a
+#                   fragment left by an earlier install)
 set -euo pipefail
 
 REPRO_DIR="${REPRO_DIR:-${RUNNER_TEMP:-/tmp}/vvterm-repro}"
@@ -173,6 +177,7 @@ fi
 # Note: the auto-attach fragment is NOT armed yet (no flag file), so the
 # smoke sees a plain login shell.
 SMOKE_OUT="$(ssh -p "$SSH_PORT" -i "$REPRO_DIR/client_key" \
+  -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -o ConnectTimeout=10 -o LogLevel=ERROR \
   "$USERNAME@127.0.0.1" 'echo SSH_SMOKE_OK; echo shell=$SHELL; uname -s' 2>&1)"
@@ -214,6 +219,32 @@ if [ -t 1 ]; then
 fi
 # <<< vvterm-repro-title"
 
+# zsh does not understand bash's PS1 `\[ \] \e \a` escapes: it prints them
+# literally and emits no OSC, so the title/cwd waits time out. zsh rc files get
+# a precmd hook emitting OSC 0/7 instead of the PS1 prefix; `${HOST:-}` because
+# zsh sets HOST, not bash's HOSTNAME.
+TITLE_FRAGMENT_ZSH="${TITLE_FRAGMENT%  PS1=*}"
+TITLE_FRAGMENT_ZSH+="$(cat <<'ZSH'
+  _vvterm_repro_osc() { printf '\e]0;DEV199_READY_1\a'; printf '\e]7;file://%s%s\a' "${HOST:-}" "$(pwd)"; }
+  autoload -Uz add-zsh-hook 2>/dev/null
+  add-zsh-hook precmd _vvterm_repro_osc 2>/dev/null
+  _vvterm_repro_osc
+fi
+# <<< vvterm-repro-title
+ZSH
+)"
+
+# CI runners are disposable, so the fragment is installed by default there. On
+# a dev machine the same install would append to real dotfiles, so it is gated
+# behind an explicit VVTERM_REPRO_RC=1 opt-in; a gated run still removes a
+# fragment left by an earlier install (the removal below is independent).
+if [ -n "${CI:-}" ] || [ -n "${RUNNER_TEMP:-}" ] || [ "${VVTERM_REPRO_RC:-0}" = "1" ]; then
+  INSTALL_RC=1
+else
+  INSTALL_RC=0
+  echo "::warning::no CI env and VVTERM_REPRO_RC!=1: skipping the login-shell fragment and ~/bin/x,z install (they would modify real dotfiles); re-run with VVTERM_REPRO_RC=1 to provision a dev machine, then remove the 'vvterm-repro-title' marker blocks and ~/bin/{x,z} when done"
+fi
+
 for RC in "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zprofile"; do
   if [ -f "$RC" ] && grep -q "vvterm-repro-title" "$RC"; then
     python3 - "$RC" <<'PY'
@@ -232,15 +263,25 @@ for line in lines:
         out.append(line)
 open(path, "w").writelines(out)
 PY
+    echo "removed the previous vvterm-repro-title fragment from $RC"
   fi
-  printf '\n%s\n' "$TITLE_FRAGMENT" >> "$RC"
-  echo "title fragment appended to $RC"
+  if [ "$INSTALL_RC" -eq 1 ]; then
+    case "$RC" in
+      *.zshrc|*.zprofile) FRAGMENT="$TITLE_FRAGMENT_ZSH" ;;
+      *) FRAGMENT="$TITLE_FRAGMENT" ;;
+    esac
+    printf '\n%s\n' "$FRAGMENT" >> "$RC"
+    echo "title fragment appended to $RC"
+  fi
 done
 
 # --- key-command markers ------------------------------------------------------
 # x/z are real commands (the tests type x<N>/z + Enter). The scripts emit an
 # OSC 0 title marker and an OSC 7 cwd update directly so the app's stream
 # parsers see the new directory.
+# The helper scripts only make sense with the fragment that puts ~/bin on
+# PATH, so they share its install gate (heredocs stay unindented).
+if [ "$INSTALL_RC" -eq 1 ]; then
 mkdir -p "$HOME/bin"
 cat > "$HOME/bin/x" <<'XEOF'
 #!/bin/bash
@@ -267,6 +308,7 @@ exit 0
 ZEOF
 chmod +x "$HOME/bin/x" "$HOME/bin/z"
 echo "key-command scripts written to $HOME/bin"
+fi
 
 # --- fixture env ------------------------------------------------------------
 PRIVATE_KEY_B64="$(base64 < "$REPRO_DIR/client_key" | tr -d '\n')"
