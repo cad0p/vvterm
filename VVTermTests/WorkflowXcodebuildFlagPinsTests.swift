@@ -74,30 +74,38 @@
 //
 //  Pin 5 (issue #420): the `build` job used to tar Build/Products together
 //  with Build/Intermediates.noindex, a ~177 MiB dead weight once every
-//  consumer moved to `test-without-building` (#416). The trim has two
+//  consumer moved to `test-without-building` (#416). The trim has three
 //  silent-revert failure modes worth pinning: re-adding the intermediates
-//  operand (the artifact balloons again, no test reds) and dropping an
-//  `--exclude` or the operand (the artifact silently loses the .xctestrun
-//  manifest, so every consumer's `find …/Products -name '*.xctestrun'`
-//  resolves empty). A1–A3 bind the `Archive build products` step's run body
-//  (one `tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz"` invocation, sole file
-//  operand `Products`, exactly the two measured `--exclude` patterns); A4
-//  is a raw-text scan (the existing helpers strip comments and would make
-//  it vacuous): the build-once-fanout header bullet names `Build/Products`
-//  and not `Build/Intermediates.noindex`, and the step-comment region is
-//  non-empty, names `Products` (positive control against an emptied
-//  comment), and contains none of the stale `still included` / `follow-up`
-//  / `#416` shapes. The premise — every consumer runs
-//  `test-without-building` — is NOT asserted here; it is owned by
+//  operand (the artifact balloons again, no test reds), dropping an
+//  `--exclude` (the artifact silently regains the link-time objects), and
+//  swapping the operand for `Products/Debug-iphonesimulator` (the artifact
+//  silently loses the .xctestrun manifest, so every consumer's
+//  `find …/Products -name '*.xctestrun'` resolves empty). A1–A3 bind the
+//  `Archive build products` step's run body (exactly one line whose first
+//  shell token is `tar`, and it is the pinned
+//  `tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz"` invocation; sole file
+//  operand `Products`; exactly the two measured `--exclude` patterns; and
+//  both `--exclude` flags before the operand — the order bsdtar 3.5.3
+//  requires, added in fold round 1 because the prior message asserted it
+//  without binding it); A4 is a raw-text scan (the existing helpers strip
+//  comments and would make it vacuous): the whole contiguous
+//  build-once-fanout bullet block names `Build/Products` and never
+//  `Build/Intermediates.noindex`, and the step-comment region is non-empty,
+//  names `Products` (positive control against an emptied comment), and
+//  contains none of the stale `still included` / `follow-up` / `#416`
+//  shapes. The premise — every consumer runs `test-without-building` — is
+//  NOT asserted here; it is owned by
 //  `testTheDebugTestJobInvokesXcodebuildWithAnAcceptedDiagnosticValue`,
 //  `testTheUITestStepDelegatesToTheScriptAndStaysSmall` (the ui-tests job
 //  delegates to `scripts/ci/run-ui-tests.sh`, whose invocation the pin
 //  reads) and Pin 4. Defeat list: this is a text consistency lock — a
-//  coherent edit of the tar command *and* the pin passes; it cannot see a
-//  future bundle that starts shipping a nested `.o`/`.swiftmodule` (the
-//  patterns are unanchored and `*` crosses `/`, so they would drop it; the
-//  consumer run is that oracle); and it does not re-derive what
-//  `test-without-building` needs at runtime.
+//  coherent edit of the tar command *and* the pin passes; a second `tar`
+//  line is caught only when its own first token is `tar` (an alias,
+//  function or assembled command is not); it cannot see a future bundle
+//  that starts shipping a nested `.o`/`.swiftmodule` (the patterns are
+//  unanchored and `*` crosses `/`, so they would drop it; the consumer run
+//  is that oracle); and it does not re-derive what `test-without-building`
+//  needs at runtime.
 //
 //  FORMATTING HEURISTIC, NOT A PROOF: these pins parse the workflow and script
 //  as text. A real YAML parse would be sounder, but a YAML toolchain (`yq`/`jq`)
@@ -807,10 +815,10 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// must tar only the runtime products (`Products`) minus the top-level
     /// link-time `.o`/`.swiftmodule` artifacts — not `Intermediates.noindex`,
     /// which no consumer reads since every consumer runs
-    /// `test-without-building` (#416). A re-added intermediates operand or a
-    /// dropped `--exclude`/operand is silent in the test phase, and the prose
-    /// assertions keep the step's own rationale from re-describing the
-    /// removed tree (a no-regression lock, not a fix).
+    /// `test-without-building` (#416). A re-added intermediates operand, a
+    /// dropped `--exclude`, or a wrong operand is silent in the test phase,
+    /// and the prose assertions keep the step's own rationale from
+    /// re-describing the removed tree (a no-regression lock, not a fix).
     @Test
     func testTheBuildArchiveTarsOnlyTheRuntimeProducts() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
@@ -834,30 +842,37 @@ struct WorkflowXcodebuildFlagPinsTests {
             "the `\(stepName)` step must keep exactly one step-level `run:` key and stay a `run: |` literal block scalar (not an inline/folded scalar or a duplicate/decoy `run:` key) so #420's tar pins read the body GitHub actually runs — re-derive this pin"
         )
 
-        // A1 (continuations joined): exactly one tar invocation.
+        // A1 (continuations joined): exactly one line whose first shell
+        // token is `tar`, and it must be the pinned invocation. Counting the
+        // exact `tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz"` substring would
+        // miss a second, differently-spelled `tar` line (e.g. `tar czf …`)
+        // that overwrites the archive at run time and is invisible to A2/A3.
         let codeLines = body.components(separatedBy: "\n").map(Self.cuttingLineComment)
         let joinedBody = codeLines.joined(separator: "\n")
             .replacingOccurrences(of: "\\\n", with: " ")
-        let tarInvocations = joinedBody.components(separatedBy: "\n").filter {
-            $0.contains(#"tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz""#)
+        let tarLines = joinedBody.components(separatedBy: "\n").filter {
+            Self.shellWords($0).first == "tar"
         }
         #expect(
-            tarInvocations.count == 1,
-            "the `\(stepName)` run body must contain exactly one `tar -czf \"$RUNNER_TEMP/vvterm-build.tar.gz\"` invocation (backslash continuations joined), found \(tarInvocations.count) — re-derive this pin (issue #420)"
+            tarLines.count == 1,
+            "the `\(stepName)` run body must contain exactly one line whose first shell token is `tar` (backslash continuations joined), found \(tarLines.count): \(tarLines.map { $0.trimmingCharacters(in: .whitespaces) }) — a second `tar` line with any spelling overwrites $RUNNER_TEMP/vvterm-build.tar.gz while the operand/exclude assertions still read the first — re-derive this pin (issue #420)"
         )
-        let tarCommand = tarInvocations.first?.trimmingCharacters(in: .whitespaces) ?? ""
-        let tokens = Self.shellWords(tarCommand)
+        let tarCommand = tarLines.first?.trimmingCharacters(in: .whitespaces) ?? ""
         #expect(
-            tokens.first == "tar",
-            "the `\(stepName)` invocation must be a `tar` command (found `\(tokens.first ?? "<none>")`) — re-derive this pin (issue #420)"
+            tarCommand.contains(#"tar -czf "$RUNNER_TEMP/vvterm-build.tar.gz""#),
+            "the `\(stepName)` run body's single `tar` line must be the pinned `tar -czf \"$RUNNER_TEMP/vvterm-build.tar.gz\"` invocation (found `\(tarCommand)`) — re-derive this pin (issue #420)"
         )
+        let tokens = Self.shellWords(tarCommand)
 
         var excluded: [String] = []
         var operands: [String] = []
+        var firstOperandIndex: Int?
+        var lastExcludeIndex: Int?
         var tokenIndex = 1
         while tokenIndex < tokens.count {
             let token = tokens[tokenIndex]
             if token == "--exclude" {
+                lastExcludeIndex = tokenIndex
                 if tokenIndex + 1 < tokens.count { excluded.append(tokens[tokenIndex + 1]) }
                 tokenIndex += 2
                 continue
@@ -870,9 +885,27 @@ struct WorkflowXcodebuildFlagPinsTests {
                 tokenIndex += 1
                 continue
             }
+            if firstOperandIndex == nil { firstOperandIndex = tokenIndex }
             operands.append(token)
             tokenIndex += 1
         }
+
+        // A3 order (fold round 1, impl lens 1): both `--exclude` flags must
+        // precede the `Products` operand. The prior failure message claimed
+        // this but never bound it, so the reversed (bsdtar-rejected) order
+        // stayed green.
+        let firstOperandTokenIndex = try #require(
+            firstOperandIndex,
+            "the `\(stepName)` invocation must carry the `Products` file operand for the flag-order assertion — re-derive this pin (issue #420)"
+        )
+        let lastExcludeTokenIndex = try #require(
+            lastExcludeIndex,
+            "the `\(stepName)` invocation must carry an `--exclude` flag for the flag-order assertion — re-derive this pin (issue #420)"
+        )
+        #expect(
+            lastExcludeTokenIndex < firstOperandTokenIndex,
+            "the `\(stepName)` tar invocation must place both `--exclude` flags before the `Products` operand (last `--exclude` at token \(lastExcludeTokenIndex), first operand at token \(firstOperandTokenIndex)): bsdtar 3.5.3 exits 1 with `tar: --exclude: Cannot stat` when `--exclude` follows an operand — re-derive this pin (issue #420)"
+        )
 
         // A2: the sole file operand is `Products`, and the removed directory
         // is not named in the invocation. `Products/Debug-iphonesimulator` as
@@ -888,8 +921,9 @@ struct WorkflowXcodebuildFlagPinsTests {
         )
 
         // A3: exactly the two measured `--exclude` patterns, and no other.
-        // Order is pinned with the operand because bsdtar rejects `--exclude`
-        // after the operand (measured on bsdtar 3.5.3).
+        // Compared as a set: the exclude-to-exclude order is semantically
+        // irrelevant; the flag-before-operand order is the real constraint
+        // and is asserted above.
         let expectedExcludes = [
             "Products/Debug-iphonesimulator/*.o",
             "Products/Debug-iphonesimulator/*.swiftmodule",
@@ -900,13 +934,15 @@ struct WorkflowXcodebuildFlagPinsTests {
             "the `\(stepName)` tar invocation must carry exactly two `--exclude` flags (the top-level link-time `.o` and `.swiftmodule` patterns), found \(excludeFlags.count) — re-derive this pin (issue #420)"
         )
         #expect(
-            excluded == expectedExcludes,
-            "the `\(stepName)` tar invocation must exclude exactly \(expectedExcludes), found \(excluded): both flags must precede the `Products` operand because bsdtar rejects `--exclude` after an operand — re-derive this pin (issue #420)"
+            Set(excluded) == Set(expectedExcludes),
+            "the `\(stepName)` tar invocation must exclude exactly \(expectedExcludes) as a set, found \(excluded) — re-derive this pin (issue #420)"
         )
 
         // A4 (raw text, comments kept — the existing helpers strip comments and
-        // would make the prose assertions vacuous). The build-once-fanout
-        // header bullet must name `Build/Products` and not
+        // would make the prose assertions vacuous). The whole contiguous
+        // build-once-fanout bullet block (every comment line from the first
+        // bullet to the first non-comment line, not just the first bullet,
+        // fold round 1 / impl lens 1) must name `Build/Products` and never
         // `Build/Intermediates.noindex`; the step-comment region must be
         // non-empty, name `Products` (positive control against an emptied
         // comment), and carry none of the stale shapes.
@@ -915,28 +951,26 @@ struct WorkflowXcodebuildFlagPinsTests {
             rawLines.firstIndex { $0.contains("Build-once-fanout architecture:") },
             "\(workflowPath) must keep the `Build-once-fanout architecture:` header comment — re-derive this pin (issue #420)"
         )
-        var headerBullet: [String] = []
+        var headerBlock: [String] = []
         var headerProbe = fanoutHeader + 1
         while headerProbe < rawLines.count,
               !rawLines[headerProbe].trimmingCharacters(in: .whitespaces).hasPrefix("#   - ") {
             headerProbe += 1
         }
         while headerProbe < rawLines.count {
-            let line = rawLines[headerProbe]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = rawLines[headerProbe].trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("#") else { break }
-            if !headerBullet.isEmpty, trimmed.hasPrefix("#   - ") { break }
-            headerBullet.append(line)
+            headerBlock.append(rawLines[headerProbe])
             headerProbe += 1
         }
-        let headerBulletText = headerBullet.joined(separator: "\n")
+        let headerBulletText = headerBlock.joined(separator: "\n")
         #expect(
             headerBulletText.contains("Build/Products"),
-            "the build-once-fanout header bullet must name `Build/Products` (the artifact's only directory) — re-derive this pin (issue #420)"
+            "the build-once-fanout header bullet block must name `Build/Products` (the artifact's only directory) — re-derive this pin (issue #420)"
         )
         #expect(
             !headerBulletText.contains("Build/Intermediates.noindex"),
-            "the build-once-fanout header bullet must not name `Build/Intermediates.noindex` (removed in #420) — re-derive this pin (issue #420)"
+            "no bullet in the build-once-fanout header block may name `Build/Intermediates.noindex` (removed in #420) — a later bullet or a decoy first bullet otherwise hides the stale shape — re-derive this pin (issue #420)"
         )
 
         var commentRegion: [String] = []
@@ -959,7 +993,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         for staleShape in ["still included", "follow-up", "#416"] {
             #expect(
                 !commentText.contains(staleShape),
-                "the `\(stepName)` step comment must not contain the stale shape `\(staleShape)`: the comment describes only what ships now (#420 provenance is allowed; #416 and the removed-directory rationale are not) — re-derive this pin (issue #420)"
+                "the `\(stepName)` step comment must not contain the stale shape `\(staleShape)`: the comment describes only what ships now (#420 provenance is allowed; #416 and the removed-directory rationale are not) — re-derive this pin if the citation is intentional (issue #420)"
             )
         }
     }

@@ -398,7 +398,7 @@ jobs:
     # compiles (`test-without-building` off the artifact). Floor = base job
     # wall − the 285.7s compile window: 915s fast base ≈ 10m29s, 976s slow
     # base ≈ 11m30s. On top: artifact download/extract + Metal toolchain
-    # (≈47s: 23+6+18 before #420; after-numbers pending the #420 PR run),
+    # (≈47s: 23+6+18 before #420; ≈28s: 7+1+20 after),
     # bounded simulator pre-boot 80s, then the suite. The
     # graded run (run 37802047854) measured 613s (10m13s) wall / 378s test
     # step — 16s under the fast-base floor, so that floor is conservative.
