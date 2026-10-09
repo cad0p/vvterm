@@ -4556,7 +4556,7 @@ actor SSHSession {
     ) async throws {
         let identityMaterial: TeleportAgentIdentityMaterial
         do {
-            identityMaterial = try TeleportAgentIdentity.make(
+            identityMaterial = try await TeleportAgentIdentity.make(
                 certPEM: String(decoding: material.certData, as: UTF8.self),
                 privateKeyPEM: material.keyData
             )
