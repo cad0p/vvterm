@@ -151,13 +151,20 @@ runs:
 
     - name: Write cache provenance marker
       # Fail-safe write of the marker the next run reads: <ImageVersion>|<osBuild>.
-      # `mkdir -p` is required because the cold path has no DerivedData yet
-      # (measured: the write fails without it), and the redirect is guarded
-      # so a failed write cannot red the job; the next run then logs
-      # `unknown` instead of a false `same`.
+      # `rm -f` runs first: on a restore the tree already carries the previous
+      # run's marker, and a failed write must not leave that stale marker for
+      # the irgaly post step to re-save (a later run could then read it as a
+      # false `same`). `mkdir -p` is required because the cold path has no
+      # DerivedData yet (measured: the write fails without it). All three
+      # lines are guarded so none can red the job; when the removal succeeded
+      # and the write failed, the marker is absent and the next run logs
+      # `unknown` instead of a stale `same`. An unwritable cache root stays a
+      # residual: the removal cannot fix it, so a restored stale marker can
+      # still be re-saved there.
       shell: bash
       run: |
-        mkdir -p "$RUNNER_TEMP/DerivedData"
+        rm -f "$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance" 2>/dev/null || true
+        mkdir -p "$RUNNER_TEMP/DerivedData" 2>/dev/null || true
         printf '%s|%s\n' "${ImageVersion:-unknown}" "$(sw_vers -buildVersion)" > "$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance" 2>/dev/null || echo "marker write skipped"
 
     - name: Clear stale PCM module cache
