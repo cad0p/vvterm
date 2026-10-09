@@ -24,8 +24,11 @@
 //  Pinned properties (plan v3 §3.5):
 //    A1 (order): exactly one source-mtime restore step, irgaly cache step,
 //       provenance/restore-completeness step, marker-write step, PCM-clear
-//       step and Metal step, in that order. Mutation reds: deleting the
-//       provenance step, moving it before the cache step.
+//       step and Metal step, in that order, each resolving to a *distinct*
+//       step: merging the read step and the write step fails closed (a
+//       write executed before the read would make a cold cache log `same`).
+//       Mutation reds: deleting the provenance step, moving it before the
+//       cache step, merging the marker write into the provenance step.
 //    A2 (paths): the provenance step reads and the marker-write step writes
 //       the same `$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance` path.
 //    A3 (inputs): the OTA workflow's `prepare-xcode-build` step still passes
@@ -33,12 +36,17 @@
 //       prefix never matches the OTA entry).
 //    A4 (flags): the OTA archive invocation keeps its four measured flags,
 //       each exactly once (xcodebuild option parsing is last-wins).
-//    A5 (miss-safe write): `mkdir -p` + the guarded redirect
+//    A5 (miss-safe write): the stale-marker `rm -f`, the guarded `mkdir -p`
+//       (`2>/dev/null || true`) and the guarded redirect
 //       (`2>/dev/null || echo "marker write skipped"`).
 //    A6 (miss-safe probes): the `.o` probe guarded by the `Build/` directory
-//       test with a cold `absent` branch, the `find | head -1` pipeline
-//       carrying the measured `|| true` SIGPIPE guard, and the sdkstatcache
-//       `stat` guarded (`compgen -G` + `2>/dev/null || true`).
+//       test with a cold `absent` branch, the full `.o` count payload
+//       (`find … -type f -name '*.o' | wc -l`), the `find | head -1`
+//       pipeline carrying the measured `|| true` SIGPIPE guard, the
+//       sdkstatcache `stat` guarded (`compgen -G` + `2>/dev/null || true`),
+//       and the remaining guard idioms (`sw_vers`, `imagedata.json` `cat`,
+//       `xcodebuild -version -sdk iphoneos`, the marker `head -1`, the
+//       `[[ -f "$marker" ]]` condition).
 //    A7 (id + datum): the irgaly step keeps `id: xcode-cache` and the
 //       provenance step echoes `steps.xcode-cache.outputs.restored-key`
 //       (without the id the echo silently degrades to an empty key).
@@ -84,6 +92,11 @@
 //  - A2 binds the two literal paths but not that no *other* path is also
 //    written; A8 binds the `same` condition line but not the surrounding
 //    branch structure.
+//  - Presence-only assertions (locked but not mutation-proven by the
+//    battery): the `.o` cold-branch `absent` echo, the A8 verdict log
+//    shapes, the A7 restored-key echo, and three of the four A4 flags
+//    (only `CODE_SIGNING_ALLOWED=NO` is mutated; the four share one count
+//    loop, so the red path is implied but not separately recorded).
 //  - The OTA flags are bound by count within the archive step, not by the
 //    xcodebuild option semantics; a flag moved into another step would red.
 //  - The scanner is a text heuristic: an indented or flow-style `runs:` /
@@ -112,7 +125,7 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     // MARK: - Tests
 
     /// A1: the diagnostic lands between the cache restore and the PCM clear,
-    /// and each stage exists exactly once, in the pinned order.
+    /// each stage exists exactly once as a distinct step, in the pinned order.
     @Test
     func testCompositeStepOrderIsPinned() throws {
         let steps = try Self.compositeSteps()
@@ -133,6 +146,14 @@ struct WorkflowPrepareXcodeBuildPinsTests {
             the composite step order must be source-mtime restore -> irgaly cache -> \
             provenance/probe -> marker write -> PCM clear -> Metal toolchain (issue #109); \
             found \(found)
+            """
+        )
+        #expect(
+            Set(order).count == order.count,
+            """
+            the six pipeline stages must resolve to six distinct steps (found \(found)); \
+            merging the provenance/read step with the marker-write step fails closed: a \
+            write executed before the read would make a cold cache log `same` (issue #109)
             """
         )
     }
@@ -161,12 +182,12 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         let prepare = steps[try Self.stepIndex(containing: "uses: ./.github/actions/prepare-xcode-build", in: steps, label: "OTA prepare-xcode-build step")]
 
         #expect(
-            prepare.text.contains("deriveddata-key-prefix: xcode27-ota-deriveddata"),
-            "the ota-archive prepare step must pass `deriveddata-key-prefix: xcode27-ota-deriveddata` (issue #109)"
+            Self.hasLine(prepare, equalTo: "deriveddata-key-prefix: xcode27-ota-deriveddata"),
+            "the ota-archive prepare step must pass exactly `deriveddata-key-prefix: xcode27-ota-deriveddata`; a suffix such as `-ct` silently widens the prefix and restores the Debug/simulator entries (issue #109)"
         )
         #expect(
-            prepare.text.contains("deriveddata-restore-keys: xcode27-ota-deriveddata-"),
-            "the ota-archive prepare step must pass `deriveddata-restore-keys: xcode27-ota-deriveddata-`; the Debug/simulator prefix never matches the OTA entry (issue #109)"
+            Self.hasLine(prepare, equalTo: "deriveddata-restore-keys: xcode27-ota-deriveddata-"),
+            "the ota-archive prepare step must pass exactly `deriveddata-restore-keys: xcode27-ota-deriveddata-`; a suffix such as `-ct-` never matches the OTA entries and the arm stays cold forever (issue #109)"
         )
     }
 
@@ -206,6 +227,11 @@ struct WorkflowPrepareXcodeBuildPinsTests {
             provenance.text.contains(#"if [[ -d "$RUNNER_TEMP/DerivedData/Build" ]]; then"#),
             "the `.o` restore-completeness probe must be guarded by the `Build/` directory test so a cold cache cannot red the job (issue #109)"
         )
+        let countCommand = "echo \"restored-object-count: $(find \"$RUNNER_TEMP/DerivedData/Build\" -type f -name '*.o' | wc -l | tr -d ' ')\""
+        #expect(
+            Self.hasLine(provenance, equalTo: countCommand),
+            "the restore-completeness count must stay the full `find \"$RUNNER_TEMP/DerivedData/Build\" -type f -name '*.o' | wc -l` payload; a loosened pattern would make the datum meaningless (issue #109)"
+        )
         #expect(
             provenance.text.contains(#"echo "restored-object-count: absent""#),
             "the `.o` probe must log `restored-object-count: absent` on the cold path instead of failing (issue #109)"
@@ -223,12 +249,36 @@ struct WorkflowPrepareXcodeBuildPinsTests {
             "the sdkstatcache `stat` must be non-fatal (`2>/dev/null || true`) so a missing file cannot red the job (issue #109)"
         )
         #expect(
-            markerWrite.text.contains(#"mkdir -p "$RUNNER_TEMP/DerivedData""#),
-            "the marker write must `mkdir -p` first; the cold path has no DerivedData and the write fails without it (measured, issue #109)"
+            Self.hasLine(markerWrite, equalTo: #"rm -f "$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance" 2>/dev/null || true"#),
+            "the marker write must `rm -f` the stale restored marker first; without it a failed write leaves the old marker for the irgaly post step to re-save and a later run can read it as a false `same` (issue #109)"
+        )
+        #expect(
+            Self.hasLine(markerWrite, equalTo: #"mkdir -p "$RUNNER_TEMP/DerivedData" 2>/dev/null || true"#),
+            "the marker write must `mkdir -p` the cache root guarded (`2>/dev/null || true`); the cold path has no DerivedData and an unwritable root must not red the job (measured, issue #109)"
         )
         #expect(
             markerWrite.text.contains(#"2>/dev/null || echo "marker write skipped""#),
             "the marker redirect must be guarded with `2>/dev/null || echo \"marker write skipped\"` so a failed write cannot red the job (issue #109)"
+        )
+        #expect(
+            provenance.text.contains("now_build=\"$(sw_vers -buildVersion 2>/dev/null || true)\""),
+            "the `sw_vers` image-build probe must stay guarded (`2>/dev/null || true`): a failing `sw_vers` must not red the job (issue #109)"
+        )
+        #expect(
+            provenance.text.contains("cat \"$HOME/imagedata.json\" 2>/dev/null || echo \"imagedata.json: unreadable\""),
+            "the `imagedata.json` dump must stay guarded (`2>/dev/null || echo`): an unreadable file must not red the job (issue #109)"
+        )
+        #expect(
+            provenance.text.contains("xcodebuild -version -sdk iphoneos 2>/dev/null || echo \"xcodebuild -version -sdk iphoneos unavailable\""),
+            "the `xcodebuild -version -sdk iphoneos` probe must stay guarded: a missing SDK must not red the job (issue #109)"
+        )
+        #expect(
+            provenance.text.contains("saved=\"$(head -1 \"$marker\" 2>/dev/null || true)\""),
+            "the marker read must stay guarded (`head -1 … 2>/dev/null || true`): an unreadable marker must not red the job (issue #109)"
+        )
+        #expect(
+            provenance.text.contains("if [[ -f \"$marker\" ]]; then"),
+            "the marker read must keep its `[[ -f \"$marker\" ]]` condition so a missing marker logs `unknown` instead of an empty-`cross` read (issue #109)"
         )
     }
 
@@ -242,8 +292,8 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         let provenance = steps[try Self.stepIndex(containing: "restored-object-count:", in: steps, label: "provenance/restore-completeness probe")]
 
         #expect(
-            cache.text.contains("id: xcode-cache"),
-            "the irgaly cache step must keep `id: xcode-cache`; without it the provenance step's `steps.xcode-cache.outputs.restored-key` echo silently prints an empty key (issue #109)"
+            Self.hasLine(cache, equalTo: "id: xcode-cache"),
+            "the irgaly cache step must keep exactly `id: xcode-cache`; without it the provenance step's `steps.xcode-cache.outputs.restored-key` echo silently prints an empty key, and a suffix (`id: xcode-cache-v2`) breaks that resolution the same way (issue #109)"
         )
         #expect(
             provenance.text.contains("${{ steps.xcode-cache.outputs.restored-key }}"),
@@ -279,6 +329,12 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         let lines: [String]
 
         var text: String { lines.joined(separator: "\n") }
+    }
+
+    /// True when the block contains `exact` as a whole trimmed line — the
+    /// full-scalar bind a suffix rename (`…-ct`, `…-v2`) must fail.
+    private static func hasLine(_ block: StepBlock, equalTo exact: String) -> Bool {
+        block.lines.contains { $0.trimmingCharacters(in: .whitespaces) == exact }
     }
 
     private struct PinFailure: Error, CustomStringConvertible {
