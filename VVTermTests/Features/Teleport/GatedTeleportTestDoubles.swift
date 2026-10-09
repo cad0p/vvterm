@@ -585,7 +585,7 @@ final class GatedTeleportCredentialStore: TeleportCredentialStore {
             for waiter in waiters { waiter.resume() }
             await snapshotGate.wait()
         }
-        return await underlying.liveCredentialSnapshot(for: clusterId)
+        return underlying.liveCredentialSnapshot(for: clusterId)
     }
 
     func registeredCredentialID(for clusterId: UUID) async -> Data? {

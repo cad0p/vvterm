@@ -89,12 +89,13 @@ enum TeleportAgentIdentity {
     /// accept.
     ///
     /// The returned error carries case names only — never the PEM bytes.
+    ///
+    /// `async` because this factory is MainActor-isolated under the host's
+    /// default actor isolation: callers on the `SSHClient`/`SSHSession` actors
+    /// hop here by awaiting it, so the parse below is a synchronous same-actor
+    /// call (calling the factory synchronously from those actors traps off-main).
     static func make(certPEM: String, privateKeyPEM: Data) async throws -> TeleportAgentIdentityMaterial {
-        // `OpenSSHCertificate` is a MainActor-isolated package type and its
-        // parser invokes MainActor-isolated closures; this factory is called
-        // from the `SSHClient` actor, so the parse must hop to the main actor
-        // explicitly (a synchronous call traps off-main in the package).
-        guard let certificate = await OpenSSHCertificate.parse(authorizedKeysOrPEM: certPEM) else {
+        guard let certificate = OpenSSHCertificate.parse(authorizedKeysOrPEM: certPEM) else {
             throw TeleportAgentIdentityError.unreadableCertificate
         }
         let signingKey: OpenSSHEd25519PrivateKey

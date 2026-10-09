@@ -2672,7 +2672,7 @@ actor SSHSession {
         let (clusterName, clusterCAPEMs) = await MainActor.run {
             (tlsState.clusterName, tlsState.clusterCAPEMs)
         }
-        let transport = await SSHTLSTransport(
+        let transport = SSHTLSTransport(
             host: config.dialHost,
             port: config.dialPort,
             clusterName: clusterName,
