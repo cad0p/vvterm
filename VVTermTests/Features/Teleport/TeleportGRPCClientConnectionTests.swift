@@ -19,7 +19,7 @@
 //       port like 3025.
 //
 //  See:
-//    - VVTerm/Features/Teleport/Infrastructure/GRPCClient.swift (GRPCError)
+//    - swift-teleport Sources/TeleportCore/Infrastructure/GRPCClient.swift (GRPCError)
 //    - VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift (LiveTeleportGRPCClient.connect)
 //    - spike: spikes/sep-webauthn-iotest/iotest/GRPC/GRPCTransport.swift (port 443)
 //

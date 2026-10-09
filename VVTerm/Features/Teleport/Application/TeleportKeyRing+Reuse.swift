@@ -6,7 +6,7 @@
 //  The one shared reuse attempt for the add-server / row-tap entry points.
 //
 //  This is feature orchestration that spans two features
-//  (`Features/Teleport/Domain/TeleportCredentialReuse` + `Features/Servers/Domain/Server`),
+//  (`TeleportCore.TeleportCredentialReuse` + `Features/Servers/Domain/Server`),
 //  so it lives in `Features/Teleport/Application` rather than `Core/Teleport`:
 //  `Core` keeps only the `TeleportKeyRingStoring` seam protocol and its
 //  conformance, and stays feature-agnostic for the `cad0p/swift-teleport`
