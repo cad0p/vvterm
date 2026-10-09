@@ -1222,7 +1222,7 @@
 			repositoryURL = "https://github.com/cad0p/swift-teleport.git";
 			requirement = {
 				kind = exactVersion;
-				version = 0.5.1;
+				version = 0.5.2;
 			};
 		};
 		E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */ = {

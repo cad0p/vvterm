@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/cad0p/swift-teleport.git",
       "state" : {
-        "revision" : "1fad66fb68ee72b726c18d94239782bf70c2c413",
-        "version" : "0.5.1"
+        "revision" : "59dfc255ac62a6a2f6e73076eb3de677e46875dd",
+        "version" : "0.5.2"
       }
     },
     {
