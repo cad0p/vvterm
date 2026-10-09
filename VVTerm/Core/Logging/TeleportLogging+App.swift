@@ -12,6 +12,7 @@
 //
 
 import os.log
+import TeleportCore
 
 /// The host-side `TeleportLogging` adapter. Stateless; a single shared
 /// instance is injected at every production construction path.

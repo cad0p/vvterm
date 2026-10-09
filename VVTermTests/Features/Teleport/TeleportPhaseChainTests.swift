@@ -16,6 +16,8 @@
 
 import Foundation
 import Testing
+import TeleportAuth
+import TeleportCore
 @testable import VVTerm
 
 @Suite

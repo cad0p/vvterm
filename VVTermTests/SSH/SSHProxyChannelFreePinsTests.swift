@@ -11,8 +11,9 @@
 //  SSH-server/libssh2 fixture (`LoopbackTLSServerTestSupport` is TLS-only and
 //  `SSHStartupIntegrationTests` is env-gated plain SSH); no test calls
 //  `libssh2_session_init`/`libssh2_channel_open`; `proxySubsystemChannel` is
-//  private with no hook; `SSHSession.init(teleportSessionMutex:)` accepts a
-//  fake mutex but nil private state never reaches the free; and
+//  private with no hook; `SSHSession.init(teleportSessionMutex:)` takes the
+//  concrete `SessionMutex` (no fake seam) and nil private state never reaches
+//  the free; and
 //  `makeForChannel` hardcodes libssh2 on an `OpaquePointer`, so a synthetic
 //  pointer faults inside libssh2 before any assertion can run. The pump's
 //  mutual exclusion is covered behaviourally by

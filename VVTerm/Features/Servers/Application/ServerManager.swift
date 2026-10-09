@@ -3,6 +3,8 @@ import CloudKit
 import Combine
 import SwiftUI
 import os.log
+import TeleportCore
+import TeleportAuth
 
 @MainActor
 final class ServerManager: ObservableObject {

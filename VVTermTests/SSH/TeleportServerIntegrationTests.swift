@@ -24,6 +24,9 @@
 import Foundation
 import Security
 import Testing
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 struct TeleportServerIntegrationTests {

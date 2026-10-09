@@ -1,4 +1,5 @@
 import Foundation
+import TeleportCore
 
 // MARK: - Server Model (CloudKit synced)
 
@@ -122,6 +123,9 @@ struct Server: Identifiable, Codable, Hashable {
     }
 
     /// The maximum UTF-8 byte length accepted for `teleportHostLogin`.
+    ///
+    /// Documents the host seam's contract; the authoritative enforcement is
+    /// `TeleportHostLogin.normalized(_:)` in the package (same 255-byte limit).
     static let maxTeleportHostLoginBytes = 255
 
     /// Shape-validates a Teleport host login for the persist/decode seam.
@@ -133,14 +137,7 @@ struct Server: Identifiable, Codable, Hashable {
     /// control character. `@` is explicitly allowed (Teleport logins may
     /// contain it).
     static func normalizedTeleportHostLogin(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard trimmed.utf8.count <= maxTeleportHostLoginBytes else { return nil }
-        guard trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
-            return nil
-        }
-        return trimmed
+        TeleportHostLogin.normalized(raw)
     }
 
     private enum CodingKeys: String, CodingKey {

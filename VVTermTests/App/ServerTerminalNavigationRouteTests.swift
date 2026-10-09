@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import VVTerm
 
+@MainActor
 struct ServerTerminalNavigationRouteTests {
     @Test
     func connectingRouteCarriesOneStableDestinationIdentity() {

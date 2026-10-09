@@ -3,18 +3,20 @@
 //  TeleportCredentialInvalidationTests.swift
 //  VVTermTests
 //
-//  Coverage for the Teleport credential invalidation rule:
-//    - the pure policy (host change clears; same-host rename back to the
-//      credential's own user keeps; node-name/port never clears; a row with no
-//      credential is untouched);
+//  Host-only coverage for the Teleport credential invalidation wiring:
 //    - the local `updateServer` trigger;
 //    - both CloudKit merge paths (full fetch + incremental upsert);
 //    - both delete paths (`deleteServer` + the sync `removeServers`).
+//
+//  The pure policy matrix is package-covered (`TeleportPackageTests`); the
+//  host keeps the `ServerManager` wiring against the package
+//  `TeleportCredentialInvalidating` seam.
 //
 
 #if DEBUG
 import Foundation
 import Testing
+import TeleportAuth
 @testable import VVTerm
 
 /// A recording `TeleportCredentialInvalidating` fake. `credentials` maps a
@@ -40,96 +42,6 @@ final class RecordingTeleportCredentialInvalidator: TeleportCredentialInvalidati
     func clearCredential(for serverId: UUID) {
         cleared.append(serverId)
         credentials.removeValue(forKey: serverId)
-    }
-}
-
-struct TeleportCredentialInvalidationPolicyTests {
-
-    @Test
-    func noCredentialNeverClears() {
-        #expect(
-            !TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "old.example.com",
-                newHost: "new.example.com",
-                oldUsername: "pier",
-                newUsername: "deploy",
-                hasCredential: false,
-                certKeyID: "pier"
-            )
-        )
-    }
-
-    @Test
-    func hostChangeClears() {
-        #expect(
-            TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "old.example.com",
-                newHost: "new.example.com",
-                oldUsername: "pier",
-                newUsername: "pier",
-                hasCredential: true,
-                certKeyID: "pier"
-            )
-        )
-    }
-
-    @Test
-    func usernameChangeToADifferentUserClears() {
-        #expect(
-            TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "teleport.example.com",
-                newHost: "teleport.example.com",
-                oldUsername: "pier",
-                newUsername: "someone-else",
-                hasCredential: true,
-                certKeyID: "pier"
-            )
-        )
-    }
-
-    @Test
-    func usernameChangeWithNoCertClears() {
-        // A seeded record has no cert keyID; a username edit must still clear.
-        #expect(
-            TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "teleport.example.com",
-                newHost: "teleport.example.com",
-                oldUsername: "pier",
-                newUsername: "someone-else",
-                hasCredential: true,
-                certKeyID: nil
-            )
-        )
-    }
-
-    @Test
-    func sameHostRenameBackToTheCredentialsOwnUserKeeps() {
-        #expect(
-            !TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "teleport.example.com",
-                newHost: "teleport.example.com",
-                oldUsername: "typo",
-                newUsername: "pier",
-                hasCredential: true,
-                certKeyID: "pier"
-            )
-        )
-    }
-
-    @Test
-    func nodeNameOrPortChangesNeverClear() {
-        // The policy only sees host/username; a node-name or port edit leaves
-        // both unchanged.
-        #expect(
-            !TeleportCredentialInvalidationPolicy.shouldClearCredential(
-                oldHost: "teleport.example.com",
-                newHost: "teleport.example.com",
-                oldUsername: "pier",
-                newUsername: "pier",
-                hasCredential: true,
-                certKeyID: "pier"
-            )
-        )
     }
 }
 

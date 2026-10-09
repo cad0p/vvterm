@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import VVTerm
 
+@MainActor
 struct ServerConnectionModeTests {
     private func makeServer(
         connectionMode: SSHConnectionMode = .standard,

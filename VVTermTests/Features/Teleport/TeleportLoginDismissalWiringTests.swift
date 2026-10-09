@@ -22,6 +22,9 @@
 import SwiftUI
 import Combine
 import XCTest
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 @MainActor
@@ -120,12 +123,13 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
         let http = GatedTeleportHTTPClient()
         let coordinator = try makeLoginCoordinator(http: http, keyRing: store)
+        let latch = LatchRecordingLoginCoordinator(inner: coordinator)
 
         let model = LoginDismissalModel()
         let disappeared = LoginDisappearFlag()
         let host = UIHostingController(rootView: RemovableLoginHost(
             model: model,
-            coordinator: coordinator,
+            coordinator: latch,
             cluster: cluster,
             onDisappear: { disappeared.value = true }
         ))
@@ -143,7 +147,7 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         model.showsLogin = false
         XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
         XCTAssertTrue(
-            waitUntil { coordinator.isDismissalLatched },
+            waitUntil { latch.isDismissalLatched },
             "the production .onDisappear must latch the dismissal synchronously"
         )
 
@@ -151,7 +155,7 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         // the latch's generation bump must drop it. Absence needs a bound that
         // lets the MainActor run the resumed continuation, so poll with real
         // suspension (a run-loop pump does not).
-        await http.releaseLoginFinish(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureLoginFinishResponse()))
+        await http.releaseLoginFinish(index: 0, with: .success(TeleportFixtureSupport.makeFixtureLoginFinishResponse()))
         let staleWriteLanded = await waitForLoginStaleWrite(timeout: 0.5) { store.storedLoginCertCount > 0 }
         XCTAssertFalse(
             staleWriteLanded,
@@ -181,14 +185,15 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         let keyRing = makeRegisteredKeyRing(clusterId: cluster.id)
         let http = MockTeleportHTTPClient()
         http.scriptedLoginBeginResponse = MockTeleportHTTPClient.makeFixtureLoginBeginResponse()
-        http.scriptedLoginFinishResponse = MockTeleportHTTPClient.makeFixtureLoginFinishResponse()
+        http.scriptedLoginFinishResponse = TeleportFixtureSupport.makeFixtureLoginFinishResponse()
         let coordinator = try makeLoginCoordinator(http: http, keyRing: keyRing)
+        let latch = LatchRecordingLoginCoordinator(inner: coordinator)
 
         let model = LoginDismissalModel()
         let disappeared = LoginDisappearFlag()
         let host = UIHostingController(rootView: RemovableLoginHost(
             model: model,
-            coordinator: coordinator,
+            coordinator: latch,
             cluster: cluster,
             onDisappear: { disappeared.value = true }
         ))
@@ -204,7 +209,7 @@ final class TeleportLoginDismissalWiringTests: XCTestCase {
         XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
         settle()
 
-        XCTAssertFalse(coordinator.isDismissalLatched, "a .success dismissal must not latch")
+        XCTAssertFalse(latch.isDismissalLatched, "a .success dismissal must not latch")
         XCTAssertEqual(
             coordinator.state, fixtureSuccessState(),
             ".success is the hand-off state and must survive dismissal"

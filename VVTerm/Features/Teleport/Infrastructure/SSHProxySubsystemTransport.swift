@@ -59,6 +59,7 @@ import Darwin
 import Foundation
 import os.log
 import os
+import TeleportCore
 
 /// Standalone cancellation token captured by the channel I/O closures so they
 /// can observe cancellation without retaining the transport (which would be a
@@ -684,13 +685,17 @@ extension SSHProxySubsystemTransport {
     ///     caller frees the channel after the inner session is done.
     ///   - outerSession: The outer libssh2 session (used only for
     ///     `libssh2_session_last_errno` diagnostics; may be nil in tests).
-    ///   - outerSessionMutex: The mutex shared with `SSHSession` to serialize
-    ///     all outer-session libssh2 access. Required for the production path;
-    ///     pass `SessionMutex()` in tests that don't touch a real session.
+    ///   - outerSessionMutex: The host `SessionMutex` shared with `SSHSession`
+    ///     to serialize all outer-session libssh2 access. Required for the
+    ///     production path; pass `SessionMutex()` in tests that don't touch a
+    ///     real session. (The package's `TeleportSessionMutex` requirement is
+    ///     MainActor-isolated by its default isolation, so the bridge captures
+    ///     the host's nonisolated concrete lock to keep the libssh2 critical
+    ///     sections synchronous and off the main thread.)
     static func makeForChannel(
         channel: OpaquePointer,
         outerSession: OpaquePointer?,
-        outerSessionMutex: any TeleportSessionMutex
+        outerSessionMutex: SessionMutex
     ) -> SSHProxySubsystemTransport {
         // A standalone cancellation token (NOT the transport) captured by the
         // channel I/O closures. This avoids a retain cycle: the closures are
@@ -778,23 +783,68 @@ extension SSHProxySubsystemTransport {
     }
 }
 
-/// Host-side conformance: `SSHSession` stores the bridge through the
-/// package-movable `TeleportChannelTransport` seam.
-extension SSHProxySubsystemTransport: TeleportChannelTransport {}
+/// The `TeleportChannelTransport` witness the factory returns for the bridge
+/// actor.
+///
+/// The package seam protocol is global-actor-isolated by the package's default
+/// isolation, and the app target (Swift 5 + approachable concurrency) rejects
+/// an actor conforming to a global-actor-isolated protocol ("actor
+/// 'SSHProxySubsystemTransport' cannot conform to global-actor-isolated
+/// protocol 'TeleportChannelTransport'"). This `@MainActor` forwarder is the
+/// conformer instead: `start()`/`close()` are async (the package call sites
+/// already `await` them), and `cancelPumpSync()` is a synchronous,
+/// `nonisolated` pass-through so the pre-`libssh2_session_free` teardown
+/// window never suspends.
+@MainActor
+final class SSHProxySubsystemChannelTransport: TeleportChannelTransport {
+    private let inner: SSHProxySubsystemTransport
+
+    init(inner: SSHProxySubsystemTransport) {
+        self.inner = inner
+    }
+
+    func start() async throws -> Int32 {
+        try await inner.start()
+    }
+
+    func close() async {
+        await inner.close()
+    }
+
+    nonisolated func cancelPumpSync() {
+        inner.cancelPumpSync()
+    }
+}
 
 /// The live `TeleportChannelTransportFactory` over the libssh2 channel
 /// bridge. Stateless; the defaulted `SSHClient.teleportTransportFactory`
 /// value, so the seam is genuinely exercised on the production path.
 struct SSHProxySubsystemTransportFactory: TeleportChannelTransportFactory {
+    /// Explicitly `nonisolated`: the struct infers MainActor isolation from
+    /// the package's global-actor-isolated factory protocol, but `SSHClient`
+    /// (an actor) and its nonisolated `init` construct the default value
+    /// synchronously.
+    nonisolated init() {}
+
     func makeChannelTransport(
         channel: OpaquePointer,
         outerSession: OpaquePointer?,
         mutex: any TeleportSessionMutex
     ) -> any TeleportChannelTransport {
-        SSHProxySubsystemTransport.makeForChannel(
-            channel: channel,
-            outerSession: outerSession,
-            outerSessionMutex: mutex
+        // The host's only `TeleportSessionMutex` witness is `SessionMutex`
+        // (nonisolated). The package requirement is MainActor-isolated by its
+        // default isolation, so the bridge needs the concrete lock to keep the
+        // libssh2 critical sections synchronous — fail closed on any other
+        // conformer rather than silently dropping serialization.
+        guard let sessionMutex = mutex as? SessionMutex else {
+            preconditionFailure("SSHProxySubsystemTransportFactory requires the host SessionMutex")
+        }
+        return SSHProxySubsystemChannelTransport(
+            inner: SSHProxySubsystemTransport.makeForChannel(
+                channel: channel,
+                outerSession: outerSession,
+                outerSessionMutex: sessionMutex
+            )
         )
     }
 }

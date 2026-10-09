@@ -23,6 +23,8 @@
 
 import Foundation
 import SwiftUI
+import TeleportCore
+import TeleportAuth
 
 @MainActor
 final class TeleportComposition {

@@ -14,18 +14,20 @@
 #if DEBUG
 import Foundation
 import Security
+import TeleportCore
+import TeleportAuth
 @testable import VVTerm
 
 enum TeleportFixtureSupport {
 
     /// 2035-12-31T23:55:00Z — the fixture certs expire 2036-01-01T00:00:00Z.
-    static let fixtureClock = MockTeleportHTTPClient.fixtureClock
+    static let fixtureClock = Date(timeIntervalSince1970: 2_082_758_100)
 
     /// The fixture SSH public key the fixture user cert is bound to.
-    static var fixedSSHPublicKey: String { MockTeleportHTTPClient.fixedSSHPublicKey }
+    static var fixedSSHPublicKey: String { fixtureString("OpenSSH/userkey_ed25519.pub") }
 
     /// The fixture user certificate (authorized_keys line).
-    static var fixedIssuedUserCert: String { MockTeleportHTTPClient.fixedIssuedUserCert }
+    static var fixedIssuedUserCert: String { fixtureString("OpenSSH/user-cert-ed25519.pub") }
 
     /// A different fixture SSH public key (used for mismatch tests).
     static var otherSSHPublicKey: String {
@@ -44,12 +46,50 @@ enum TeleportFixtureSupport {
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    /// The fixture TLS certificate + key (`loopback-tls/server.pem|p12`).
+    /// Rebuilt host-side from the deleted `MockTeleportHTTPClient` fixture
+    /// statics (the package mock is fixture-free by design).
+    static func fixedTLSKeyPair() -> TLSKeyPair? {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/loopback-tls/server.p12")
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        var options: [String: Any] = [kSecImportExportPassphrase as String: "vvterm-test"]
+        if #available(macOS 15.0, iOS 18.0, *) {
+            options[kSecImportToMemoryOnly as String] = true
+        }
+        var items: CFArray?
+        guard SecPKCS12Import(data as CFData, options as CFDictionary, &items) == errSecSuccess,
+              let entries = items as? [[String: Any]],
+              let identity = entries.first?[kSecImportItemIdentity as String] else {
+            return nil
+        }
+        let secIdentity = identity as! SecIdentity
+        var privateKey: SecKey?
+        guard SecIdentityCopyPrivateKey(secIdentity, &privateKey) == errSecSuccess,
+              let privateKey,
+              let pem = try? fixtureString("loopback-tls/server.pem") else {
+            return nil
+        }
+        return TLSKeyPair(privateKey: privateKey, publicKeyPEM: pem)
+    }
+
+    /// `@MainActor` because `FixedTeleportSSHKeyPairGenerator`'s initializer
+    /// is MainActor-inferred from the package's global-actor-isolated
+    /// generator protocol; Xcode 27 enforces the call-site isolation.
+    @MainActor
     static func makeFixedSSHGenerator(publicKey: String = TeleportFixtureSupport.fixedSSHPublicKey) -> FixedTeleportSSHKeyPairGenerator {
         FixedTeleportSSHKeyPairGenerator(publicKey: publicKey)
     }
 
+    /// `@MainActor` for the same reason as `makeFixedSSHGenerator`
+    /// (`FixedTeleportTLSKeyPairGenerator` conforms to the package's
+    /// global-actor-isolated TLS generator protocol).
+    @MainActor
     static func makeFixedTLSGenerator() throws -> FixedTeleportTLSKeyPairGenerator {
-        guard let keyPair = MockTeleportHTTPClient.fixedTLSKeyPair() else {
+        guard let keyPair = Self.fixedTLSKeyPair() else {
             throw TeleportFixtureSupportError.tlsKeyPairUnavailable
         }
         return FixedTeleportTLSKeyPairGenerator(keyPair: keyPair)
@@ -61,6 +101,7 @@ enum TeleportFixtureSupport {
     /// is shared so the phase-chain and pin suites do not add a fifth copy.
     /// The two existing private copies are intentionally left untouched
     /// (recorded on #369, not refactored).
+    @MainActor
     static func makeBootstrapResult() throws -> TeleportBootstrapCoordinator.BootstrapResult {
         let keyPair = try makeFixedTLSGenerator().keyPair
         return TeleportBootstrapCoordinator.BootstrapResult(
@@ -81,127 +122,17 @@ enum TeleportFixtureSupport {
     /// `fixtureClock`.
     static let attemptCertValidBefore = fixtureClock.addingTimeInterval(600)
 
-    /// The authorized_keys line for a raw 32-byte ed25519 key whose decoded
-    /// `.blob` is `sshString("ssh-ed25519") + sshString(rawKey)` — the exact
-    /// blob `TeleportIssuedCertValidator` compares the issued cert against.
-    static func authorizedKeysLine(rawKey: Data, comment: String = "vvterm-attempt") -> String {
-        var blob = Data()
-        blob.append(OpenSSHCertificate.sshString(Data("ssh-ed25519".utf8)))
-        blob.append(OpenSSHCertificate.sshString(rawKey))
-        return "ssh-ed25519 \(blob.base64EncodedString()) \(comment)"
-    }
+    // MARK: - Response factories (host-owned fixture values)
 
-    /// Build a synthetic OpenSSH user certificate bound to `rawKey`, accepted
-    /// by `TeleportIssuedCertValidator` for the matching generated keypair.
-    /// Returns the bare-base64 blob form that
-    /// `OpenSSHCertificate.parse(authorizedKeysOrPEM:)` accepts; the signature
-    /// fields are placeholders (nothing verifies the CA signature locally).
-    ///
-    /// Lifted from `TeleportIssuedCertValidatorTests`' builder (which keeps its
-    /// own copy for its rejection shapes) so each attempt can be minted its own
-    /// cert.
-    static func makeSynthUserCert(
-        rawKey: Data,
-        keyID: String,
-        principals: [String] = ["alice"],
-        validAfter: Date = fixtureClock.addingTimeInterval(-60),
-        validBefore: Date = attemptCertValidBefore
-    ) -> String {
-        var blob = Data()
-        blob.append(OpenSSHCertificate.sshString(Data("ssh-ed25519-cert-v01@openssh.com".utf8)))
-        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x11, count: 32)))
-        blob.append(OpenSSHCertificate.sshString(rawKey))
-        blob.append(uint64(0))                                  // serial
-        blob.append(uint32(1))                                  // user
-        blob.append(OpenSSHCertificate.sshString(Data(keyID.utf8)))
-        var principalsBlob = Data()
-        for principal in principals {
-            principalsBlob.append(OpenSSHCertificate.sshString(Data(principal.utf8)))
-        }
-        blob.append(OpenSSHCertificate.sshString(principalsBlob))
-        blob.append(uint64(UInt64(validAfter.timeIntervalSince1970)))
-        blob.append(uint64(UInt64(validBefore.timeIntervalSince1970)))
-        blob.append(OpenSSHCertificate.sshString(Data()))       // critical options
-        blob.append(OpenSSHCertificate.sshString(Data()))       // extensions
-        blob.append(OpenSSHCertificate.sshString(Data()))       // reserved
-        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x33, count: 51)))
-        blob.append(OpenSSHCertificate.sshString(Data(repeating: 0x44, count: 64)))
-        return blob.base64EncodedString()
-    }
-
-    private static func uint32(_ value: UInt32) -> Data {
-        Data([
-            UInt8((value >> 24) & 0xFF),
-            UInt8((value >> 16) & 0xFF),
-            UInt8((value >> 8) & 0xFF),
-            UInt8(value & 0xFF),
-        ])
-    }
-
-    private static func uint64(_ value: UInt64) -> Data {
-        var data = Data()
-        for shift in stride(from: 56, through: 0, by: -8) {
-            data.append(UInt8((value >> UInt64(shift)) & 0xFF))
-        }
-        return data
-    }
-}
-
-/// A `TeleportSSHKeyPairGenerating` that returns a distinct, pre-built keypair
-/// per `generateKeyPair` call, in call order, so each coordinator attempt can
-/// be tagged with its own key/cert pair. The coordinators call it once per
-/// attempt (login/boot `begin`).
-final class AttemptTaggedSSHKeyPairGenerator: TeleportSSHKeyPairGenerating {
-    struct AttemptKeyPair {
-        let rawKey: Data
-        let publicKeyLine: String
-        let privateKeyPEM: String
-    }
-
-    let attempts: [AttemptKeyPair]
-    private var callIndex = 0
-
-    init(attemptCount: Int) {
-        precondition(attemptCount > 0, "at least one attempt is needed")
-        attempts = (0..<attemptCount).map { index in
-            let rawKey = Data(repeating: 0x40 + UInt8(index), count: 32)
-            return AttemptKeyPair(
-                rawKey: rawKey,
-                publicKeyLine: TeleportFixtureSupport.authorizedKeysLine(rawKey: rawKey),
-                privateKeyPEM: "attempt-\(index + 1)-ed25519-private-key"
-            )
-        }
-    }
-
-    func generateKeyPair(comment: String) -> (publicKey: String, privateKeyPEM: String) {
-        let pair = attempts[min(callIndex, attempts.count - 1)]
-        callIndex += 1
-        return (pair.publicKeyLine, pair.privateKeyPEM)
-    }
-}
-
-/// A per-attempt `HeadlessLoginResponse` whose cert is bound to the attempt's
-/// generated keypair and whose TLS cert matches the committed fixture TLS
-/// keypair, so the bootstrap coordinator's binding checks pass for each
-/// attempt. `validBefore`/`principals` default to the shared attempt fixture;
-/// the T1 tests pass a distinct `validBefore` per attempt so a stale attempt's
-/// terminal `.success`/`lastBootstrapResult` is distinguishable from the newer
-/// attempt's.
-extension TeleportFixtureSupport {
-    static func makeAttemptHeadlessResponse(
-        attempt: Int,
-        generator: AttemptTaggedSSHKeyPairGenerator,
-        cluster: TeleportCluster,
-        clusterName: String = "teleport.pcad.it",
-        validBefore: Date = attemptCertValidBefore,
-        principals: [String] = ["alice"]
-    ) -> HeadlessLoginResponse {
-        let certLine = makeSynthUserCert(
-            rawKey: generator.attempts[attempt].rawKey,
-            keyID: cluster.username,
-            principals: principals,
-            validBefore: validBefore
-        )
+    /// A success response whose `cert` / `tls_cert` are bound to the fixture
+    /// keypair + TLS keypair — i.e. it passes `TeleportIssuedCertValidator`
+    /// when the coordinator is driven with `fixedSSHPublicKey` /
+    /// `fixedTLSKeyPair()` and `fixtureClock`. Rebuilt host-side from the
+    /// deleted in-tree mock statics (the package mocks are fixture-free by
+    /// design).
+    @MainActor
+    static func makeFixtureSuccessResponse(clusterName: String = "teleport.pcad.it") -> HeadlessLoginResponse {
+        let certPEM = fixedIssuedUserCert
         let tlsPEM = fixtureString("loopback-tls/server.pem")
         let hostSigner = HeadlessLoginResponse.TrustedCerts(
             clusterName: clusterName,
@@ -209,31 +140,50 @@ extension TeleportFixtureSupport {
             tlsCerts: [Data(tlsPEM.utf8).base64EncodedString()]
         )
         return HeadlessLoginResponse(
-            cert: Data(certLine.utf8).base64EncodedString(),
+            cert: Data(certPEM.utf8).base64EncodedString(),
             tlsCert: Data(tlsPEM.utf8).base64EncodedString(),
             hostSigners: [hostSigner]
         )
     }
 
-    static func makeAttemptLoginFinishResponse(
-        attempt: Int,
-        generator: AttemptTaggedSSHKeyPairGenerator,
-        cluster: TeleportCluster,
-        validBefore: Date = attemptCertValidBefore,
-        principals: [String] = ["alice"]
-    ) -> LoginFinishResponse {
-        let certLine = makeSynthUserCert(
-            rawKey: generator.attempts[attempt].rawKey,
-            keyID: cluster.username,
-            principals: principals,
-            validBefore: validBefore
+    /// A `login/begin` response carrying a challenge and no explicit rpID
+    /// (falls back to the cluster's configured rpID / host).
+    @MainActor
+    static func makeFixtureLoginBeginResponse() -> LoginBeginResponse {
+        LoginBeginResponse(
+            webauthnChallenge: LoginBeginResponse.WebauthnAssertion(
+                publicKey: LoginBeginResponse.WebauthnAssertion.PublicKey(
+                    challenge: Data([1, 2, 3, 4]).hostBase64URLString,
+                    rpId: nil
+                )
+            )
         )
-        return LoginFinishResponse(cert: Data(certLine.utf8).base64EncodedString(), hostSigners: nil)
+    }
+
+    /// A `login/finish` response carrying the fixture user certificate.
+    @MainActor
+    static func makeFixtureLoginFinishResponse() -> LoginFinishResponse {
+        LoginFinishResponse(
+            cert: Data(fixedIssuedUserCert.utf8).base64EncodedString(),
+            hostSigners: nil
+        )
     }
 }
 
 enum TeleportFixtureSupportError: Error {
     case tlsKeyPairUnavailable
+}
+
+extension Data {
+    /// Unpadded base64url, matching the package's wire encoding. The package's
+    /// own helper is `package`-visibility and not importable host-side, so the
+    /// test target carries this copy.
+    var hostBase64URLString: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }
 
 /// Returns a fixed ed25519 public key (the fixture cert's subject key).

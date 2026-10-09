@@ -1,5 +1,5 @@
 {
-  "originHash" : "6d72497945e3259201298607c9e3d86f39758d8bfe19f8b905c75b5a89b1ba3c",
+  "originHash" : "da71a9d5dd76067f7cb5106d388ae677e7e7451d9bc80102335cb765f8f42cd8",
   "pins" : [
     {
       "identity" : "mlx-swift",
@@ -107,6 +107,15 @@
       "state" : {
         "revision" : "50688cacbd41d547e9eb9f7a213542340b7c442b",
         "version" : "1.7.5"
+      }
+    },
+    {
+      "identity" : "swift-teleport",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cad0p/swift-teleport.git",
+      "state" : {
+        "revision" : "59dfc255ac62a6a2f6e73076eb3de677e46875dd",
+        "version" : "0.5.2"
       }
     },
     {

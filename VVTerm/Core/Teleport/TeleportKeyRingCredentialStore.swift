@@ -22,6 +22,8 @@
 //
 
 import Foundation
+import TeleportCore
+import TeleportAuth
 
 final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked Sendable {
     // Explicit nonisolated deinit: the compiler-synthesized deinit of a
@@ -33,12 +35,17 @@ final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked 
     /// provider.
     private let keyRingProvider: @MainActor @Sendable () -> TeleportKeyRing
 
-    init(
+    /// Explicitly `nonisolated`: the class infers MainActor isolation from the
+    /// package's `TeleportCredentialStore` conformance (its requirements are
+    /// global-actor-isolated by the package's default isolation), but the
+    /// adapter is constructed as the defaulted value of `SSHClient`'s
+    /// properties from actor / nonisolated contexts, which cannot call a
+    /// MainActor-isolated initializer synchronously.
+    nonisolated init(
         keyRingProvider: @escaping @MainActor @Sendable () -> TeleportKeyRing = { TeleportKeyRingHost.shared }
     ) {
         self.keyRingProvider = keyRingProvider
     }
-
     /// The keyring this adapter resolves, on the main actor. Exposed so the
     /// seam test can assert the production default resolves the single host
     /// instance without mutating production state.

@@ -15,8 +15,11 @@
 #if DEBUG
 import Foundation
 import Testing
+import TeleportCore
+import TeleportTesting
 @testable import VVTerm
 
+@MainActor
 struct TeleportHostKeyPersistenceTests {
 
     private static let hostCA = TeleportFixtureSupport

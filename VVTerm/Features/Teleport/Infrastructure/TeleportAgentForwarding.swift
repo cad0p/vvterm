@@ -58,6 +58,7 @@
 import Foundation
 import os.log
 import os
+import TeleportCore
 
 // MARK: - Identity
 
@@ -88,7 +89,12 @@ enum TeleportAgentIdentity {
     /// accept.
     ///
     /// The returned error carries case names only — never the PEM bytes.
-    static func make(certPEM: String, privateKeyPEM: Data) throws -> TeleportAgentIdentityMaterial {
+    ///
+    /// `async` because this factory is MainActor-isolated under the host's
+    /// default actor isolation: callers on the `SSHClient`/`SSHSession` actors
+    /// hop here by awaiting it, so the parse below is a synchronous same-actor
+    /// call (calling the factory synchronously from those actors traps off-main).
+    static func make(certPEM: String, privateKeyPEM: Data) async throws -> TeleportAgentIdentityMaterial {
         guard let certificate = OpenSSHCertificate.parse(authorizedKeysOrPEM: certPEM) else {
             throw TeleportAgentIdentityError.unreadableCertificate
         }

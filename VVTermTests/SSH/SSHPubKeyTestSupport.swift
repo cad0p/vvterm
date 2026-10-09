@@ -1,28 +1,14 @@
 // SPDX-License-Identifier: MIT
 //
-//  SSHPubKey.swift
-//  SEPWebAuthn
+//  SSHPubKeyTestSupport.swift
+//  VVTermTests
 //
-//  Pure-Swift ed25519 SSH public key generation — no `ssh-keygen` / `Process`
-//  dependency, so the same code runs on macOS (CLI) and iOS (app). Used by
-//  both the session 1.5/1.6b Mac CLI and the session 1.6b Option A iOS app,
-//  so the OpenSSH wire format is provably identical across both paths.
+//  Pure-Swift ed25519 SSH public key generation for host tests — no
+//  `ssh-keygen` / `Process` dependency. Host test-support copy: the package
+//  owns the production generator as `TeleportCore.SSHPubKey`
+//  (`package`-visibility, not host-visible), so the SSH agent-forwarding and
+//  ed25519-parse suites carry this copy for their fixtures.
 //
-//  Generates a fresh Curve25519 ed25519 keypair via CryptoKit, emits the
-//  public key in OpenSSH authorized_keys format:
-//
-//      ssh-ed25519 <base64(wire)> <comment>
-//
-//  where wire = uint32_be(len("ssh-ed25519")) || "ssh-ed25519"
-//             || uint32_be(len(pubkey))      || pubkey(32 bytes)
-//
-//  The private key is discarded — the spike only POSTs the pub key to
-//  /webapi/mfa/login/finish (the cert subject). Production (session 2.2)
-//  will keep the private key for the actual SSH connection.
-//
-//  This replaces the macOS CLI's prior `Process`/`ssh-keygen` shell-out
-//  (PR #18 era) and the iOS app's duplicate `beUInt32` helper (PR #22),
-//  consolidating both into a single source of truth.
 
 import Foundation
 import CryptoKit

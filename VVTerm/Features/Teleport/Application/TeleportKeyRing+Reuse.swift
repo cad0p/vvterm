@@ -6,7 +6,7 @@
 //  The one shared reuse attempt for the add-server / row-tap entry points.
 //
 //  This is feature orchestration that spans two features
-//  (`Features/Teleport/Domain/TeleportCredentialReuse` + `Features/Servers/Domain/Server`),
+//  (`TeleportCore.TeleportCredentialReuse` + `Features/Servers/Domain/Server`),
 //  so it lives in `Features/Teleport/Application` rather than `Core/Teleport`:
 //  `Core` keeps only the `TeleportKeyRingStoring` seam protocol and its
 //  conformance, and stays feature-agnostic for the `cad0p/swift-teleport`
@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import TeleportCore
 
 extension TeleportKeyRingStoring {
     /// The one shared reuse attempt for the add-server / row-tap entry points:
@@ -31,8 +32,8 @@ extension TeleportKeyRingStoring {
     func seedReuseIfPossible(for newServer: Server, liveServers: [Server]) -> String? {
         let newClusterName = clusterTLSState(for: newServer.id)?.clusterName
         guard let source = TeleportCredentialReuse.match(
-            newServer: newServer,
-            liveServers: liveServers,
+            newRow: newServer,
+            liveRows: liveServers,
             credentials: credentials,
             clusterName: { [weak self] id in self?.clusterTLSState(for: id)?.clusterName },
             isReusable: { [weak self] id in

@@ -22,6 +22,8 @@
 
 import SwiftUI
 import Combine
+import TeleportCore
+import TeleportAuth
 
 /// The Phase 3 login sheet. Presented when a Teleport server's readiness is
 /// `needsLogin` (SEP key present, cert missing or expired).

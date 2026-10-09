@@ -274,6 +274,9 @@
 				D3F1A0003100100AB00000013 /* NIOHTTP2 */,
 				D3F1A0003100100AB00000014 /* NIOTransportServices */,
 				D3F1A0003100100AB00000015 /* SwiftProtobuf */,
+				D4E1A0003100100AB00000A11 /* TeleportCore */,
+				D4E1A0003100100AB00000A12 /* TeleportAuth */,
+				D4E1A0003100100AB00000A13 /* TeleportTesting */,
 			);
 			productName = VVTerm;
 			productReference = CC83127E2F0CD84D006804BF /* VVTerm.app */;
@@ -300,6 +303,9 @@
 			packageProductDependencies = (
 				E8A1E70031C1000100E00011 /* ETSession */,
 				D3F1A0003100100AB00000015 /* SwiftProtobuf */,
+				D4E1A0003100100AB00000A11 /* TeleportCore */,
+				D4E1A0003100100AB00000A12 /* TeleportAuth */,
+				D4E1A0003100100AB00000A13 /* TeleportTesting */,
 			);
 			productName = VVTermTests;
 			productReference = CC8312922F0CD84E006804BF /* VVTermTests.xctest */;
@@ -388,6 +394,7 @@
 				D3F1A0003100100AB00000022 /* XCRemoteSwiftPackageReference "swift-nio-http2" */,
 				D3F1A0003100100AB00000023 /* XCRemoteSwiftPackageReference "swift-nio-transport-services" */,
 				D3F1A0003100100AB00000024 /* XCRemoteSwiftPackageReference "swift-protobuf" */,
+				D4E1A0003100100AB00000A21 /* XCRemoteSwiftPackageReference "swift-teleport" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CC83127F2F0CD84D006804BF /* Products */;
@@ -1210,6 +1217,14 @@
 				minimumVersion = 1.25.0;
 			};
 		};
+		D4E1A0003100100AB00000A21 /* XCRemoteSwiftPackageReference "swift-teleport" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/cad0p/swift-teleport.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.5.2;
+			};
+		};
 		E7C4A10031BB100100C00021 /* XCRemoteSwiftPackageReference "swift-umami" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/wiedymi/swift-umami";
@@ -1288,6 +1303,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D3F1A0003100100AB00000024 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
 			productName = SwiftProtobuf;
+		};
+		D4E1A0003100100AB00000A11 /* TeleportCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D4E1A0003100100AB00000A21 /* XCRemoteSwiftPackageReference "swift-teleport" */;
+			productName = TeleportCore;
+		};
+		D4E1A0003100100AB00000A12 /* TeleportAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D4E1A0003100100AB00000A21 /* XCRemoteSwiftPackageReference "swift-teleport" */;
+			productName = TeleportAuth;
+		};
+		D4E1A0003100100AB00000A13 /* TeleportTesting */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D4E1A0003100100AB00000A21 /* XCRemoteSwiftPackageReference "swift-teleport" */;
+			productName = TeleportTesting;
 		};
 		E7C4A10031BB100100C00011 /* Umami */ = {
 			isa = XCSwiftPackageProductDependency;

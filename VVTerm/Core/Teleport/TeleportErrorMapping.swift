@@ -6,14 +6,16 @@
 //  The host-side mapping from the package-movable `TeleportPackageError`
 //  into the app error space.
 //
-//  Applied at every `SSHSession` call into package code so no
-//  `TeleportPackageError` escapes into the app's error handling: the
+//  Applied at `SSHSession`'s package-code crossing (the single production
+//  call site, `SSHClient.swift:2692`) so no `TeleportPackageError` escapes
+//  into the app's error handling: the
 //  `SSHConnectionRunner` classification (`error as? SSHError` →
 //  disconnect-before-retry) and `SSHErrorDiagnostics` rendering depend on
 //  seeing the host error type the package error replaced.
 //
 
 import Foundation
+import TeleportCore
 
 enum TeleportErrorMapping {
     /// Map any error thrown by package code into the host error space.

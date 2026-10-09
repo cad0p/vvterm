@@ -19,14 +19,16 @@
 import Foundation
 import Security
 import Testing
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 @MainActor
 struct TeleportCredentialStoreTests {
 
     private func makeIsolatedKeyRing(
-        keychainService: String = "app.vivy.vvterm.tests",
-        keychainWriter: TeleportKeyRing.Ed25519KeychainWriter? = nil
+        keychainService: String = "app.vivy.vvterm.tests"
     ) -> TeleportKeyRing {
         let suiteName = "TeleportCredentialStoreTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
@@ -36,8 +38,7 @@ struct TeleportCredentialStoreTests {
             config: TeleportKeychainConfig(
                 keychainService: keychainService,
                 defaults: defaults
-            ),
-            keychainWriter: keychainWriter
+            )
         )
     }
 
@@ -188,7 +189,7 @@ struct TeleportCredentialStoreTests {
 
         #expect(await store.registeredCredentialID(for: clusterId) == Data([1, 2, 3, 4]))
         #expect(await store.registeredUserHandle(for: clusterId) == Data("handle".utf8))
-        #expect(keyRing.credentials[clusterId]?.publicKeyRaw == Data([9, 9]).base64URLEncodedString())
+        #expect(keyRing.credentials[clusterId]?.publicKeyRaw == Data([9, 9]).hostBase64URLString)
         #expect(keyRing.credentials[clusterId]?.deviceName == "device-A")
         #expect(keyRing.credentials[clusterId]?.sshCertPEM == "second-cert")
         #expect(keyRing.credentials[clusterId]?.certValidBefore == validBefore, "the record commit writes the cert's validBefore")
@@ -334,102 +335,6 @@ struct TeleportCredentialStoreTests {
         #expect(mock.readiness(for: clusterId) == .ready)
         #expect(mock.liveCredentialSnapshot(for: clusterId)?.certPEM == "mock-pair-cert")
     }
-
-    // MARK: - T4: the keychain-write seam and the non-destructive direction
-
-    /// T4: a scripted keychain *update* failure throws the pair write and
-    /// commits neither half; the prior record and the prior key survive
-    /// (nothing was deleted). Uses a seeded prior pair so the assertion is
-    /// discriminating.
-    @Test
-    func pairWriteUpdateFailureLeavesThePriorRecordAndKeyIntact() async throws {
-        let writer = ScriptedEd25519KeychainWriter()
-        writer.item = Data("prior-key".utf8)
-        let keyRing = makeIsolatedKeyRing(keychainWriter: { try writer.write($0, clusterId: $1) })
-        let clusterId = UUID()
-        let validBefore = Date().addingTimeInterval(3600)
-        keyRing.storeBootstrapCert("prior-cert-pem", validBefore: validBefore, for: clusterId)
-        writer.script = .updateFails(errSecAuthFailed)
-
-        #expect(throws: TeleportPackageError.keychain(errSecAuthFailed)) {
-            try keyRing.storeCredentialPair(
-                "new-cert-pem",
-                validBefore: validBefore,
-                privateKeyPEM: Data("new-key".utf8),
-                policy: .bootstrap,
-                for: clusterId
-            )
-        }
-
-        #expect(writer.updateCount == 1, "the pair write reached the keychain seam")
-        #expect(writer.addCount == 0)
-        #expect(writer.item == Data("prior-key".utf8), "the failed update must not destroy the prior key")
-        #expect(keyRing.liveCertPEM(for: clusterId) == "prior-cert-pem", "the record was not committed")
-    }
-
-    /// T4: a scripted `errSecItemNotFound` update followed by a failing add
-    /// throws the pair write; the prior record is unchanged and no key is
-    /// committed (the failed add never deletes).
-    @Test
-    func pairWriteAddFailureLeavesThePriorRecordIntactAndCommitsNoKey() async throws {
-        let writer = ScriptedEd25519KeychainWriter()
-        let keyRing = makeIsolatedKeyRing(keychainWriter: { try writer.write($0, clusterId: $1) })
-        let clusterId = UUID()
-        let validBefore = Date().addingTimeInterval(3600)
-        keyRing.storeBootstrapCert("prior-cert-pem", validBefore: validBefore, for: clusterId)
-        writer.script = .addFails(errSecAuthFailed)
-
-        #expect(throws: TeleportPackageError.keychain(errSecAuthFailed)) {
-            try keyRing.storeCredentialPair(
-                "new-cert-pem",
-                validBefore: validBefore,
-                privateKeyPEM: Data("new-key".utf8),
-                policy: .bootstrap,
-                for: clusterId
-            )
-        }
-
-        #expect(writer.updateCount == 1)
-        #expect(writer.addCount == 1)
-        #expect(writer.item == nil, "the failed add must not commit a key")
-        #expect(keyRing.liveCertPEM(for: clusterId) == "prior-cert-pem", "the record was not committed")
-        #expect(keyRing.liveEd25519PrivateKey(for: clusterId) == nil)
-    }
 }
 
-/// An in-memory keychain-write model for the injectable `TeleportKeyRing`
-/// seam. It mirrors the production update-first, non-destructive direction: a
-/// scripted update failure throws without touching the item; a scripted add
-/// failure throws without deleting.
-@MainActor
-private final class ScriptedEd25519KeychainWriter {
-    enum Script {
-        case real
-        case updateFails(OSStatus)
-        case addFails(OSStatus)
-    }
-
-    var item: Data?
-    var script: Script = .real
-    private(set) var updateCount = 0
-    private(set) var addCount = 0
-
-    func write(_ pemData: Data, clusterId: UUID) throws {
-        switch script {
-        case .real:
-            updateCount += 1
-            if item == nil {
-                addCount += 1
-            }
-            item = pemData
-        case .updateFails(let status):
-            updateCount += 1
-            throw TeleportPackageError.keychain(status)
-        case .addFails(let status):
-            updateCount += 1
-            addCount += 1
-            throw TeleportPackageError.keychain(status)
-        }
-    }
-}
 #endif

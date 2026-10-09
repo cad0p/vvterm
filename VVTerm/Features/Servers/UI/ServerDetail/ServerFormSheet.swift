@@ -1,6 +1,8 @@
 import SwiftUI
 import MoshBootstrap
 import ETSession
+import TeleportCore
+import TeleportAuth
 
 enum ServerTransportSelection: String, CaseIterable, Identifiable, Equatable {
     case standard

@@ -5,10 +5,11 @@
 //
 //  Parser for the unencrypted `openssh-key-v1` ed25519 private key format
 //  (`-----BEGIN OPENSSH PRIVATE KEY-----`), the form `ssh-keygen -t ed25519`
-//  produces and `SSHPubKey.formatEd25519PrivateKeyPEM` writes for the stored
-//  Teleport key (the generation side lives in
-//  `Features/Teleport/Infrastructure/SEPWebAuthn/SSHPubKey.swift`; this is
-//  the inverse).
+//  produces and the package's `TeleportCore.SSHPubKey.formatEd25519PrivateKeyPEM`
+//  writes for the stored Teleport key (the generation side lives in the
+//  `cad0p/swift-teleport` package, `Sources/TeleportCore/Infrastructure/SEPWebAuthn/`;
+//  this is the inverse). The host test-support copy of the generator is
+//  `VVTermTests/SSH/SSHPubKeyTestSupport.swift`.
 //
 //  Why it exists: the Teleport proxy-recording path (#269) must sign the
 //  proxy's agent requests with the exact key pair whose certificate the app

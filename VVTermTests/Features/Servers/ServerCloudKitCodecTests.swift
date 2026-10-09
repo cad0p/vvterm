@@ -19,6 +19,7 @@ import Foundation
 import Testing
 @testable import VVTerm
 
+@MainActor
 struct ServerCloudKitCodecTests {
 
     private func makeServer(teleportHostLogin: String?) -> Server {

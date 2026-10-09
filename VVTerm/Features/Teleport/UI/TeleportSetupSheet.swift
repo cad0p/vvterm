@@ -22,6 +22,8 @@
 //
 
 import SwiftUI
+import TeleportCore
+import TeleportAuth
 
 /// The shared Teleport setup sheet. Renders the phase view selected by the
 /// chain and dismisses via `onFinish` when a phase completes or is cancelled.

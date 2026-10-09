@@ -319,18 +319,19 @@ struct GhosttyIsolatedDeinitPinsTests {
             swiftFiles.append((relativePath, resolvedURL))
         }
 
-        // Vacuity floor + positive control (GQ-1): 429 Swift files today, so a
+        // Vacuity floor + positive control (GQ-1): 381 Swift files today
+        // (the swift-teleport cutover moved 56 package-owned files out), so a
         // typo'd or empty scan root must fail, not pass green.
         #expect(
-            swiftFiles.count >= 400,
-            "VVTerm/: the repo-wide scan must cover at least 400 Swift files (found \(swiftFiles.count))"
+            swiftFiles.count >= 360,
+            "VVTerm/: the repo-wide scan must cover at least 360 Swift files (found \(swiftFiles.count))"
         )
         let control = Self.terminalViewFile
         #expect(
             swiftFiles.contains { $0.relativePath == control },
             "VVTerm/: the scan must include `\(control)` as a positive control"
         )
-        guard swiftFiles.count >= 400, swiftFiles.contains(where: { $0.relativePath == control }) else { return }
+        guard swiftFiles.count >= 360, swiftFiles.contains(where: { $0.relativePath == control }) else { return }
 
         var offenders: [String] = []
         for (relativePath, url) in swiftFiles {

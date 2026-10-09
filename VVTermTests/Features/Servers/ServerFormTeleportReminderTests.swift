@@ -11,6 +11,7 @@
 import XCTest
 @testable import VVTerm
 
+@MainActor
 final class ServerFormTeleportReminderTests: XCTestCase {
 
     private func server(authMethod: AuthMethod) -> Server {

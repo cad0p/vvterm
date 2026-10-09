@@ -21,6 +21,8 @@
 
 import SwiftUI
 import XCTest
+import TeleportCore
+import TeleportTesting
 @testable import VVTerm
 
 @MainActor

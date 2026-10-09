@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import TeleportCore
 @testable import VVTerm
 
+@MainActor
 struct SSHErrorDiagnosticsTests {
     private func makeServer(
         host: String = "teleport.pcad.it",

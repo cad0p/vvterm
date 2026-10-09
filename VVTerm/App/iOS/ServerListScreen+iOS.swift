@@ -4,6 +4,8 @@
 //
 
 import SwiftUI
+import TeleportCore
+import TeleportAuth
 
 #if os(iOS)
 struct ServerListScreen: View {

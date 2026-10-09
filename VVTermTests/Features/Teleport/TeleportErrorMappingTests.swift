@@ -13,8 +13,10 @@
 import Foundation
 import Security
 import Testing
+import TeleportCore
 @testable import VVTerm
 
+@MainActor
 struct TeleportErrorMappingTests {
 
     @Test

@@ -11,6 +11,7 @@
 
 #if DEBUG
 import Foundation
+import TeleportCore
 @testable import VVTerm
 
 /// A presenter stub that records presentation attempts and never opens a

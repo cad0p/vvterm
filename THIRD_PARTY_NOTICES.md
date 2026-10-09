@@ -316,6 +316,16 @@ documented public contract: authored from the public API/behavior
 specification and the test oracle, not from the Teleport-derived expression.
 They carry `SPDX-License-Identifier: MIT` and no longer appear above.
 
+**Adopted as an external dependency (Phase 2, issue #371).** Those files now
+live in [`cad0p/swift-teleport`](https://github.com/cad0p/swift-teleport), a
+separate MIT-licensed repository (not Gravitational-affiliated), pinned by the
+Xcode project at `exactVersion 0.5.1` (revision
+`1fad66fb68ee72b726c18d94239782bf70c2c413`, tag `v0.5.1`). The package's
+`PROVENANCE.md` records the import source and the clean-room rewrite; the
+in-tree copies were deleted in the same cutover so there is no dual source of
+truth. The package's own `LICENSE` (MIT) applies to the package sources; this
+repository consumes them as a library dependency.
+
 Per-file derivation notes (the Teleport source each remaining file ports or
 mirrors) are recorded next to each entry in the allowlist.
 

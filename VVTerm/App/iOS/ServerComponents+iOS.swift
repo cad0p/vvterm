@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import TeleportCore
 
 #if os(iOS)
 // MARK: - Server List Row

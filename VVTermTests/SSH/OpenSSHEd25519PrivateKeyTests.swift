@@ -15,8 +15,10 @@
 import CryptoKit
 import Foundation
 import Testing
+import TeleportCore
 @testable import VVTerm
 
+@MainActor
 struct OpenSSHEd25519PrivateKeyTests {
 
     // MARK: - Fixtures

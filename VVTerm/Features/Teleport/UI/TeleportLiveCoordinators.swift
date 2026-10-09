@@ -25,6 +25,8 @@
 import Foundation
 import Security
 import os.log
+import TeleportCore
+import TeleportAuth
 #if canImport(AuthenticationServices)
 import AuthenticationServices
 #endif
@@ -172,8 +174,13 @@ final class LiveTeleportGRPCClient: TeleportGRPCClienting {
     nonisolated deinit {
         // `disconnect()` deletes the identity on the normal path; this
         // bounds the leak when the client is deallocated without it (e.g. an
-        // aborted registration).
-        connection?.deleteKeychainIdentity()
+        // aborted registration). `deleteKeychainIdentity()` is
+        // MainActor-isolated (the package's default isolation) and a deinit
+        // cannot await, so the delete hops to the main actor in a detached
+        // task; the task retains `connection` until it runs.
+        if let connection {
+            Task { @MainActor in connection.deleteKeychainIdentity() }
+        }
     }
 
     func connect(
