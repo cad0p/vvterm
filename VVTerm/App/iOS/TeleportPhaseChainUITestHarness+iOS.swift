@@ -34,6 +34,7 @@
 
 #if os(iOS) && DEBUG
 import SwiftUI
+import TeleportTesting
 
 struct TeleportPhaseChainUITestHarness: View {
     /// The fixed cluster ID. Reused as both `server.id` and the key-ring

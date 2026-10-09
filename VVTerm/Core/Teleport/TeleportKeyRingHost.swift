@@ -15,6 +15,8 @@
 //
 
 import Foundation
+import TeleportCore
+import TeleportAuth
 
 /// The app's single `TeleportKeyRing` instance, wired with the host logging
 /// adapter. Constructed once; every host call site reads this provider.

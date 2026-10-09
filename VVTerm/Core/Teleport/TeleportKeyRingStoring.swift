@@ -15,6 +15,11 @@
 
 import Combine
 import Foundation
+import TeleportCore
+import TeleportAuth
+#if DEBUG
+import TeleportTesting
+#endif
 
 /// Protocol-backed so UI tests can inject a `MockTeleportKeyRing` (e.g. to
 /// script the `needsLogin` ↔ `ready` flip without a real keychain). The
@@ -106,3 +111,10 @@ protocol TeleportKeyRingStoring: AnyObject, ObservableObject {
 /// extension is where the observation conformance is declared so the movable
 /// file never names `TeleportKeyRingStoring`.
 extension TeleportKeyRing: TeleportKeyRingStoring {}
+
+#if DEBUG
+/// The `TeleportTesting` mock implements every requirement; this host-side
+/// extension restores the observation conformance the UI and UI-test
+/// harnesses inject (`ServerRow`/`ServerListRow` constrain on this protocol).
+extension MockTeleportKeyRing: TeleportKeyRingStoring {}
+#endif

@@ -34,6 +34,8 @@
 
 #if os(iOS) && DEBUG
 import SwiftUI
+import TeleportCore
+import TeleportTesting
 
 struct TeleportServerListUITestHarness: View {
     /// The fixed cluster ID the harness seeds. The `Server` fixture reuses

@@ -59,6 +59,7 @@ import Darwin
 import Foundation
 import os.log
 import os
+import TeleportCore
 
 /// Standalone cancellation token captured by the channel I/O closures so they
 /// can observe cancellation without retaining the transport (which would be a
@@ -684,13 +685,17 @@ extension SSHProxySubsystemTransport {
     ///     caller frees the channel after the inner session is done.
     ///   - outerSession: The outer libssh2 session (used only for
     ///     `libssh2_session_last_errno` diagnostics; may be nil in tests).
-    ///   - outerSessionMutex: The mutex shared with `SSHSession` to serialize
-    ///     all outer-session libssh2 access. Required for the production path;
-    ///     pass `SessionMutex()` in tests that don't touch a real session.
+    ///   - outerSessionMutex: The host `SessionMutex` shared with `SSHSession`
+    ///     to serialize all outer-session libssh2 access. Required for the
+    ///     production path; pass `SessionMutex()` in tests that don't touch a
+    ///     real session. (The package's `TeleportSessionMutex` requirement is
+    ///     MainActor-isolated by its default isolation, so the bridge captures
+    ///     the host's nonisolated concrete lock to keep the libssh2 critical
+    ///     sections synchronous and off the main thread.)
     static func makeForChannel(
         channel: OpaquePointer,
         outerSession: OpaquePointer?,
-        outerSessionMutex: any TeleportSessionMutex
+        outerSessionMutex: SessionMutex
     ) -> SSHProxySubsystemTransport {
         // A standalone cancellation token (NOT the transport) captured by the
         // channel I/O closures. This avoids a retain cycle: the closures are
@@ -791,10 +796,18 @@ struct SSHProxySubsystemTransportFactory: TeleportChannelTransportFactory {
         outerSession: OpaquePointer?,
         mutex: any TeleportSessionMutex
     ) -> any TeleportChannelTransport {
-        SSHProxySubsystemTransport.makeForChannel(
+        // The host's only `TeleportSessionMutex` witness is `SessionMutex`
+        // (nonisolated). The package requirement is MainActor-isolated by its
+        // default isolation, so the bridge needs the concrete lock to keep the
+        // libssh2 critical sections synchronous — fail closed on any other
+        // conformer rather than silently dropping serialization.
+        guard let sessionMutex = mutex as? SessionMutex else {
+            preconditionFailure("SSHProxySubsystemTransportFactory requires the host SessionMutex")
+        }
+        return SSHProxySubsystemTransport.makeForChannel(
             channel: channel,
             outerSession: outerSession,
-            outerSessionMutex: mutex
+            outerSessionMutex: sessionMutex
         )
     }
 }

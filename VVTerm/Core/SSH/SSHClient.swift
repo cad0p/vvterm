@@ -3,6 +3,7 @@ import os.log
 import Darwin
 import MoshCore
 import MoshBootstrap
+import TeleportCore
 
 // MARK: - libssh2 Runtime
 
@@ -2309,7 +2310,7 @@ actor SSHSession {
     /// actor-isolated access never overlap. See `SessionMutex` for the race
     /// rationale. Stored through the package-movable `TeleportSessionMutex`
     /// seam.
-    private let outerSessionMutex: any TeleportSessionMutex
+    private let outerSessionMutex: SessionMutex
 
     /// Session-specific auth callback context passed to libssh2 session abstract pointer.
     private let keyboardInteractiveContext = KeyboardInteractiveContext()
@@ -2332,7 +2333,7 @@ actor SSHSession {
         teleportLogging: any TeleportLogging = AppTeleportLogging.shared,
         teleportCredentialStore: any TeleportCredentialStore = TeleportKeyRingCredentialStore(),
         teleportTransportFactory: any TeleportChannelTransportFactory = SSHProxySubsystemTransportFactory(),
-        teleportSessionMutex: any TeleportSessionMutex = SessionMutex()
+        teleportSessionMutex: SessionMutex = SessionMutex()
     ) {
         self.config = config
         self.startupTrace = startupTrace
@@ -2668,11 +2669,14 @@ actor SSHSession {
         // (e.g. teleport.pcad.it). The target node name is `Server.name`
         // (the display name), used only for the `proxy:<node>:0` subsystem
         // string. Dial the proxy with TLS+ALPN.
-        let transport = SSHTLSTransport(
+        let (clusterName, clusterCAPEMs) = await MainActor.run {
+            (tlsState.clusterName, tlsState.clusterCAPEMs)
+        }
+        let transport = await SSHTLSTransport(
             host: config.dialHost,
             port: config.dialPort,
-            clusterName: tlsState.clusterName,
-            clusterCAPEMs: tlsState.clusterCAPEMs,
+            clusterName: clusterName,
+            clusterCAPEMs: clusterCAPEMs,
             logging: teleportLogging
         )
         let fd: Int32
@@ -2690,7 +2694,7 @@ actor SSHSession {
         tlsTransport = transport
         let dialPort = config.dialPort
         let dialHost = config.dialHost
-        let caCertCount = tlsState.clusterCAPEMs.count
+        let caCertCount = clusterCAPEMs.count
         logger.info(
             "teleport TLS transport connected dial=\(dialHost, privacy: .private(mask: .hash)):\(dialPort) alpn=\(SSHTLSTransport.alpnProtocol, privacy: .public) fd=\(fd) ca_certs=\(caCertCount)"
         )
@@ -2757,14 +2761,15 @@ actor SSHSession {
 
         // The certificate must be readable and must belong to the configured
         // Teleport user — a foreign/stale cert must never name the SSH user.
-        guard let cert = OpenSSHCertificate.parse(authorizedKeysOrPEM: snapshot.certPEM) else {
+        guard let cert = await OpenSSHCertificate.parse(authorizedKeysOrPEM: snapshot.certPEM) else {
             logger.error(
                 "Teleport certificate unreadable for cluster \(clusterId.uuidString, privacy: .public) — clearing credential"
             )
             await teleportCredentialStore.clear(for: clusterId)
             throw SSHError.teleportCertMissing
         }
-        guard cert.keyID == config.username else {
+        let certKeyID = await cert.keyID
+        guard certKeyID == config.username else {
             logger.error(
                 "Teleport certificate keyID does not match the configured Teleport user for cluster \(clusterId.uuidString, privacy: .public) — clearing credential"
             )
@@ -2772,7 +2777,7 @@ actor SSHSession {
             throw SSHError.teleportCertMissing
         }
 
-        switch TeleportHostLogin.resolve(cert: cert, storedLogin: config.teleportHostLogin) {
+        switch await TeleportHostLogin.resolve(cert: cert, storedLogin: config.teleportHostLogin) {
         case .success(let login):
             if let stored = config.teleportHostLogin, stored == login {
                 logger.info(
@@ -3046,15 +3051,15 @@ actor SSHSession {
     ) async throws {
         let checkingKeys: [String]
         if config.authMethod == .faceIDTeleport {
-            checkingKeys = await teleportCredentialStore
-                .clusterTLSState(for: config.credentials.serverId)?
-                .hostCACheckingKeys ?? []
+            let tlsState = await teleportCredentialStore
+                .clusterTLSState(for: config.credentials.serverId)
+            checkingKeys = await MainActor.run { tlsState?.hostCACheckingKeys ?? [] }
         } else {
             checkingKeys = []
         }
 
         let knownFingerprint = KnownHostsManager.shared.entry(for: host, port: port)?.fingerprint
-        let decision = HostKeyTrustPolicy.decide(
+        let decision = await HostKeyTrustPolicy.decide(
             isTeleport: config.authMethod == .faceIDTeleport,
             fingerprint: fingerprint,
             keyType: keyType,
@@ -3084,13 +3089,15 @@ actor SSHSession {
 
         case .rejectHostKeyVerification:
             if config.authMethod == .faceIDTeleport,
-               let cert = OpenSSHCertificate.parse(blob: blob) {
+               let cert = await OpenSSHCertificate.parse(blob: blob) {
                 // Actionable diagnostics: the presented principals let an
                 // operator correct the expected set from evidence. Identity
                 // values stay at the default (private) interpolation so they
                 // cannot reach the shareable diagnostics export.
+                let certKeyID = await cert.keyID
+                let principals = await cert.validPrincipals
                 logger.error(
-                    "teleport_host_cert_rejected key_id=\(cert.keyID) principals=\(cert.validPrincipals.joined(separator: ",")) expected=\(expectedPrincipals.joined(separator: ","))"
+                    "teleport_host_cert_rejected key_id=\(certKeyID) principals=\(principals.joined(separator: ",")) expected=\(expectedPrincipals.joined(separator: ","))"
                 )
             }
             logger.error(
@@ -4329,7 +4336,7 @@ actor SSHSession {
         //    The node name is `Server.name` (the display name) — for Teleport
         //    servers, the display name IS the node name (e.g. "pcad-dev").
         let nodeName = config.teleportNodeName ?? config.host
-        let subsystem = TeleportProxySubsystem.request(for: nodeName)
+        let subsystem = await TeleportProxySubsystem.request(for: nodeName)
         let subsystemResult: Int32
         do {
             subsystemResult = try await performShellStartupCall(session: outerSession) {
@@ -4403,7 +4410,7 @@ actor SSHSession {
         //    The pump starts before start() returns the FD, so the target
         //    node's banner is forwarded as soon as it arrives.
         let handshakeToken = startupTrace?.begin(.teleportInnerHandshake)
-        let transport = teleportTransportFactory.makeChannelTransport(
+        let transport = await teleportTransportFactory.makeChannelTransport(
             channel: outerChannel,
             outerSession: outerSession,
             mutex: outerSessionMutex

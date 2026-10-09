@@ -16,6 +16,7 @@
 #if canImport(AuthenticationServices)
 import AuthenticationServices
 import Foundation
+import TeleportCore
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)

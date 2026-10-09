@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import TeleportCore
 
 enum TeleportErrorMapping {
     /// Map any error thrown by package code into the host error space.

@@ -23,6 +23,8 @@
 import SwiftUI
 import Combine
 import Security
+import TeleportCore
+import TeleportAuth
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)

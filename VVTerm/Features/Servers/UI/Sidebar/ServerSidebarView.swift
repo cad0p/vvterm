@@ -1,4 +1,6 @@
 import SwiftUI
+import TeleportCore
+import TeleportAuth
 
 // MARK: - Server Sidebar View (macOS)
 

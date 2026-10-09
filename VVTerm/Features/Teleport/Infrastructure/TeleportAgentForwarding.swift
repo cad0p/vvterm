@@ -58,6 +58,7 @@
 import Foundation
 import os.log
 import os
+import TeleportCore
 
 // MARK: - Identity
 

@@ -22,6 +22,8 @@
 //
 
 import Foundation
+import TeleportCore
+import TeleportAuth
 
 final class TeleportKeyRingCredentialStore: TeleportCredentialStore, @unchecked Sendable {
     // Explicit nonisolated deinit: the compiler-synthesized deinit of a

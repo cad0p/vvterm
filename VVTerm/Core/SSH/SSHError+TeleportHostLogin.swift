@@ -19,6 +19,7 @@
 //
 
 import Foundation
+import TeleportCore
 
 enum TeleportHostLoginFailureRoute {
     /// Clear the credential and produce the connect-path error.

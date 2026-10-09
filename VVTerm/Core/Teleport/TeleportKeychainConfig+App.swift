@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import TeleportCore
 
 extension TeleportKeychainConfig {
     /// The app's production config. The keychain service matches
