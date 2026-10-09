@@ -123,6 +123,9 @@ struct Server: Identifiable, Codable, Hashable {
     }
 
     /// The maximum UTF-8 byte length accepted for `teleportHostLogin`.
+    ///
+    /// Documents the host seam's contract; the authoritative enforcement is
+    /// `TeleportHostLogin.normalized(_:)` in the package (same 255-byte limit).
     static let maxTeleportHostLoginBytes = 255
 
     /// Shape-validates a Teleport host login for the persist/decode seam.

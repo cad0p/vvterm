@@ -51,8 +51,8 @@
 #   headless-id --pubkey <file>
 #       Compute the deterministic headless authentication ID for a pubkey
 #       file (authorized_keys format, with or without trailing newline).
-#       Port of Teleport's services.NewHeadlessAuthenticationID, matching
-#       VVTerm/Features/Teleport/Infrastructure/HeadlessID.swift.
+#       Port of Teleport's services.NewHeadlessAuthenticationID, matching the
+#       package's Sources/TeleportCore/Infrastructure/HeadlessID.swift.
 #
 # Exit codes: 0 success, 1 error (usage, crypto, malformed options).
 #
@@ -94,7 +94,7 @@ def unb64u(text: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Headless authentication ID (port of HeadlessID.swift / NewHeadlessAuthenticationID)
+# Headless authentication ID (port of the package HeadlessID.swift / NewHeadlessAuthenticationID)
 # ---------------------------------------------------------------------------
 
 def headless_id(pubkey_bytes: bytes) -> str:

@@ -21,7 +21,7 @@
 //  See:
 //    - swift-teleport Sources/TeleportCore/Infrastructure/GRPCClient.swift (GRPCError)
 //    - VVTerm/Features/Teleport/UI/TeleportLiveCoordinators.swift (LiveTeleportGRPCClient.connect)
-//    - spike: spikes/sep-webauthn-iotest/iotest/GRPC/GRPCTransport.swift (port 443)
+//    - swift-teleport Sources/TeleportCore/Infrastructure/GRPCTransport.swift (port 443, ported from the iotest spike)
 //
 
 import XCTest
