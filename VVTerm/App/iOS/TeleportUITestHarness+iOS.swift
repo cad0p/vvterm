@@ -32,6 +32,7 @@
 #if os(iOS) && DEBUG
 import SwiftUI
 import TeleportCore
+import TeleportAuth
 import TeleportTesting
 
 struct TeleportUITestHarness: View {
