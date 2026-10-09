@@ -1,6 +1,7 @@
 # Shared Xcode build preparation for xcode-27 jobs: source-mtime
-# restoration, mtime-aware DerivedData/SPM caching, stale PCM cache
-# clearing, and the Metal toolchain download. Used by vvterm-pr-ci.yml
+# restoration, mtime-aware DerivedData/SPM caching, fail-safe cache
+# provenance/restore-completeness logging, stale PCM cache clearing,
+# and the Metal toolchain download. Used by vvterm-pr-ci.yml
 # (build, debug-test), vvterm-pr-ota.yml (ota-archive),
 # ghostty-upstream-probe.yml, repro-zmx.yml, and teleport-e2e.yml —
 # do not fork these steps back into the workflows. (ui-tests and unit-tests
@@ -14,7 +15,8 @@
 name: Prepare Xcode build
 description: >-
   Restore source mtimes, restore/save mtime-aware DerivedData + SPM caches,
-  clear the stale PCM module cache, and download the Metal toolchain.
+  log cache provenance and restore completeness, clear the stale PCM module
+  cache, and download the Metal toolchain.
 inputs:
   deriveddata-key-prefix:
     description: >-
@@ -62,9 +64,20 @@ runs:
       # It stores a sidecar `xcode-cache-mtime.json` mapping
       # {path, mtime, sha256} and re-applies mtimes via File.utime after
       # restore (only when SHA-256 matches). It also handles the
-      # SourcePackages cache key separately. This fixes the cross-runner
-      # mtime+inode invalidation that caused full SPM recompiles even on
-      # cache hits. The SPM key is shared by every job and workflow.
+      # SourcePackages cache key separately. The SPM key is shared by every
+      # job and workflow.
+      #
+      # Measured 2026-10-08 (issue #109): the mtime restore makes the
+      # Debug/simulator `build` arm warm on a same-image restore (0 CompileC,
+      # jobs 113479048536 / 113567365173), but it is not sufficient for the
+      # Release/device OTA archive: three same-image restores of the
+      # immediate predecessor's entry still recompiled the full set
+      # (183 CompileC / 96 SwiftCompile, archives 645/567/681 s), and
+      # cross-image restores are compile-count-identical to cold (the only
+      # count-level restore effect is explicit-PCM reuse: 18 vs 251
+      # GeneratePcm). The OTA-vs-build configuration difference is the open
+      # question; the measured chains are in assets/vvterm-issue109-evidence/.
+      id: xcode-cache
       uses: irgaly/xcode-cache@v1
       with:
         key: ${{ inputs.deriveddata-key-prefix }}-${{ github.workflow }}-${{ github.sha }}
@@ -74,10 +87,88 @@ runs:
         swiftpm-cache-restore-keys: |
           xcode27-spm-
 
+    - name: Log DerivedData cache provenance
+      # Fail-safe diagnostic (issue #109). It records the runner image and
+      # the cache's self-reported provenance so every run is self-describing,
+      # and counts the restored .o objects: the datum that separates "the
+      # cache carried no objects" from "the objects were invalidated".
+      # Composite `run` steps execute with `-e -o pipefail`, so every line is
+      # guarded: a cold or absent cache must not red the job.
+      shell: bash
+      run: |
+        echo "xcode-cache-restored-key: ${{ steps.xcode-cache.outputs.restored-key }}"
+        now_build="$(sw_vers -buildVersion 2>/dev/null || true)"
+        echo "runner-image: ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown} osBuild=${now_build:-unknown}"
+        if [[ -f "$HOME/imagedata.json" ]]; then
+          echo "imagedata.json: present"
+          cat "$HOME/imagedata.json" 2>/dev/null || echo "imagedata.json: unreadable"
+        else
+          echo "imagedata.json: absent"
+        fi
+        xcodebuild -version -sdk iphoneos 2>/dev/null || echo "xcodebuild -version -sdk iphoneos unavailable"
+
+        marker="$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance"
+        now_image="${ImageVersion:-}"
+        if [[ -f "$marker" ]]; then
+          saved="$(head -1 "$marker" 2>/dev/null || true)"
+          saved_image="${saved%%|*}"
+          saved_build="${saved#*|}"
+          if [[ -n "$saved_image" && -n "$saved_build" && "$saved_image" == "$now_image" && "$saved_build" == "$now_build" ]]; then
+            verdict="same"
+          else
+            verdict="cross"
+          fi
+          echo "cache-provenance: $verdict (saved-on ${saved_image:-unknown}|${saved_build:-unknown}, now ${now_image:-unknown}|${now_build:-unknown})"
+          if [[ "$verdict" == "cross" ]]; then
+            echo "cache-provenance note: cross-image restore — expect the full-recompile cascade measured in the #109 evidence even on a cache hit"
+          fi
+        else
+          echo "cache-provenance: unknown (saved-on unknown, now ${now_image:-unknown}|${now_build:-unknown})"
+        fi
+
+        sdkstat_dir="$RUNNER_TEMP/DerivedData/SDKStatCaches.noindex"
+        if compgen -G "$sdkstat_dir/*.sdkstatcache" >/dev/null; then
+          for sdkstat in "$sdkstat_dir"/*.sdkstatcache; do
+            stat -f 'sdkstatcache: %m %z %N' "$sdkstat" 2>/dev/null || true
+          done
+        else
+          echo "sdkstatcache: absent"
+        fi
+
+        # The `|| true` after `done` is the measured fail-safety fix for the
+        # `find | head -1` pipeline: on a warm Build/ tree `head` exits after
+        # one line and `find` gets SIGPIPE, so with `-o pipefail` the bare
+        # pipeline returns 141 and would red the required `build` job
+        # (measured locally, 2026-10-08: rc=141 warm, rc=0 with the guard).
+        if [[ -d "$RUNNER_TEMP/DerivedData/Build" ]]; then
+          echo "restored-object-count: $(find "$RUNNER_TEMP/DerivedData/Build" -type f -name '*.o' | wc -l | tr -d ' ')"
+          find "$RUNNER_TEMP/DerivedData/Build" -type f -name '*.o' | head -1 | while read -r o; do
+            stat -f 'restored-object-sample: %m %z %N' "$o"
+          done || true
+        else
+          echo "restored-object-count: absent"
+        fi
+
+    - name: Write cache provenance marker
+      # Fail-safe write of the marker the next run reads: <ImageVersion>|<osBuild>.
+      # `mkdir -p` is required because the cold path has no DerivedData yet
+      # (measured: the write fails without it), and the redirect is guarded
+      # so a failed write cannot red the job; the next run then logs
+      # `unknown` instead of a false `same`.
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/DerivedData"
+        printf '%s|%s\n' "${ImageVersion:-unknown}" "$(sw_vers -buildVersion)" > "$RUNNER_TEMP/DerivedData/.vvterm-cache-provenance" 2>/dev/null || echo "marker write skipped"
+
     - name: Clear stale PCM module cache
       # Remove the Clang module cache so restored .pcm files from an older
       # runner image don't trigger "file has been modified since the module
-      # file was built" errors. The rebuild is cheap and deterministic.
+      # file was built" errors. Every sampled run clears it (cold, cross-image
+      # and same-image OTA restores all compiled 183 CompileC with the clear
+      # present; the same-image Debug/simulator build restored 0 CompileC with
+      # the clear present), so the clear is not what distinguishes the two
+      # arms. Whether a scoped deletion lowers its cost is tracked on #419;
+      # the measured chains are in assets/vvterm-issue109-evidence/.
       run: rm -rf "$RUNNER_TEMP/DerivedData/ModuleCache.noindex"
       shell: bash
 
