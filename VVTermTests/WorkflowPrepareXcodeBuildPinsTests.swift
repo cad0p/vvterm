@@ -53,6 +53,11 @@
 //    A8 (verdict): the `same` verdict requires both marker components to be
 //       non-empty **and** equal — an empty saved component must not read as
 //       `same`.
+//    A9 (OBJROOT): the OTA archive step sets
+//       `OBJROOT="$RUNNER_TEMP/DerivedData/Build/OTAIntermediates"` exactly
+//       once and keeps `-derivedDataPath "$RUNNER_TEMP/DerivedData"` — the
+//       #422 fix for the measured ArchiveIntermediates wipe (without it a
+//       same-image restore recompiles the full set).
 //
 //  The `find | head -1 | while … done || true` guard is a measured deviation
 //  from the plan's verbatim probe block: under the runner's composite bash
@@ -99,6 +104,9 @@
 //    loop, so the red path is implied but not separately recorded).
 //  - The OTA flags are bound by count within the archive step, not by the
 //    xcodebuild option semantics; a flag moved into another step would red.
+//  - A9 binds the exact OBJROOT token and the kept `-derivedDataPath` line,
+//    but cannot prove xcodebuild honors OBJROOT at runtime; the E1
+//    same-image OTA sample is that runtime oracle.
 //  - The scanner is a text heuristic: an indented or flow-style `runs:` /
 //    `steps:` spelling, a quoted `ota-archive` key, or content at the step
 //    indent that is not a list item throws `PinFailure` rather than scanning
@@ -211,6 +219,39 @@ struct WorkflowPrepareXcodeBuildPinsTests {
                 "the OTA archive step must contain `\(flag)` exactly once (found \(count)); a duplicated xcodebuild flag is last-wins and would silently override this pin (issue #109)"
             )
         }
+    }
+
+    /// A9: the OTA archive relocates its `OBJROOT` inside the cached
+    /// DerivedData root. `xcodebuild archive` deletes and recreates
+    /// `ArchiveIntermediates/VVTerm/IntermediateBuildFilesPath` (the
+    /// archive's objects + build-description/task store) on every
+    /// invocation, so the restored archive intermediates are wiped before
+    /// the build reads them (measured, issue #422). The pin binds the exact
+    /// build-setting token so the fix cannot be silently removed, widened
+    /// to a path outside the cached root, or duplicated (xcodebuild build
+    /// settings are last-wins), and binds the kept `-derivedDataPath`.
+    @Test
+    func testOTAArchiveRelocatesOBJROOTInsideCachedDerivedData() throws {
+        let steps = try Self.otaSteps()
+        let archive = steps[try Self.stepIndex(containing: "xcodebuild archive", in: steps, label: "OTA archive step")]
+        let objroot = #"OBJROOT="$RUNNER_TEMP/DerivedData/Build/OTAIntermediates""#
+        let count = archive.text.components(separatedBy: objroot).count - 1
+        #expect(
+            count == 1,
+            """
+            the OTA archive step must set `\(objroot)` exactly once (found \(count)); \
+            without it `xcodebuild archive` recreates ArchiveIntermediates/VVTerm/\
+            IntermediateBuildFilesPath and the restored objects are wiped before the \
+            build reads them (issue #422)
+            """
+        )
+        #expect(
+            archive.text.contains(#"-derivedDataPath "$RUNNER_TEMP/DerivedData""#),
+            """
+            the OBJROOT relocation must keep `-derivedDataPath "$RUNNER_TEMP/DerivedData"`; \
+            OBJROOT is relative to the cached root, not a replacement for it (issue #422)
+            """
+        )
     }
 
     /// A5/A6: every diagnostic line is guarded for the cold and warm paths.
