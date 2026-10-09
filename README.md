@@ -173,6 +173,7 @@ Swift package dependencies currently resolved by the Xcode project:
 - [Cloudflared](https://github.com/wiedymi/swift-cloudflared)
 - [swift-mosh](https://github.com/wiedymi/swift-mosh)
 - [swift-et](https://github.com/wiedymi/swift-et)
+- [swift-teleport](https://github.com/cad0p/swift-teleport) (pinned `exactVersion 0.5.1`) — the clean-room Teleport client core (`TeleportCore` / `TeleportAuth` / `TeleportTesting`)
 - [mlx-swift](https://github.com/ml-explore/mlx-swift)
 - [ZIPFoundation](https://github.com/weichsel/ZIPFoundation)
 - [swift-numerics](https://github.com/apple/swift-numerics)
@@ -213,7 +214,7 @@ If you obtain VVTerm via the App Store, App Store distribution terms apply to th
 Per-file licensing inside the source tree:
 
 - Fork-new files are MIT (`LICENSES/MIT.txt`) unless a file states otherwise. Each file's SPDX header is authoritative.
-- The files that still port or adapt Teleport source keep `AGPL-3.0-or-later` (they are derivative works). They are enumerated with per-file derivation notes in [`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt); the license text is in [`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt) and the attribution is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) under "Teleport (ported portions)". The package-movable Teleport client files were clean-room rewritten as independent MIT implementations of the documented public contract (Phase 1b Stage A) and are no longer part of that set.
+- The files that still port or adapt Teleport source keep `AGPL-3.0-or-later` (they are derivative works). They are enumerated with per-file derivation notes in [`docs/teleport-derived-files.txt`](docs/teleport-derived-files.txt); the license text is in [`LICENSES/AGPL-3.0-or-later.txt`](LICENSES/AGPL-3.0-or-later.txt) and the attribution is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) under "Teleport (ported portions)". The package-movable Teleport client files were clean-room rewritten as independent MIT implementations of the documented public contract (Phase 1b Stage A) and live in the external [`cad0p/swift-teleport`](https://github.com/cad0p/swift-teleport) package (pinned `exactVersion 0.5.1`, MIT); they are no longer part of the in-tree AGPL-derived set.
 - AGPL-3.0 ↔ GPL-3.0 combination is permitted (GPLv3 §13), so the distributed aggregate remains GPL-3.0.
 
 `scripts/ci/check-license-headers.sh` enforces the split: an AGPL header outside the allowlist, or a stale allowlist entry, fails the required `build` CI job.
