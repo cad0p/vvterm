@@ -22,7 +22,11 @@ import TeleportTesting
 /// Records the category strings requested through the logging seam.
 private final class SpyTeleportLogging: TeleportLogging, @unchecked Sendable {
     private let lock = NSLock()
-    private var recorded: [String] = []
+    /// `nonisolated(unsafe)` because `TeleportLogging.logger(category:)` is a
+    /// nonisolated protocol requirement, while the test target's default
+    /// isolation would otherwise make this property MainActor-isolated; the
+    /// `NSLock` below is the synchronization (the class is `@unchecked Sendable`).
+    nonisolated(unsafe) private var recorded: [String] = []
 
     var categories: [String] {
         lock.lock()

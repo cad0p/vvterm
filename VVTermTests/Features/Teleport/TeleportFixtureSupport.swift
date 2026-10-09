@@ -76,10 +76,18 @@ enum TeleportFixtureSupport {
         return TLSKeyPair(privateKey: privateKey, publicKeyPEM: pem)
     }
 
+    /// `@MainActor` because `FixedTeleportSSHKeyPairGenerator`'s initializer
+    /// is MainActor-inferred from the package's global-actor-isolated
+    /// generator protocol; Xcode 27 enforces the call-site isolation.
+    @MainActor
     static func makeFixedSSHGenerator(publicKey: String = TeleportFixtureSupport.fixedSSHPublicKey) -> FixedTeleportSSHKeyPairGenerator {
         FixedTeleportSSHKeyPairGenerator(publicKey: publicKey)
     }
 
+    /// `@MainActor` for the same reason as `makeFixedSSHGenerator`
+    /// (`FixedTeleportTLSKeyPairGenerator` conforms to the package's
+    /// global-actor-isolated TLS generator protocol).
+    @MainActor
     static func makeFixedTLSGenerator() throws -> FixedTeleportTLSKeyPairGenerator {
         guard let keyPair = Self.fixedTLSKeyPair() else {
             throw TeleportFixtureSupportError.tlsKeyPairUnavailable
