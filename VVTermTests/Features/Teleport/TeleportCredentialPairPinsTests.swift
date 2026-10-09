@@ -3,41 +3,30 @@
 //  TeleportCredentialPairPinsTests.swift
 //  VVTermTests
 //
-//  Source pins for issue #296: the cert and its paired ed25519 private key
-//  must be written as one atomic pair.
+//  The host-side pin for the atomic credential-pair write (#296): the host
+//  adapter's `storeCredentialPair` body must keep exactly one `MainActor.run`
+//  hop and call the keyring's pair witness — never the two singles, which
+//  would reintroduce the tear inside the hop.
 //
-//  Why source pins: the pair's atomicity is a *shape* property (one
-//  non-suspending body, key-first) rather than a value — the coordinator-level
-//  T1 tests use a suspension-capable conformer. T4's injectable
-//  keychain-write seam covers the pair body's failure propagation, but it
-//  *replaces* the real `SecItem*` body: pin 4 guards the production writer
-//  (update-first, non-destructive), and the behavioural test in
-//  `TeleportCredentialStoreTests` (`realPairWriteUpdatesTheSeededKeychainItemInPlace`)
-//  measures it against a seeded keychain item. These pins are the structural
-//  tripwires over the production files.
+//  The package owns the other #296 pins (the coordinators' single pair call
+//  and the keyring's synchronous, key-first, non-destructive body): they read
+//  `swift-teleport` sources and live in the package's
+//  `Tests/TeleportPackageTests/TeleportCredentialPairPinsTests.swift`.
 //
-//  FORMATTING HEURISTIC, NOT A PROOF: a pin is defeated by a rename, an alias,
-//  a hoisted helper, a multi-line call, or a call inside a string literal.
-//  Every pin here is a tripwire for the regression shape, not proof of the
-//  discipline. Comments are stripped before every scan, so a commented-out
-//  call cannot satisfy (or trip) an assertion; a call inside a string literal
-//  still can. The file-wide `count == 1` asserts deliberately make a *new*
-//  pair call site red: a second owner must update the pin on purpose.
-//
-//  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scans at a
-//  mutated tree (measured per pin in the #296 PR report). NOTE: the variable
-//  must actually reach the test process. Measured on this runner (2026-09-29,
-//  iOS Simulator destination): a plain env var is inert, while exporting
-//  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` into xcodebuild's own
-//  environment reaches the test process. Never set in CI.
+//  See:
+//    - VVTerm/Core/Teleport/TeleportKeyRingCredentialStore.swift (the subject)
+//    - VVTermTests/Features/Teleport/TeleportCredentialStoreTests.swift (the
+//      behavioural pair-write coverage)
 //
 
 #if DEBUG
 import Foundation
 import Testing
-
+import TeleportCore
+import TeleportAuth
 @testable import VVTerm
 
+@MainActor
 struct TeleportCredentialPairPinsTests {
 
     // MARK: - Fixtures
@@ -224,99 +213,6 @@ struct TeleportCredentialPairPinsTests {
 
     // MARK: - Pins
 
-    /// Pin 1: both coordinators make exactly one `storeCredentialPair(` call
-    /// and zero `storeLoginCert(` / `storeBootstrapCert(` /
-    /// `storeEd25519PrivateKey(` calls. The single writes stay on the protocol
-    /// as seed/test primitives, but no coordinator may call them: the
-    /// two-call shape is the #296 tear.
-    @Test
-    func testCoordinatorsWriteOnlyTheAtomicPair() throws {
-        let coordinatorPaths = [
-            "VVTerm/Features/Teleport/Application/TeleportLoginCoordinator.swift",
-            "VVTerm/Features/Teleport/Application/TeleportBootstrapCoordinator.swift",
-        ]
-        for path in coordinatorPaths {
-            let text = Self.strippingComments(try source(path))
-
-            // Positive control: the coordinator still drives the pair seam,
-            // and it is the keyring call (not a local wrapper).
-            let pairCalls = Self.occurrences(of: "storeCredentialPair(", in: text)
-            #expect(pairCalls.count == 1, "\(path) must make exactly one storeCredentialPair( call")
-            #expect(text.contains("keyRing.storeCredentialPair("), "\(path) must call the keyRing's pair witness")
-
-            #expect(Self.occurrences(of: "storeLoginCert(", in: text).isEmpty, "\(path) must not call storeLoginCert(")
-            #expect(Self.occurrences(of: "storeBootstrapCert(", in: text).isEmpty, "\(path) must not call storeBootstrapCert(")
-            #expect(Self.occurrences(of: "storeEd25519PrivateKey(", in: text).isEmpty, "\(path) must not call storeEd25519PrivateKey(")
-        }
-    }
-
-    /// Pin 2: `TeleportKeyRing.storeCredentialPair` is a non-`async` `throws`
-    /// witness whose body suspends nowhere (`await`-free — an absent body
-    /// fails the pin, never passes vacuously) and writes the keychain before
-    /// committing the record.
-    @Test
-    func testKeyRingPairBodyIsSynchronousKeyFirstAndNonAsync() throws {
-        let text = Self.strippingComments(try source("VVTerm/Features/Teleport/Application/TeleportKeyRing.swift"))
-
-        let declaration = try #require(
-            text.range(of: "func storeCredentialPair("),
-            "TeleportKeyRing must keep the pair witness"
-        )
-        let openBrace = try #require(
-            text[declaration.upperBound...].firstIndex(of: "{"),
-            "the pair declaration must open a body"
-        )
-        let declarationTail = text[declaration.upperBound..<openBrace]
-        #expect(
-            !declarationTail.contains("async"),
-            "the pair witness must be non-async (the adapter's one-hop MainActor.run depends on it)"
-        )
-        #expect(declarationTail.contains("throws"), "the pair witness must throw")
-
-        // `bracedBlock` throws when the body is absent/unbalanced, so the
-        // no-await assert below cannot pass vacuously.
-        let body = try Self.bracedBlock(openingAt: openBrace, in: text)
-        #expect(!text[body].contains("await"), "the keyring pair body must suspend nowhere")
-
-        // Positive control: the resolved span is the pair body, not a nested
-        // block — it commits the record and saves it.
-        #expect(text[body].contains("credentials[clusterId] = cred"), "the resolved span must be the pair body")
-        #expect(text[body].contains("save()"), "the resolved span must save the record")
-
-        // Key-first ordering: the keychain write precedes the record commit,
-        // so a failed key write cannot leave the record pointing at a cert
-        // whose key is gone. G2: exact-occurrence counts first, so a
-        // duplicated write/commit inside the body reddens the pin instead of
-        // silently satisfying the first-match range below.
-        #expect(
-            Self.occurrences(of: "keychainWriter(privateKeyPEM", in: text, range: body).count == 1,
-            "the pair body must write the key exactly once"
-        )
-        #expect(
-            Self.occurrences(of: "credentials[clusterId] = cred", in: text, range: body).count == 1,
-            "the pair body must commit the record exactly once"
-        )
-        // G7: the commit's certValidBefore assignment is part of the pair
-        // shape — a record committed without it points at a cert whose
-        // validity is unknown.
-        #expect(
-            text[body].contains("cred.certValidBefore = validBefore"),
-            "the record commit must write the cert's validBefore"
-        )
-        let keyWrite = try #require(
-            text.range(of: "keychainWriter(privateKeyPEM", range: body),
-            "the pair body must write the key through the keychain seam"
-        )
-        let recordCommit = try #require(
-            text.range(of: "credentials[clusterId] = cred", range: body),
-            "the pair body must commit the record"
-        )
-        #expect(
-            keyWrite.lowerBound < recordCommit.lowerBound,
-            "the key write must precede the record commit"
-        )
-    }
-
     /// Pin 3: the adapter's pair body is one `MainActor.run` hop that calls the
     /// keyring's pair witness — never the two singles (which would reintroduce
     /// the tear inside the hop).
@@ -342,57 +238,6 @@ struct TeleportCredentialPairPinsTests {
         #expect(Self.occurrences(of: "storeEd25519PrivateKey(", in: text, range: body).isEmpty)
     }
 
-    /// Pin 4 (F2): the real ed25519 keychain write is `SecItemUpdate`-first and
-    /// never deletes the prior item. Body-scoped because `clear()` (same file)
-    /// also contains `SecItemDelete(`, and every writer failure must be
-    /// fail-closed (throw) rather than destructive.
-    ///
-    /// Defeat list (same as the other pins): a rename, an alias, a hoisted
-    /// helper, a multi-line call, or a call inside a string literal defeats the
-    /// token scan. Counterfactual hook: `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`
-    /// (see the file header).
-    @Test
-    func testKeyRingRealKeychainWriteIsUpdateFirstAndNonDestructive() throws {
-        let text = Self.strippingComments(try source("VVTerm/Features/Teleport/Application/TeleportKeyRing.swift"))
-
-        let declaration = try #require(
-            text.range(of: "private static func writeEd25519PrivateKeyToKeychain("),
-            "TeleportKeyRing must keep the real ed25519 keychain writer"
-        )
-        let body = try Self.bracedBlock(after: declaration, in: text)
-
-        // Positive controls: the resolved span is the writer body, not a
-        // nested block or the wrong declaration.
-        #expect(text[body].contains("kSecClassGenericPassword"), "the resolved span must be the keychain writer body")
-        #expect(text[body].contains("TeleportPackageError.keychain("), "the resolved span must be the writer's throw path")
-
-        #expect(
-            !text[body].contains("SecItemDelete("),
-            "the ed25519 write must never delete the prior item (clear()'s delete is outside this body)"
-        )
-        #expect(text[body].contains("SecItemUpdate("), "the update-first shape is the non-destructive property")
-
-        let notFound = try #require(
-            text.range(of: "case errSecItemNotFound", range: body),
-            "the add must be gated on the update's not-found status"
-        )
-        let add = try #require(
-            text.range(of: "SecItemAdd(", range: body),
-            "the writer must add only when no item exists"
-        )
-        #expect(
-            notFound.lowerBound < add.lowerBound,
-            "the SecItemAdd( must come after the case errSecItemNotFound gate"
-        )
-        #expect(
-            Self.occurrences(of: "SecItemAdd(", in: text, range: body).count == 1,
-            "the writer must add the item exactly once"
-        )
-        #expect(
-            Self.occurrences(of: "SecItemUpdate(", in: text, range: body).count == 1,
-            "the writer must update the item exactly once (no delete/retry loop)"
-        )
-    }
 }
 
 #endif

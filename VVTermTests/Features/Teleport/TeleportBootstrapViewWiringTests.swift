@@ -43,6 +43,9 @@
 import SwiftUI
 import Combine
 import XCTest
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 @MainActor
@@ -336,7 +339,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
-        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        http.scriptedHeadlessResponse = TeleportFixtureSupport.makeFixtureSuccessResponse()
         // Small delay so the parent's periodic re-eval lands during the POST,
         // recreating the inline coordinator (the production race).
         http.scriptedDelay = 0.15
@@ -392,7 +395,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     func testBootstrapSuccess_firesOnSuccess_whenCoordinatorHeldInStateObject() {
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
-        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        http.scriptedHeadlessResponse = TeleportFixtureSupport.makeFixtureSuccessResponse()
         http.scriptedDelay = 0.15
         let safari = MockWebAuthenticationSessionPresenter()
         let keyRing = MockTeleportKeyRing()
@@ -440,7 +443,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     func testCoordinator_reachesSuccessAndSetsResult_whenHttpReturnsCert() async {
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
-        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        http.scriptedHeadlessResponse = TeleportFixtureSupport.makeFixtureSuccessResponse()
         let safari = MockWebAuthenticationSessionPresenter()
         let keyRing = MockTeleportKeyRing()
         let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)
@@ -510,7 +513,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         // The second POST returns the fixture cert (bound to the fixed
         // keypair the coordinator is driven with).
         http.scriptedHeadlessError = nil
-        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        http.scriptedHeadlessResponse = TeleportFixtureSupport.makeFixtureSuccessResponse()
 
         await coordinator.retry()
 
@@ -627,7 +630,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         // continuation stayed `.awaitingApproval` through the pump. Poll with
         // real suspension instead, so a stale write that survives the drop is
         // observable and this assertion can fail.
-        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await http.release(index: 0, with: .success(TeleportFixtureSupport.makeFixtureSuccessResponse()))
         let staleWriteLanded = await waitForStaleWrite(timeout: 0.5) { store.storedCertCount > 0 }
         XCTAssertFalse(
             staleWriteLanded,
@@ -689,7 +692,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
         // Release the retry's POST with a success. The dismissal's generation
         // bump must drop it: the flow is over.
-        await http.release(index: 1, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await http.release(index: 1, with: .success(TeleportFixtureSupport.makeFixtureSuccessResponse()))
         await retryTask.value
 
         XCTAssertEqual(http.startedCount, 2, "a dismissed retry must never start a third POST")
@@ -718,12 +721,13 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         let keyRing = MockTeleportKeyRing()
         let store = GatedTeleportCredentialStore(underlying: keyRing, gateTheFirstStore: false)
         let coordinator = makeGatedCoordinator(http: http, keyRing: store, safari: safari)
+        let latch = LatchRecordingBootstrapCoordinator(inner: coordinator)
 
         let model = DismissalModel()
         let disappeared = Flag()
         let host = UIHostingController(rootView: RemovableBootstrapHost(
             model: model,
-            coordinator: coordinator,
+            coordinator: latch,
             cluster: cluster,
             onSuccess: { _ in },
             onDisappear: { disappeared.value = true }
@@ -736,13 +740,13 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
         model.showsBootstrap = false
         XCTAssertTrue(waitUntil { disappeared.value }, "the production view should leave the hierarchy and fire .onDisappear")
         XCTAssertTrue(
-            waitUntil { coordinator.isDismissalLatched },
+            waitUntil { latch.isDismissalLatched },
             "the production .onDisappear must latch the dismissal synchronously"
         )
 
         // Release the parked POST *without* awaiting the scheduled cancel: the
         // latch's synchronous bump is what must drop this continuation.
-        await http.release(index: 0, with: .success(MockTeleportHTTPClient.makeFixtureSuccessResponse()))
+        await http.release(index: 0, with: .success(TeleportFixtureSupport.makeFixtureSuccessResponse()))
         let staleWriteLanded = await waitForStaleWrite(timeout: 0.5) { store.storedCertCount > 0 }
         XCTAssertFalse(
             staleWriteLanded,
@@ -763,7 +767,7 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
     func testDismissalAfterSuccessKeepsTheHandoff() async {
         let cluster = makeCluster()
         let http = MockTeleportHTTPClient()
-        http.scriptedHeadlessResponse = MockTeleportHTTPClient.makeFixtureSuccessResponse()
+        http.scriptedHeadlessResponse = TeleportFixtureSupport.makeFixtureSuccessResponse()
         let safari = MockWebAuthenticationSessionPresenter()
         let keyRing = MockTeleportKeyRing()
         let coordinator = makeCoordinator(http: http, safari: safari, keyRing: keyRing)

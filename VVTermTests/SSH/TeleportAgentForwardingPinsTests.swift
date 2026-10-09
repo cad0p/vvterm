@@ -22,8 +22,10 @@
 
 import Foundation
 import Testing
+import TeleportCore
 @testable import VVTerm
 
+@MainActor
 struct TeleportAgentForwardingPinsTests {
 
     private func repositoryRoot() -> URL {

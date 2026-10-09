@@ -3,6 +3,7 @@ import Testing
 import MoshBootstrap
 @testable import VVTerm
 
+@MainActor
 struct RemoteMoshManagerTests {
     @Test
     func parseValidMoshConnectOutput() throws {

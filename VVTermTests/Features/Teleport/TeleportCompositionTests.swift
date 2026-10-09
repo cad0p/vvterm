@@ -12,6 +12,9 @@
 #if DEBUG
 import Foundation
 import Testing
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 @MainActor

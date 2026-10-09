@@ -14,6 +14,9 @@ import Foundation
 import Security
 import Testing
 import os.log
+import TeleportCore
+import TeleportAuth
+import TeleportTesting
 @testable import VVTerm
 
 /// Records the category strings requested through the logging seam.

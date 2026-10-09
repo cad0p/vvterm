@@ -73,6 +73,7 @@ final class FakeAgentChannel: @unchecked Sendable {
     }
 }
 
+@MainActor
 struct TeleportAgentForwardingTests {
 
     // MARK: - Fixtures
@@ -377,25 +378,25 @@ struct TeleportAgentForwardingTests {
     // MARK: - Identity factory
 
     @Test
-    func identityFactoryRejectsAKeyThatDoesNotMatchTheCertificate() throws {
+    func identityFactoryRejectsAKeyThatDoesNotMatchTheCertificate() async throws {
         let pair = SSHPubKey.generateEd25519KeyPair(comment: "agent-test")
         let mismatched = Data([0x00, 0x01, 0x02])
-        #expect(throws: TeleportAgentIdentityError.publicKeyMismatch) {
-            try TeleportAgentIdentity.make(
-                certPEM: OpenSSHCertificateTests.userCert,
+        await #expect(throws: TeleportAgentIdentityError.publicKeyMismatch) {
+            try await TeleportAgentIdentity.make(
+                certPEM: TeleportFixtureSupport.fixedIssuedUserCert,
                 privateKeyPEM: Data(pair.privateKeyPEM.utf8)
             )
         }
-        #expect(throws: TeleportAgentIdentityError.unreadableCertificate) {
-            try TeleportAgentIdentity.make(certPEM: "not a certificate", privateKeyPEM: mismatched)
+        await #expect(throws: TeleportAgentIdentityError.unreadableCertificate) {
+            try await TeleportAgentIdentity.make(certPEM: "not a certificate", privateKeyPEM: mismatched)
         }
     }
 
     @Test
-    func identityFactoryReportsAnUnreadablePrivateKeyWithoutThePEM() throws {
+    func identityFactoryReportsAnUnreadablePrivateKeyWithoutThePEM() async throws {
         do {
-            _ = try TeleportAgentIdentity.make(
-                certPEM: OpenSSHCertificateTests.userCert,
+            _ = try await TeleportAgentIdentity.make(
+                certPEM: TeleportFixtureSupport.fixedIssuedUserCert,
                 privateKeyPEM: Data("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----".utf8)
             )
             Issue.record("expected an unreadablePrivateKey error")

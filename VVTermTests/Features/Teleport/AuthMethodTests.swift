@@ -22,6 +22,7 @@
 import XCTest
 @testable import VVTerm
 
+@MainActor
 final class AuthMethodTests: XCTestCase {
 
     // MARK: - .faceIDTeleport raw value stability

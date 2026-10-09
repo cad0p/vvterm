@@ -25,8 +25,10 @@
 //
 
 import XCTest
+import TeleportCore
 @testable import VVTerm
 
+@MainActor
 final class TeleportServerModelTests: XCTestCase {
 
     /// For `.faceIDTeleport`, `Server.name` is the target node name and

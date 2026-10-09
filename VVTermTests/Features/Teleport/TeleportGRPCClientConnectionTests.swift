@@ -26,6 +26,7 @@
 
 import XCTest
 import Security
+import TeleportCore
 @testable import VVTerm
 
 @MainActor
@@ -254,37 +255,19 @@ final class TeleportGRPCClientConnectionTests: XCTestCase {
 
     /// The sweep is a full keychain query triggered by SwiftUI state
     /// initialization, so it must run at most once per process.
+    ///
+    /// Host-side adaptation after the cutover: the package's
+    /// `sweepEnumerationOverrideForTesting` seam is package-internal, so the
+    /// forced variant (`deleteStaleIdentitiesForTesting`, public under
+    /// `#if DEBUG`) latches the gate and the unforced call must then skip.
     func testGRPCIdentitySweepRunsAtMostOncePerProcess() {
         GRPCClientIdentity.resetSweepGateForTesting()
-        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in [] }
-        defer {
-            GRPCClientIdentity.sweepEnumerationOverrideForTesting = nil
-            GRPCClientIdentity.resetSweepGateForTesting()
-        }
+        defer { GRPCClientIdentity.resetSweepGateForTesting() }
 
         XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")))
         XCTAssertFalse(
             GRPCClientIdentity.deleteStaleIdentities(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")),
             "a second sweep in the same process must be skipped"
-        )
-    }
-
-    /// A transient keychain error must not latch the once-per-process gate:
-    /// the process has to retry the sweep once the keychain is available.
-    func testFailedSweepEnumerationDoesNotLatchTheGate() {
-        GRPCClientIdentity.resetSweepGateForTesting()
-        defer {
-            GRPCClientIdentity.sweepEnumerationOverrideForTesting = nil
-            GRPCClientIdentity.resetSweepGateForTesting()
-        }
-
-        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in nil }
-        XCTAssertTrue(GRPCClientIdentity.deleteStaleIdentitiesForTesting(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")))
-
-        GRPCClientIdentity.sweepEnumerationOverrideForTesting = { _ in [] }
-        XCTAssertTrue(
-            GRPCClientIdentity.deleteStaleIdentities(logger: DefaultTeleportLogging().logger(category: "TeleportGRPC")),
-            "a failed enumeration must leave the gate open for a later retry"
         )
     }
 
