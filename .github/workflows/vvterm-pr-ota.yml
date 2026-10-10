@@ -120,8 +120,12 @@ jobs:
           # recompiled 183 CompileC / 96 SwiftCompile (archives 645/567/681 s)
           # while the same-image Debug/simulator build arm restored at
           # 0 CompileC. Image drift is a co-factor on the build arm, not the
-          # OTA-arm discriminator; the OTA-vs-build configuration difference
-          # is the open question (#109 follow-up). Measured chains:
+          # OTA-arm discriminator. Measured cause (issue #422): `xcodebuild
+          # archive` deletes/recreates ArchiveIntermediates/<Product>/
+          # {IntermediateBuildFilesPath,BuildProductsPath} every invocation,
+          # wiping the restored objects and task store before the build reads
+          # them; the archive invocation below relocates OBJROOT inside this
+          # cached root. Measured chains:
           # assets/vvterm-issue109-evidence/ (2026-10-08). Restore races
           # degrade to a full rebuild.
           deriveddata-restore-keys: xcode27-ota-deriveddata-
@@ -137,18 +141,62 @@ jobs:
           # FORCE_PRO_ENABLED: mirrors the TestFlight workflow default —
           # owner device-test builds should have Pro unlocked without
           # StoreKit (TestFlight default force_pro=true).
+          #
+          # OBJROOT (issue #422): `xcodebuild archive` deletes and recreates
+          # DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/VVTerm/
+          # {IntermediateBuildFilesPath,BuildProductsPath} on every invocation,
+          # and the archive's object tree AND its build-description/task store
+          # live under IntermediateBuildFilesPath — so the restored archive
+          # intermediates are wiped before the build reads them and the full
+          # set recompiles (measured on a same-image restore: 1329 `.o`
+          # restored pre-archive, still 183 CompileC / 96 SwiftCompile, while
+          # the Debug/simulator arm is warm at 0 CompileC). OBJROOT relocates
+          # the archive scratch inside the cached DerivedData root (the irgaly
+          # cache saves `$RUNNER_TEMP/DerivedData`): the archive's object tree
+          # AND its build-description/task store now live under the relocated,
+          # cached `Build/OTAIntermediates` and are restored. The recreated
+          # `BuildProductsPath` still re-materializes product files by Copy on
+          # every archive (51 `.swiftmodule` Copy tasks measured) — the #427
+          # residual. Keep -derivedDataPath and the default
+          # SYMROOT/BuildProductsPath.
+          #
+          # E2 sentinel (issue #422, diagnosis-only): prove the wipe on this
+          # runner image by writing a sentinel and recording the scratch
+          # directory inode before the archive, then re-checking after it.
+          # Every line is guarded — a missing path logs `absent` and must
+          # never red this step under `-e -o pipefail`.
+          e2_scratch="$RUNNER_TEMP/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/VVTerm/IntermediateBuildFilesPath"
+          mkdir -p "$e2_scratch" 2>/dev/null || true
+          printf 'e2-sentinel\n' > "$e2_scratch/.vvterm-e2-sentinel" 2>/dev/null || true
+          e2_inode_before="$(stat -f '%i' "$e2_scratch" 2>/dev/null || true)"
+          if [[ -f "$e2_scratch/.vvterm-e2-sentinel" ]]; then e2_sentinel_before="created"; else e2_sentinel_before="absent"; fi
+
           xcodebuild archive \
             -scheme VVTerm \
             -configuration Release \
             -archivePath "$RUNNER_TEMP/VVTerm.xcarchive" \
             -destination "generic/platform=iOS" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            OBJROOT="$RUNNER_TEMP/DerivedData/Build/OTAIntermediates" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             EXPANDED_CODE_SIGN_IDENTITY="" \
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=FORCE_PRO_ENABLED \
             | tee "$RUNNER_TEMP/ota-archive.log"
+
+          e2_inode_after="$(stat -f '%i' "$e2_scratch" 2>/dev/null || true)"
+          echo "e2-archive-scratch-inode: ${e2_inode_before:-absent} -> ${e2_inode_after:-absent}"
+          # Distinguish "the sentinel was never created" (mkdir/write failed)
+          # from "the sentinel was created and then wiped": a missing sentinel
+          # after a failed pre-write must not read as evidence of the wipe.
+          if [[ "${e2_sentinel_before:-absent}" != "created" ]]; then
+            echo "e2-archive-scratch-sentinel: unknown (sentinel never created)"
+          elif [[ -f "$e2_scratch/.vvterm-e2-sentinel" ]]; then
+            echo "e2-archive-scratch-sentinel: survived"
+          else
+            echo "e2-archive-scratch-sentinel: wiped"
+          fi
 
       - name: Package unsigned archive
         # Tar preserves the symlinks inside .app bundles (see the build job's
