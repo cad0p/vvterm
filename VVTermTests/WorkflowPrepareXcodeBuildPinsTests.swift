@@ -228,8 +228,9 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     /// invocation, so the restored archive intermediates are wiped before
     /// the build reads them (measured, issue #422). The pin binds the exact
     /// build-setting token so the fix cannot be silently removed, widened
-    /// to a path outside the cached root, or duplicated (xcodebuild build
-    /// settings are last-wins), and binds the kept `-derivedDataPath`.
+    /// to a path outside the cached root, or duplicated **with any value**
+    /// (xcodebuild build settings are last-wins), and binds the kept
+    /// `-derivedDataPath`.
     @Test
     func testOTAArchiveRelocatesOBJROOTInsideCachedDerivedData() throws {
         let steps = try Self.otaSteps()
@@ -243,6 +244,18 @@ struct WorkflowPrepareXcodeBuildPinsTests {
             without it `xcodebuild archive` recreates ArchiveIntermediates/VVTerm/\
             IntermediateBuildFilesPath and the restored objects are wiped before the \
             build reads them (issue #422)
+            """
+        )
+        // Any second `OBJROOT=` assignment — whatever its value — shadows the
+        // pinned one (xcodebuild build settings are last-wins), so a bare
+        // assignment count is what makes a differently-valued duplicate red.
+        let assignmentCount = archive.text.components(separatedBy: "OBJROOT=").count - 1
+        #expect(
+            assignmentCount == 1,
+            """
+            the OTA archive step must carry exactly one `OBJROOT=` assignment \
+            (found \(assignmentCount)); a second assignment with any value is \
+            last-wins and silently unrelocates the archive scratch (issue #422)
             """
         )
         #expect(
