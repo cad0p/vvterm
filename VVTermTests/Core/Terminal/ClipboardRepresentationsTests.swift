@@ -19,6 +19,9 @@
 import Foundation
 import Testing
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 @testable import VVTerm
 
 struct ClipboardRepresentationsTests {
