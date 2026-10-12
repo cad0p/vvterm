@@ -635,7 +635,9 @@ fold does not close: `-f` script bodies, interpreters outside the inline-program
 resolve (`exec`/`ionice`/`chrt`/`taskset`, a long-option abbreviation, a
 grouped command position `(xargs …)`, `xargs … < pf`, an untraced
 `$`-word on a joined line — including the indirect expansion `${!v}` — a
-nested assignment body — the measured
+nested assignment body, a command word assembled at runtime
+(`$CMD`/`${CMD}`, a wrapper-producing `$(echo env)` substitution or
+backtick, `$"env"` — measured FLIP and pinned) — the measured
 wrapper/assignment/continuation spellings (`env xargs`, `FOO=1 xargs`,
 `nice xargs`, `command xargs`, `time xargs`, a trailing-`|` or backslash
 multi-line pipeline) now refuse since #350f, and the bare
@@ -650,7 +652,9 @@ short-option cluster, or behind another unparsed option — closing the
 former runtime-assembled `$CMD` residual), consumes bash's dynamic-fd
 `{name}` redirect prefix, carries the quote and backslash state across
 pipeline hop lines (a post-quote or joined `|` counts, and an
-internal-pipe hop command is classified), and ships the wrapper-option
+internal-pipe hop command is classified), decodes `$'…'` ANSI-C
+literals in the carrier-site word tests (`$'env'`, `$'-S'`, `$'xargs'`,
+`x$'\141'rgs`), and ships the wrapper-option
 census fixtures with the rest demoted to this list), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
@@ -689,6 +693,8 @@ string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); an argv
 operand fed on stdin behind an unlisted wrapper (`exec xargs`), a
+command word assembled by expansion (`$CMD`/`${CMD}`, `$(echo env)`,
+`` `echo env` ``, `$"env"`), a
 long-option abbreviation that is not a `--split-string` spelling, or a
 grouped command position (`(xargs …)`) still sits outside the carrier
 table (the split string is refused unconditionally at any spelling since
@@ -1283,7 +1289,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 957
+EXPECTED_MANIFEST_CASES = 968
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1308,7 +1314,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 524
+EXPECTED_BASE_VERDICT_CASES = 531
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -6948,7 +6954,9 @@ def _run_id_xargs_unparsed_wrapper_refusal(
     message claims `xargs` runs when the walk could not prove it does
     (fold round 1, F7a: the split-string's decoded command can be `echo
     xargs`, so the generic message claims only the unresolved position)."""
-    if wrapper == "env" and _env_split_string_spelling(token):
+    if wrapper == "env" and _env_split_string_spelling(
+        _shell_decode_ansi_c(token)
+    ):
         return Refusal(
             step.run_id_line or step.uses_line,
             f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs "
@@ -7828,7 +7836,10 @@ def _consume_wrapper_options(
     while cursor < len(segment):
         if segment[cursor][0] != "word":
             return (cursor, None)
-        token = segment[cursor][1]
+        # `$'…'` option spellings decode before the grammar test (fold
+        # round 2, H): `env $'-S' …` is the split string, `env $'-i' …`
+        # the ignore-environment flag.
+        token = _shell_decode_ansi_c(segment[cursor][1])
         if verb == "env":
             if token == "--":
                 return (cursor + 1, None)
@@ -7944,13 +7955,19 @@ def _effective_command_word(
 ) -> tuple[str, int, str] | tuple[str, int, str, str] | None:
     """The command a segment executes, walking assignment prefixes, the
     redirection prefixes and the modelled wrapper table (issue #350f; fold
-    round 1 F3/F6). Returns `("resolved", index, name)` for a definite
+    round 1 F3/F6; fold round 2 H decodes `$'…'` ANSI-C literals first).
+    Returns `("resolved", index, name)` for a definite
     effective command word, `("unparsed", index, wrapper, token)` when a
     recognized wrapper meets a word the table cannot place where its
     command must sit, or None when the walk ends without a command word.
-    Used only by the xargs carrier site and its sibling unparsed check: the
-    argv write-target tables already scan every operand word, so filtering
-    them to the effective word could only drop candidates."""
+    Bash expands `$'…'` before the command runs, and the tokenizer keeps
+    the literal verbatim, so each word is ANSI-C-decoded (`$'env'` is the
+    wrapper `env`, `$'xargs'` the carrier, `x$'\141'rgs` is `xargs`,
+    `$'FOO=1'` an assignment prefix) before the tests; a word with no
+    `$'` spelling is returned untouched. Used only by the xargs carrier
+    site and its sibling unparsed check: the argv write-target tables
+    already scan every operand word, so filtering them to the effective
+    word could only drop candidates."""
     position = 0
     pending_wrapper: str | None = None
     while position < len(segment):
@@ -7964,6 +7981,13 @@ def _effective_command_word(
         kind, text, _start, _end = segment[position]
         if kind != "word":
             return None
+        # Bash decodes `$'…'` ANSI-C literals before the command runs, so
+        # `$'env'`/`$'xargs'`/`x$'\141'rgs`/`$'FOO=1'` are the words they
+        # decode to (fold round 2, H: the tokenizer keeps `$'…'` verbatim,
+        # so the carrier-site tests decode the word here). A word with no
+        # `$'` spelling is returned untouched, so existing spellings and
+        # their diagnostics cannot move.
+        text = _shell_decode_ansi_c(text)
         if _ASSIGNMENT_OPERAND_RE.match(text):
             # `FOO=1 xargs …` / `env FOO=1 xargs …`: an assignment prefix
             # (or an `env` assignment operand) is not the command word.
@@ -8026,12 +8050,17 @@ def _xargs_unparsed_wrapper(
         # the command is scanned for a split-string spelling. The gate
         # ships no `env -S` usage, so the real tree is unaffected.
         for kind, text, _start, _end in segment[index:]:
-            if kind == "word" and _env_split_string_spelling(text):
+            if kind == "word" and _env_split_string_spelling(
+                _shell_decode_ansi_c(text)
+            ):
                 return (wrapper, text)
     for kind, text, _start, _end in segment[index:]:
         if kind != "word":
             continue
-        if text.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(text):
+        candidate = _shell_decode_ansi_c(text)
+        if candidate.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(
+            candidate
+        ):
             return (wrapper, token)
     return None
 

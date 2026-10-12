@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 957
-    private static let expectedBaseVerdictCases = 524
+    private static let expectedManifestCases = 968
+    private static let expectedBaseVerdictCases = 531
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1217,6 +1217,17 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-xargs-timeout-kill-after.yml",
         "reject-runid-github-env-write-xargs-timeout-preserve-status.yml",
         "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop.yml",
+        "reject-runid-github-env-write-xargs-env-ansic-verb.yml",
+        "reject-runid-github-env-write-xargs-env-ansic-verb-hex.yml",
+        "reject-runid-github-env-write-xargs-env-ansic-split-string.yml",
+        "reject-runid-github-env-write-xargs-ansic-verb.yml",
+        "reject-runid-github-env-write-xargs-ansic-verb-embedded.yml",
+        "reject-runid-github-env-write-xargs-env-ansic-option.yml",
+        "reject-runid-github-env-write-xargs-env-ansic-assignment.yml",
+        "accept-runid-github-env-write-xargs-ansic-verb-literal.yml",
+        "accept-runid-github-env-write-xargs-variable-command-word.yml",
+        "accept-runid-github-env-write-xargs-substitution-command-word.yml",
+        "accept-runid-github-env-write-xargs-locale-quoted-command-word.yml",
         "reject-runid-github-env-write-xargs-redirection-fd-input.yml",
     ]
 

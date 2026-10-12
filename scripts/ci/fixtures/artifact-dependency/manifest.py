@@ -9008,4 +9008,121 @@ CASES = [
             "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
         ]
     },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ansic-verb",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ansic-verb.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ansic-verb.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ansic-verb-hex",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ansic-verb-hex.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ansic-verb-hex.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ansic-split-string",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ansic-split-string.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ansic-split-string.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `env` with a split string (`-S`) whose decoding space the extractor does not model (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-ansic-verb",
+        "files": [
+            "reject-runid-github-env-write-xargs-ansic-verb.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-ansic-verb.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-ansic-verb-embedded",
+        "files": [
+            "reject-runid-github-env-write-xargs-ansic-verb-embedded.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-ansic-verb-embedded.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ansic-option",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ansic-option.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ansic-option.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `env` with a split string (`$'-S'`) whose decoding space the extractor does not model (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ansic-assignment",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ansic-assignment.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ansic-assignment.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-ansic-verb-literal",
+        "files": [
+            "accept-runid-github-env-write-xargs-ansic-verb-literal.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-variable-command-word",
+        "files": [
+            "accept-runid-github-env-write-xargs-variable-command-word.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-substitution-command-word",
+        "files": [
+            "accept-runid-github-env-write-xargs-substitution-command-word.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-locale-quoted-command-word",
+        "files": [
+            "accept-runid-github-env-write-xargs-locale-quoted-command-word.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
 ]
