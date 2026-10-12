@@ -55,13 +55,29 @@ enum Ghostty {
 
 // MARK: - #327 clipboard confirmation
 
+// Upstream line references in this file are in the **patch-applied** tree
+// (`custom-io.patch` applied to `1e9e14a`) — the tree the vendored core is
+// built from — not the pristine upstream tree (the patch's own insertions
+// shift the numbers).
+
 /// Which ghostty clipboard-request kinds may prompt the user (#327).
 ///
-/// Only the user-initiated paste kind may prompt. `.osc_52_read` cannot exist
-/// under `clipboard-read = deny` (`Surface.zig:5898-5904` refuses before a
-/// request is allocated) and must never be user-authorized if that config ever
-/// changes; `.osc_52_write` cannot reach the confirm callback at all (its write
-/// path never travels through `startClipboardRequest`).
+/// Only the user-initiated paste kind may prompt. Reachability under this
+/// app's fixed config (`clipboard-read = deny`; `clipboard-write` unset,
+/// whose default is `.allow`):
+///
+///   - `.paste` — reachable (user paste that needs confirmation).
+///   - `.kitty_read` — EPERM'd at policy before a request is allocated
+///     (`Surface.zig:6416-6500`), so it never reaches the callback.
+///   - `.kitty_write` — allowed by default, so its contents travel straight
+///     to the write callback; only a confirmation route would reach here.
+///   - `.list` — reaches the read callback (a mode 5522 paste) but can never
+///     reach the confirm callback: a listing asks for no confirmation.
+///   - `.osc_52_read` — refused at policy under `clipboard-read = deny`
+///     (`Surface.zig:1082-1086`); if that config ever changes, this branch
+///     must present a read-specific prompt or the read is denied below.
+///   - `.osc_52_write` — cannot reach the confirm callback at all (its write
+///     path never travels through `startClipboardRequest`).
 enum ClipboardConfirmationPolicy {
     static func requiresUserPrompt(_ request: ghostty_clipboard_request_e) -> Bool {
         request == GHOSTTY_CLIPBOARD_REQUEST_PASTE
@@ -111,6 +127,7 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         let kind: ghostty_clipboard_request_e
         let byteLength: Int
         let confirmed: Bool
+        let denied: Bool
     }
 
     private static let lock = NSLock()
@@ -124,8 +141,12 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         return recordedCallbackKinds
     }
 
-    /// Every completion routed through `complete(...)` — including the deny
-    /// completions a surface-teardown drain issues (#329).
+    /// Every completion or denial — including the deny releases a
+    /// surface-teardown drain issues (#329) — routed through `complete(...)`
+    /// or `deny(...)`. `denied` distinguishes the two terminal outcomes;
+    /// `confirmed` keeps the pre-#376 shape (`true` for denials too, because
+    /// the old deny form was a completion) so the historical assertions stay
+    /// meaningful.
     static var completions: [Completion] {
         lock.lock(); defer { lock.unlock() }
         return recordedCompletions
@@ -145,9 +166,19 @@ nonisolated enum GhosttyClipboardConfirmDebug {
         recordedCallbackKinds.append(kind)
     }
 
-    static func noteCompletion(kind: ghostty_clipboard_request_e, byteLength: Int, confirmed: Bool) {
+    static func noteCompletion(
+        kind: ghostty_clipboard_request_e,
+        byteLength: Int,
+        confirmed: Bool,
+        denied: Bool
+    ) {
         lock.lock(); defer { lock.unlock() }
-        recordedCompletions.append(Completion(kind: kind, byteLength: byteLength, confirmed: confirmed))
+        recordedCompletions.append(Completion(
+            kind: kind,
+            byteLength: byteLength,
+            confirmed: confirmed,
+            denied: denied
+        ))
     }
 
     static func noteTeardownDrain(kind: ghostty_clipboard_request_e) {
@@ -457,10 +488,21 @@ extension Ghostty {
                 supports_selection_clipboard: supportsSelectionClipboard,
                 wakeup_cb: { userdata in App.wakeup(userdata) },
                 action_cb: { app, target, action in App.action(app!, target: target, action: action) },
-                read_clipboard_cb: { userdata, loc, state in App.readClipboard(userdata, location: loc, state: state) },
-                confirm_read_clipboard_cb: { userdata, str, state, request in App.confirmReadClipboard(userdata, string: str, state: state, request: request) },
-                write_clipboard_cb: { userdata, loc, content, count, confirm in
-                    App.writeClipboard(userdata, location: loc, contents: content, count: count, confirm: confirm)
+                read_clipboard_cb: { userdata, loc, state, mimes, mimesLen, list in
+                    App.readClipboard(
+                        userdata,
+                        location: loc,
+                        state: state,
+                        mimes: mimes,
+                        mimesLen: mimesLen,
+                        list: list
+                    )
+                },
+                confirm_read_clipboard_cb: { userdata, confirm, state, request in
+                    App.confirmReadClipboard(userdata, confirm: confirm, state: state, request: request)
+                },
+                write_clipboard_cb: { userdata, loc, content, len, confirm in
+                    App.writeClipboard(userdata, location: loc, contents: content, len: len, confirm: confirm)
                 },
                 close_surface_cb: { userdata, processAlive in App.closeSurface(userdata, processAlive: processAlive) }
             )
@@ -1233,48 +1275,96 @@ extension Ghostty {
             }
         }
 
-        // Upstream changed this callback to return Bool: true when the
-        // clipboard content was provided to libghostty, false when it can't
-        // be read so performable paste bindings fall through to the terminal.
-        static func readClipboard(_ userdata: UnsafeMutableRawPointer?, location: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
-            // userdata is the surface's retained callback context (#310).
-            // Thread contract: the core's termio stream handler (OSC 52,
-            // `termio/stream_handler.zig:963-977`) sends `.clipboard_read` to
-            // the surface MAILBOX from the I/O thread; `Surface.handleMessage`
-            // — documented "Called from the app thread" (`Surface.zig:970-972`,
-            // handler at `:1055-1062`) — handles it on the app thread, which
-            // VVTerm's `wakeup` ticks on the main queue. That is the same
-            // thread the main-actor `free()` runs on, so the surface-handle
-            // read below is not a live race. The context is what makes the
-            // view resolution safe for the callbacks that can run off-main
-            // (the write callback and the `action` fallback); it is not needed
-            // to make these reads race-free.
+        /// The read side of the kitty-clipboard request contract. The core
+        /// asks for the representations it wants served (`mimes`) and passes
+        /// the **`list` flag** as the 6th argument (not a password); when
+        /// `list` is true it also wants a metadata-only MIME listing.
+        ///
+        /// Result mapping (the core destroys its request state itself on any
+        /// non-`STARTED` result — `apprt/embedded.zig:804-805` — so a
+        /// non-started path must never complete, deny, or retain `state`):
+        ///
+        ///   - dead context/surface → `UNSUPPORTED`
+        ///   - nothing servable and `!list` → `UNAVAILABLE`
+        ///   - otherwise complete synchronously and return `STARTED`
+        ///
+        /// Only `text/plain` is served today: the app's `Clipboard.readString()`
+        /// can produce that representation, and every other requested mime is
+        /// skipped exactly like upstream skips unservable representations. The
+        /// non-text representations (`text/uri-list`, arbitrary UTType payloads)
+        /// remain a tracked follow-up (issue #431).
+        ///
+        /// Thread contract: the core's termio stream handler sends
+        /// `.clipboard_read` to the surface MAILBOX from the I/O thread
+        /// (`termio/stream_handler.zig:1041`); `Surface.handleMessage` —
+        /// documented "Called from the app thread" (`Surface.zig:995`,
+        /// clipboard arms `:1082-1086` and `:1091-1093`, kitty handlers
+        /// `:6416-6500`) — handles
+        /// it on the app thread, which VVTerm's `wakeup` ticks on the main
+        /// queue. That is the same thread the main-actor `free()` runs on, so
+        /// the surface-handle read below is not a live race. The context is
+        /// what makes the view resolution safe for the callbacks that can run
+        /// off-main (the write callback and the `action` fallback); it is not
+        /// needed to make these reads race-free.
+        static func readClipboard(
+            _ userdata: UnsafeMutableRawPointer?,
+            location: ghostty_clipboard_e,
+            state: UnsafeMutableRawPointer?,
+            mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+            mimesLen: Int,
+            list: Bool
+        ) -> ghostty_clipboard_read_result_e {
             guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
                   let terminalView = context.resolve()
-            else { return false }
-            guard let surface = terminalView.surface?.unsafeCValue else { return false }
-
-            // Read from macOS clipboard
-            guard let clipboardString = Clipboard.readString() else { return false }
-
-            // Complete the clipboard request by providing data to Ghostty
-            clipboardString.withCString { ptr in
-                ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
+            else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+            guard let surface = terminalView.surface?.unsafeCValue else {
+                return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
             }
 
-            Ghostty.logger.debug("Read clipboard: \(clipboardString.prefix(50), privacy: .private)...")
-            return true
+            var contents: [(mime: String, data: Data)] = []
+            var seen = Set<String>()
+            if let mimes {
+                for index in 0..<mimesLen {
+                    guard let ptr = mimes[index] else { continue }
+                    let mime = String(cString: ptr)
+                    guard seen.insert(mime).inserted else { continue }
+                    guard mime == "text/plain" else { continue }
+                    guard let clipboardString = Clipboard.readString() else { continue }
+                    contents.append((mime: mime, data: Data(clipboardString.utf8)))
+                }
+            }
+
+            // The listing is metadata-only by contract: `Clipboard.availableMimeTypes()`
+            // inspects declared pasteboard types and never reads their data.
+            let available = list ? Clipboard.availableMimeTypes() : []
+
+            guard !contents.isEmpty || list else {
+                return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
+            }
+
+            completeRequest(
+                surface: surface,
+                contents: contents,
+                available: available,
+                state: state,
+                confirmed: false
+            )
+
+            Ghostty.logger.debug(
+                "Read clipboard: served \(contents.count) representation(s), listing=\(list)"
+            )
+            return GHOSTTY_CLIPBOARD_READ_STARTED
         }
 
         /// #327: the ghostty clipboard-confirmation contract. The core calls
         /// this after a clipboard read when the request needs confirmation;
-        /// the embedder must then complete the request exactly once
-        /// (`apprt/embedded.zig:60-68`, `:1998-2010`). Only the user-initiated
+        /// the embedder must then complete or deny the request exactly once
+        /// (`apprt/embedded.zig:57-62`, `:2281-2295`). Only the user-initiated
         /// paste kind prompts; every other kind is denied immediately, without
         /// a prompt and without copying the payload.
         static func confirmReadClipboard(
             _ userdata: UnsafeMutableRawPointer?,
-            string: UnsafePointer<CChar>?,
+            confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
             state: UnsafeMutableRawPointer?,
             request: ghostty_clipboard_request_e
         ) {
@@ -1284,34 +1374,23 @@ extension Ghostty {
 
             // Kind policy first: a kind that will be denied must not even copy
             // the payload, whose pointer is only valid inside this frame.
-            //
-            // `.osc_52_read` cannot reach here under `clipboard-read = deny`
-            // (`Surface.zig:1055-1058`, `:5898-5904`); if that config ever
-            // becomes `ask`, this branch must present a read-specific prompt
-            // (upstream macOS: `macos/Sources/Ghostty/Ghostty.App.swift:305-334`)
-            // or the read is denied.
+            // Reachability of each kind is documented on
+            // `ClipboardConfirmationPolicy` above.
             guard ClipboardConfirmationPolicy.requiresUserPrompt(request) else {
                 Ghostty.logger.warning("clipboard request denied without prompt kind=\(request.rawValue)")
                 guard let context = Ghostty.SurfaceCallbackContext.fromOpaque(userdata),
                       let view = context.resolve(),
                       let surface = view.surface?.unsafeCValue
                 else {
-                    // Accepted residual: no live surface handle to complete on.
+                    // Accepted residual: no live surface handle to deny on.
                     Ghostty.logger.warning("clipboard request deny skipped: dead surface kind=\(request.rawValue)")
                     return
                 }
-                // #329: register the request before completing it so the
-                // completion's claim consumes the entry it just added; a
-                // deniable request must never leave a registry entry behind.
-                if let state {
-                    context.registerPendingClipboardRequest(state: state, kind: request)
-                }
-                // Empty data is the deny form: for `.paste` the core returns
-                // before pasting (`Surface.zig:5918`); for `.osc_52_read` it
-                // replies with an empty OSC 52 payload (`:6006-6027`). Either
-                // way the completion destroys the request state
-                // (`embedded.zig:751`).
-                complete(surface: surface, payload: "", state: state, confirmed: true, kind: request, context: context)
+                // #329/#376: this synchronous policy deny is independent of
+                // registration success — it never registers an entry, so it
+                // must call the deny whenever the core handed us a state, or
+                // the request state leaks.
+                deny(surface: surface, state: state, kind: request)
                 return
             }
 
@@ -1324,23 +1403,53 @@ extension Ghostty {
                   let surface = view.surface?.unsafeCValue
             else {
                 // Accepted residual: the surface is gone, so there is no live
-                // handle to complete on (the core exports no cancel route).
-                // Reachable only from a user-driven paste on a surface that died
-                // during this call — never from remote input. The resolve guard
-                // sits above the payload copy so this path never copies
-                // clipboard content it cannot deliver.
+                // handle to complete or deny on (the core exports no cancel
+                // route). Reachable only from a user-driven paste on a surface
+                // that died during this call — never from remote input. The
+                // resolve guard sits above the payload copy so this path never
+                // copies clipboard content it cannot deliver.
                 Ghostty.logger.warning("clipboard confirmation skipped: dead surface")
                 return
             }
 
-            // Copy NOW: `string` points at the core's request state and is only
-            // valid for the duration of this callback frame (the confirm route
-            // forwards `str.ptr` without copying — `embedded.zig:736-744`).
-            let payload = string.map { String(cString: $0) } ?? ""
+            // Copy NOW: the confirm payload is borrowed for this callback frame
+            // only (`apprt/embedded.zig:77-84`); `data` is binary-safe with an
+            // explicit length and is not necessarily NUL-terminated
+            // (`include/ghostty.h:79-87`).
+            guard let confirm else {
+                Ghostty.logger.warning("clipboard confirmation skipped: no payload kind=\(request.rawValue)")
+                deny(surface: surface, state: state, kind: request)
+                return
+            }
+            let c = confirm.pointee
+            var payloads: [(mime: String, data: Data)] = []
+            if let contents = c.contents {
+                for index in 0..<c.contents_len {
+                    let content = contents[index]
+                    let data: Data = if content.len > 0 {
+                        Data(bytes: content.data, count: content.len)
+                    } else {
+                        Data()
+                    }
+                    payloads.append((mime: String(cString: content.mime), data: data))
+                }
+            }
+            var available: [String] = []
+            if let mimePointers = c.available {
+                for index in 0..<c.available_len {
+                    guard let ptr = mimePointers[index] else { continue }
+                    available.append(String(cString: ptr))
+                }
+            }
+
+            // The prompt shows the text representation when there is one; the
+            // completion still carries the exact copied payloads.
+            let displayPayload = payloads.first(where: { $0.mime == "text/plain" })
+                .flatMap { String(data: $0.data, encoding: .utf8) } ?? ""
 
             // #329: register the in-flight request so a surface free while the
-            // prompt is open releases it as a deny completion instead of
-            // retaining the core's allocation for the surface's lifetime.
+            // prompt is open releases it as a deny instead of retaining the
+            // core's allocation for the surface's lifetime.
             if let state {
                 context.registerPendingClipboardRequest(state: state, kind: request)
             }
@@ -1348,7 +1457,7 @@ extension Ghostty {
             // Keep the alert off the binding stack: this frame returns before
             // any presentation starts.
             Task { @MainActor in
-                let confirmation = ClipboardConfirmationRequest(payload: payload)
+                let confirmation = ClipboardConfirmationRequest(payload: displayPayload)
                 let allow: Bool
                 if let decision = view.clipboardConfirmationDecision {
                     // Test seam: per-view, so parallel tests cannot cross-talk.
@@ -1368,23 +1477,27 @@ extension Ghostty {
                     return
                 }
 
-                complete(
-                    surface: surface,
-                    payload: allow ? payload : "",
-                    state: state,
-                    confirmed: true,
-                    kind: request,
-                    context: context
-                )
+                if allow {
+                    complete(
+                        surface: surface,
+                        contents: payloads,
+                        available: available,
+                        state: state,
+                        kind: request,
+                        context: context
+                    )
+                } else {
+                    denyClaimed(surface: surface, state: state, kind: request, context: context)
+                }
             }
         }
 
         /// Completes a clipboard request. The core's shim owns the one-shot
         /// contract — "can only be called once for a given request. Once it is
         /// called with a request the request pointer will be invalidated"
-        /// (`apprt/embedded.zig:1998-2010`) — so every exit path of
-        /// `confirmReadClipboard` routes through here and the DEBUG telemetry
-        /// records each call, making "at most once" checkable in one place.
+        /// (`apprt/embedded.zig:2281-2295`) — so every exit path routes through
+        /// here or `denyClaimed`, and the DEBUG telemetry records each call,
+        /// making "at most once" checkable in one place.
         ///
         /// #329: the completion first claims its registered request from the
         /// context. The claim removes the registry entry so a later teardown
@@ -1396,9 +1509,9 @@ extension Ghostty {
         /// nil-state guard, then claim, then telemetry, then the C call.
         private static func complete(
             surface: ghostty_surface_t,
-            payload: String,
+            contents: [(mime: String, data: Data)],
+            available: [String],
             state: UnsafeMutableRawPointer?,
-            confirmed: Bool,
             kind: ghostty_clipboard_request_e,
             context: Ghostty.SurfaceCallbackContext
         ) {
@@ -1415,12 +1528,126 @@ extension Ghostty {
             #if DEBUG
             GhosttyClipboardConfirmDebug.noteCompletion(
                 kind: kind,
-                byteLength: payload.utf8.count,
-                confirmed: confirmed
+                byteLength: contents.reduce(0) { $0 + $1.data.count },
+                confirmed: true,
+                denied: false
             )
             #endif
-            payload.withCString { ptr in
-                ghostty_surface_complete_clipboard_request(surface, ptr, state, confirmed)
+            completeRequest(
+                surface: surface,
+                contents: contents,
+                available: available,
+                state: state,
+                confirmed: true
+            )
+        }
+
+        /// Denies a request whose registry entry this path owns (#376): claim
+        /// first so no stale entry survives into the teardown drain (a
+        /// double-deny on an already-destroyed state is a UAF), then deny.
+        private static func denyClaimed(
+            surface: ghostty_surface_t,
+            state: UnsafeMutableRawPointer?,
+            kind: ghostty_clipboard_request_e,
+            context: Ghostty.SurfaceCallbackContext
+        ) {
+            guard let state else {
+                Ghostty.logger.warning("clipboard denial skipped: no request state kind=\(kind.rawValue)")
+                return
+            }
+            guard context.claimPendingClipboardRequest(state) else {
+                Ghostty.logger.warning(
+                    "clipboard denial skipped: request not pending (teardown-drained, already claimed, or never registered) kind=\(kind.rawValue)"
+                )
+                return
+            }
+            deny(surface: surface, state: state, kind: kind)
+        }
+
+        /// The single deny call site: `ghostty_surface_deny_clipboard_request`
+        /// is the only correct deny for every request kind — never
+        /// `complete(empty, confirmed: true)`, which for `.kitty_write` applies
+        /// the request's own contents (`Surface.zig:6064-6099`) while the deny
+        /// replies EPERM without writing (`Surface.zig:6136-6179`). Also used
+        /// directly by the synchronous policy deny, which owns no registry
+        /// entry.
+        private static func deny(
+            surface: ghostty_surface_t,
+            state: UnsafeMutableRawPointer?,
+            kind: ghostty_clipboard_request_e
+        ) {
+            guard let state else {
+                Ghostty.logger.warning("clipboard denial skipped: no request state kind=\(kind.rawValue)")
+                return
+            }
+            #if DEBUG
+            GhosttyClipboardConfirmDebug.noteCompletion(
+                kind: kind,
+                byteLength: 0,
+                confirmed: true,
+                denied: true
+            )
+            #endif
+            ghostty_surface_deny_clipboard_request(surface, state)
+        }
+
+        /// Builds the C completion payload and calls the core's completion.
+        /// The struct borrows the copied representations for the duration of
+        /// the call only; the caller owns the claim and telemetry discipline.
+        private static func completeRequest(
+            surface: ghostty_surface_t,
+            contents: [(mime: String, data: Data)],
+            available: [String],
+            state: UnsafeMutableRawPointer?,
+            confirmed: Bool
+        ) {
+            var cStrings: [UnsafeMutablePointer<CChar>] = []
+            var cDatas: [UnsafeMutableRawPointer] = []
+            defer {
+                cStrings.forEach { free($0) }
+                cDatas.forEach { $0.deallocate() }
+            }
+
+            var cContents: [ghostty_clipboard_content_s] = []
+            for entry in contents {
+                guard let mime = strdup(entry.mime) else { continue }
+                cStrings.append(mime)
+                let buffer = UnsafeMutableRawPointer.allocate(
+                    byteCount: max(entry.data.count, 1),
+                    alignment: 1
+                )
+                cDatas.append(buffer)
+                entry.data.withUnsafeBytes { src in
+                    if let base = src.baseAddress {
+                        buffer.copyMemory(from: base, byteCount: src.count)
+                    }
+                }
+                cContents.append(ghostty_clipboard_content_s(
+                    mime: mime,
+                    data: buffer.assumingMemoryBound(to: CChar.self),
+                    len: entry.data.count
+                ))
+            }
+
+            var cAvailable: [UnsafePointer<CChar>?] = []
+            for mime in available {
+                guard let str = strdup(mime) else { continue }
+                cStrings.append(str)
+                cAvailable.append(UnsafePointer(str))
+            }
+
+            cContents.withUnsafeBufferPointer { contentsBuffer in
+                cAvailable.withUnsafeBufferPointer { availableBuffer in
+                    var complete = ghostty_clipboard_complete_s(
+                        contents: contentsBuffer.baseAddress,
+                        contents_len: contentsBuffer.count,
+                        available: availableBuffer.baseAddress,
+                        available_len: availableBuffer.count,
+                        confirmed: confirmed,
+                        remember: false
+                    )
+                    ghostty_surface_complete_clipboard_request(surface, &complete, state)
+                }
             }
         }
 
@@ -1428,30 +1655,32 @@ extension Ghostty {
             _ userdata: UnsafeMutableRawPointer?,
             location: ghostty_clipboard_e,
             contents: UnsafePointer<ghostty_clipboard_content_s>?,
-            count: Int,
+            len: Int,
             confirm: Bool
         ) {
-            guard let contents = contents, count > 0 else { return }
+            guard let contents = contents, len > 0 else { return }
             #if os(iOS)
             guard location != GHOSTTY_CLIPBOARD_SELECTION else { return }
             #endif
 
             // The runtime passes an array of clipboard entries; prefer the first
-            // textual entry. The API does not supply a byte length, so we treat
-            // the data as a null-terminated UTF-8 C string.
-            for idx in 0..<count {
-                let entry = contents.advanced(by: idx).pointee
+            // textual entry. Each entry carries an explicit byte length and is
+            // binary-safe, not necessarily NUL-terminated. `confirm` stays
+            // ignored (unchanged from the pre-#376 behavior): this migration
+            // does not pull in upstream's confirmation route.
+            for index in 0..<len {
+                let entry = contents[index]
                 guard let dataPtr = entry.data else { continue }
 
-                var string = String(cString: dataPtr)
-                if !string.isEmpty {
-                    // Apply copy transformations from settings
-                    string = TerminalTextCleaner.cleanText(string, settings: .current())
+                let data = Data(bytes: dataPtr, count: entry.len)
+                guard let string = String(data: data, encoding: .utf8), !string.isEmpty else { continue }
 
-                    Clipboard.copy(string)
-                    Ghostty.logger.debug("Wrote to clipboard: \(string.prefix(50))...")
-                    return
-                }
+                // Apply copy transformations from settings
+                let cleaned = TerminalTextCleaner.cleanText(string, settings: .current())
+
+                Clipboard.copy(cleaned)
+                Ghostty.logger.debug("Wrote to clipboard: \(cleaned.prefix(50))...")
+                return
             }
         }
 
