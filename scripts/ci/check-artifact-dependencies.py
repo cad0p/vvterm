@@ -1226,7 +1226,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 859
+EXPECTED_MANIFEST_CASES = 884
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1251,7 +1251,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 428
+EXPECTED_BASE_VERDICT_CASES = 453
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -4544,6 +4544,36 @@ def _continuation_hides_redirect_target(line: str) -> bool:
     return False
 
 
+def _tokens_end_in_pipe_operator(
+    tokens: list[tuple[str, str, int, int]],
+) -> bool:
+    """True when a token stream ends in a bare `|` pipeline operator or in
+    `|&` (`2>&1 |`), so bash continues the pipeline on the next logical
+    line (issue #350f). `||` and `>|` are distinct single ops and do not
+    match; a `|` after an unquoted `#` is a comment and yields no op."""
+    if not tokens:
+        return False
+    if tokens[-1][0] == "op" and tokens[-1][1] == "|":
+        return True
+    return (
+        len(tokens) >= 2
+        and tokens[-1][0] == "op"
+        and tokens[-1][1] == "&"
+        and tokens[-2][0] == "op"
+        and tokens[-2][1] == "|"
+    )
+
+
+def _line_ends_in_pipe_operator(line: str) -> bool:
+    """The token-level trailing-`|` predicate over one physical line
+    (issue #350f). Scoped to the xargs carrier path: the shared
+    continuation predicates are not touched. A `|` inside a multiline
+    double-quoted string still tokenizes as an operator here (the per-line
+    tokenizer does not carry the quote state in), so the caller gates on
+    the whole-body quote state."""
+    return _tokens_end_in_pipe_operator(_shell_tokens(line))
+
+
 def _command_substitution_depth(
     line: str, depth: int = 0, in_backtick: bool = False
 ) -> tuple[int, bool]:
@@ -5577,6 +5607,57 @@ def _bash_continuation_bound_exceeded(
         cursor = nxt
 
 
+def _pipe_continuation_bound_exceeded(
+    lines: list[str],
+    index: int,
+    pending: list[tuple[bool, str | None]],
+) -> bool:
+    """True when the trailing-`|` join would hit its analysis bound for the
+    chain that starts at `lines[index]` and yield no join (issue #350f).
+    Mirrors the new join's walk exactly: blank/comment-inclusive distance
+    from the pipe line to the next non-blank, non-comment line, and
+    EOF-before-bound returns False (a body-final `|` keeps no join and is an
+    accept boundary). The whole-body quote state gates it exactly as it
+    gates the join — a `|` inside a multiline quoted string never starts a
+    chain. The join and the body-level exceedance predicate share this
+    decision so they cannot drift."""
+    if index >= len(pending) or pending[index][1] is not None:
+        return False
+    if not _line_ends_in_pipe_operator(lines[index]):
+        return False
+    cursor = index + 1
+    while cursor < len(lines):
+        stripped = lines[cursor].strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        cursor += 1
+    if cursor >= len(lines):
+        return False
+    return (cursor - index) >= _CONTINUATION_JOIN_MAX_LINES
+
+
+def _joined_continuation_text(lines: list[str], index: int) -> str | None:
+    """The raw backslash-joined logical-line text that starts at
+    `lines[index]`, or None when `index` does not end in a continuation or
+    the join hits the analysis bound (issue #350f). The construction is the
+    sibling `_joined_continuation_segments`'s walk exactly — the raw `\\`
+    and the inserted newline are kept, and a chain beyond the bound yields
+    None — extracted so the xargs carrier can classify the joined text with
+    the same join the argv walk uses instead of re-deriving it."""
+    if not _line_continuation_pending(lines[index]):
+        return None
+    if _raw_continuation_bound_exceeded(lines, index):
+        return None
+    joined = [lines[index]]
+    cursor = index
+    while _line_continuation_pending(joined[-1]):
+        cursor += 1
+        if cursor >= len(lines):
+            break
+        joined.append(lines[cursor])
+    return "\n".join(joined)
+
+
 def _joined_continuation_segments(
     lines: list[str], index: int
 ) -> list[list[tuple[str, str, int, int]]]:
@@ -5600,23 +5681,65 @@ def _joined_continuation_segments(
     still returns `[]`; that empty result is a fail-open on its own, so
     `_raw_continuation_bound_exceeded` mirrors this walk and the body-level
     predicate in `_refuse_github_env_run_id_write` refuses such a body
-    instead (issue #350e)."""
-    if not _line_continuation_pending(lines[index]):
+    instead (issue #350e). The construction lives in the sibling
+    `_joined_continuation_text`, which the xargs carrier path also reads
+    (issue #350f)."""
+    text = _joined_continuation_text(lines, index)
+    if text is None:
         return []
-    if _raw_continuation_bound_exceeded(lines, index):
-        return []
-    joined = [lines[index]]
-    cursor = index
-    while _line_continuation_pending(joined[-1]):
-        cursor += 1
-        if cursor >= len(lines):
-            break
-        joined.append(lines[cursor])
     return [
         segment
-        for segment in _shell_segments(_shell_tokens("\n".join(joined)))
+        for segment in _shell_segments(_shell_tokens(text))
         if segment
     ]
+
+
+def _bash_joined_continuation_text(
+    lines: list[str],
+    index: int,
+    content_indent: int,
+    pending: list[tuple[bool, str | None]],
+) -> str | None:
+    """The bash-faithful joined logical-line text that starts at
+    `lines[index]`, or None when `index` is not a continuation or the join
+    hits the analysis bound (issue #350f). The construction is the sibling
+    `_bash_joined_continuation_segments`'s walk exactly — content-indent
+    strip, `\\`+newline pair removal, blank skip, EOF drop, the start-quote
+    re-open — extracted so the xargs carrier can classify the same joined
+    text the argv walk reads."""
+
+    def stripped(line: str) -> str:
+        return _strip_continuation_indent(line, content_indent)
+
+    if index >= len(pending) or not pending[index][0]:
+        return None
+    if _bash_continuation_bound_exceeded(lines, index, pending):
+        return None
+    parts: list[str] = []
+    cursor = index
+    while True:
+        current = stripped(lines[cursor])
+        if cursor >= len(pending) or not pending[cursor][0]:
+            parts.append(current)
+            break
+        nxt = cursor + 1
+        while nxt < len(lines) and not lines[nxt].strip():
+            nxt += 1
+        if nxt >= len(lines):
+            # EOF case: bash drops the trailing backslash when the script
+            # file ends; the rule drops it in every style.
+            parts.append(current[:-1])
+            break
+        parts.append(current[:-1])
+        cursor = nxt
+    joined = "".join(parts)
+    start_quote = pending[index][1]
+    if start_quote is not None:
+        # The join starts inside a quote, so the text must re-open it; the
+        # first matching quote in the joined lines closes it exactly where
+        # bash would.
+        joined = start_quote + joined
+    return joined
 
 
 def _bash_joined_continuation_segments(
@@ -5658,42 +5781,15 @@ def _bash_joined_continuation_segments(
     rounds 1 and 2).
     Fidelity is bounded by `_scan_continuation_quote_state`'s modelled
     quote classes, which is a fail-closed subset of bash, not bash
-    exactness."""
-
-    def stripped(line: str) -> str:
-        return _strip_continuation_indent(line, content_indent)
-
-    if index >= len(pending) or not pending[index][0]:
+    exactness. The construction lives in the sibling
+    `_bash_joined_continuation_text`, which the xargs carrier path also
+    reads (issue #350f)."""
+    text = _bash_joined_continuation_text(lines, index, content_indent, pending)
+    if text is None:
         return []
-    if _bash_continuation_bound_exceeded(lines, index, pending):
-        return []
-    parts: list[str] = []
-    cursor = index
-    while True:
-        current = stripped(lines[cursor])
-        if cursor >= len(pending) or not pending[cursor][0]:
-            parts.append(current)
-            break
-        nxt = cursor + 1
-        while nxt < len(lines) and not lines[nxt].strip():
-            nxt += 1
-        if nxt >= len(lines):
-            # EOF case: bash drops the trailing backslash when the script
-            # file ends; the rule drops it in every style.
-            parts.append(current[:-1])
-            break
-        parts.append(current[:-1])
-        cursor = nxt
-    joined = "".join(parts)
-    start_quote = pending[index][1]
-    if start_quote is not None:
-        # The join starts inside a quote, so the text must re-open it; the
-        # first matching quote in the joined lines closes it exactly where
-        # bash would.
-        joined = start_quote + joined
     return [
         segment
-        for segment in _shell_segments(_shell_tokens(joined))
+        for segment in _shell_segments(_shell_tokens(text))
         if segment
     ]
 
@@ -7698,6 +7794,36 @@ def _xargs_unparsed_wrapper(
     return None
 
 
+def _carrier_refuses_upstream(
+    text: str,
+    relevant: set[str],
+    flip_targets: set[str],
+    require_unresolved_word_catch: bool,
+) -> bool:
+    """The sound predicate block of `_xargs_upstream_carrier`, over raw
+    upstream text (issue #350f). True when the text names the env file,
+    references a traced name, carries a command substitution/backtick, or —
+    when `require_unresolved_word_catch` — is a `$`-bearing word the
+    extractor cannot resolve. The joined/pipe sites pass False (the
+    substitution-body precedent): the `$`-word catch over-refuses a benign
+    `find "$DIR" | xargs`-style upstream on a physical line already, and a
+    joined upstream carrying an untraced `$` word is a named residual."""
+    if not text:
+        return False
+    if _mentions_github_env(text):
+        return True
+    if _carries_substitution_spelling(text):
+        return True
+    if _text_references_names(text, relevant, flip_targets):
+        return True
+    if require_unresolved_word_catch and any(
+        token[0] == "word" and ("$" in token[1] or "`" in token[1])
+        for token in _shell_tokens(text)
+    ):
+        return True
+    return False
+
+
 def _xargs_upstream_carrier(
     line: str,
     segment: list[tuple[str, str, int, int]],
@@ -7724,20 +7850,60 @@ def _xargs_upstream_carrier(
     if verb != "xargs":
         return None
     text = line[: segment[0][2]].strip()
-    if not text:
-        return None
-    if _mentions_github_env(text):
-        return text
-    if _carries_substitution_spelling(text):
-        return text
-    if _text_references_names(text, relevant, flip_targets):
-        return text
-    if require_unresolved_word_catch and any(
-        token[0] == "word" and ("$" in token[1] or "`" in token[1])
-        for token in _shell_tokens(text)
+    if _carrier_refuses_upstream(
+        text, relevant, flip_targets, require_unresolved_word_catch
     ):
         return text
     return None
+
+
+def _pipe_continuation_carrier(
+    lines: list[str],
+    index: int,
+    pending: list[tuple[bool, str | None]],
+    relevant: set[str],
+    flip_targets: set[str],
+) -> str | None:
+    """The upstream text of a trailing-`|` pipeline continuation whose next
+    command is an `xargs` segment the pipe can feed, or None (issue #350f).
+    Bash continues `cmd |` + newline + `xargs …` (past blank and
+    comment-only lines), so the per-line walk cannot see the carrier. The
+    predicate is token-level, gated on the whole-body quote state (a `|`
+    inside a multiline quoted string must not join), and the next command is
+    the first non-blank, non-comment line inside the bound. The upstream is
+    the pipe-terminated line's text before the operator (no re-joined string
+    is sliced) and is classified with the sound predicates only
+    (`require_unresolved_word_catch=False`). Only the first segment of the
+    continuation line is the pipeline's command; a later `;`-separated
+    segment is not fed by the pipe."""
+    if index >= len(pending) or pending[index][1] is not None:
+        return None
+    tokens = _shell_tokens(lines[index])
+    if not _tokens_end_in_pipe_operator(tokens):
+        return None
+    if _pipe_continuation_bound_exceeded(lines, index, pending):
+        return None
+    operator_index = len(tokens) - 1
+    if tokens[operator_index][1] == "&":
+        operator_index -= 1
+    upstream = lines[index][: tokens[operator_index][2]].strip()
+    cursor = index + 1
+    while cursor < len(lines):
+        stripped = lines[cursor].strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        cursor += 1
+    if cursor >= len(lines):
+        return None
+    segments = _shell_segments(_shell_tokens(lines[cursor]))
+    if not segments:
+        return None
+    walk = _effective_command_word(segments[0])
+    if walk is None or walk[0] != "resolved" or walk[2] != "xargs":
+        return None
+    if not _carrier_refuses_upstream(upstream, relevant, flip_targets, False):
+        return None
+    return upstream
 
 
 def _refuse_github_env_run_id_write(
@@ -7804,10 +7970,14 @@ def _refuse_github_env_run_id_write(
         # is computed once per body over non-payload lines — the same head
         # set the joins are consulted for — and shares each join's bound
         # decision through the helpers, so the guard cannot drift from the
-        # join it guards.
+        # join it guards. Issue #350f adds the trailing-`|` pipe chain as a
+        # third arm with the same decision sharing.
         if any(
             _raw_continuation_bound_exceeded(lines, bound_index)
             or _bash_continuation_bound_exceeded(
+                lines, bound_index, continuation_pending
+            )
+            or _pipe_continuation_bound_exceeded(
                 lines, bound_index, continuation_pending
             )
             for bound_index in range(len(lines))
@@ -8117,6 +8287,57 @@ def _refuse_github_env_run_id_write(
                     index,
                     joined_segment[0][2] if joined_segment else 0,
                     False,
+                )
+            # Issue #350f, mechanism B: the carrier consumes the logical
+            # line. The two existing backslash joins already compute the
+            # joined text, so the carrier classifies the same segments the
+            # argv walk above reads; the joined sites pass
+            # `require_unresolved_word_catch=False` (sound predicates only)
+            # because a joined upstream carrying a benign `$` word is the
+            # same over-refusal class the catch already produces on a
+            # physical line, and the real-tree witness is a `find "$DIR" |
+            # xargs` join. Additive with the per-line call above, which
+            # keeps the catch.
+            for joined_text in (
+                _joined_continuation_text(lines, index),
+                _bash_joined_continuation_text(
+                    lines,
+                    index,
+                    body.scalar_content_indent,
+                    continuation_pending,
+                ),
+            ):
+                if joined_text is None:
+                    continue
+                for joined_segment in _shell_segments(_shell_tokens(joined_text)):
+                    joined_carrier = _xargs_upstream_carrier(
+                        joined_text,
+                        joined_segment,
+                        relevant_names,
+                        flip_targets,
+                        require_unresolved_word_catch=False,
+                    )
+                    if joined_carrier is not None:
+                        raise _run_id_unmodelled_write_refusal(
+                            step, body, ("xargs", joined_carrier, True)
+                        )
+                    joined_unparsed = _xargs_unparsed_wrapper(joined_segment)
+                    if joined_unparsed is not None:
+                        raise _run_id_xargs_unparsed_wrapper_refusal(
+                            step, body, joined_unparsed[0], joined_unparsed[1]
+                        )
+            # Issue #350f, mechanism B.2: the trailing-`|` pipeline join.
+            # Bash continues the pipeline on the next non-blank,
+            # non-comment line, so the physical per-line walk cannot see a
+            # carried operand; the pipe join reads the pipe line's upstream
+            # text directly and the continuation line's own tokenization,
+            # gated on the whole-body quote state and the pipe-chain bound.
+            pipe_carrier = _pipe_continuation_carrier(
+                lines, index, continuation_pending, relevant_names, flip_targets
+            )
+            if pipe_carrier is not None:
+                raise _run_id_unmodelled_write_refusal(
+                    step, body, ("xargs", pipe_carrier, True)
                 )
 
 

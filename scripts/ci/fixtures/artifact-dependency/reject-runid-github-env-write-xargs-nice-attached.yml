@@ -1,9 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): a multi-line pipeline (trailing `|`)
-# hides the upstream from the per-line carrier walk; joining a trailing
-# `|` is a new mechanism deferred as a residual. The payload write makes
-# the pin exercise the real deferred hole: the gate stays ACCEPT and the
-# shape runtime-FLIPs (issue #350, item 2 boundary class).
+# Fixture: `nice -n5 xargs` (attached adjustment) resolves
+# through to the carrier (issue #350f; base ACCEPT, runtime FLIP).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,8 +18,7 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" |
-          xargs -I{} cp payload {}
+          printf '%s\n' "$(printenv "${x}${y}")" | nice -n5 xargs -I{} cp payload {}
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build
