@@ -392,7 +392,10 @@ literal `--input '{"ref":…}'` fails with `open {"ref":…}: no such file or
 directory` (gh 2.101) — so send the fields with `-f`/`-F` (`-F` types the
 value; the `inputs[…]` bracket form is required — a top-level `-F
 create_bump_pr=false` leaves the workflow input unset, so the default `true`
-applies and the bump steps still run):
+applies and the bump steps still run). The nested-field form's CLI parsing was
+verified locally only (a GET carrying the same fields serializes them into its
+query string); the nested-JSON POST body has not been executed locally, so the
+next validation dispatch is the end-to-end evidence for it:
 
 ```sh
 gh api -X POST repos/cad0p/vvterm/actions/workflows/ghostty-upstream-probe.yml/dispatches \
