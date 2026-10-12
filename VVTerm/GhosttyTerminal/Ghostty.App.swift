@@ -63,13 +63,13 @@ enum Ghostty {
 ///
 ///   - `.paste` — reachable (user paste that needs confirmation).
 ///   - `.kitty_read` — EPERM'd at policy before a request is allocated
-///     (`Surface.zig:6402-6448`), so it never reaches the callback.
+///     (`Surface.zig:6416-6500`), so it never reaches the callback.
 ///   - `.kitty_write` — allowed by default, so its contents travel straight
 ///     to the write callback; only a confirmation route would reach here.
 ///   - `.list` — reaches the read callback (a mode 5522 paste) but can never
 ///     reach the confirm callback: a listing asks for no confirmation.
 ///   - `.osc_52_read` — refused at policy under `clipboard-read = deny`
-///     (`Surface.zig:1069-1073`); if that config ever changes, this branch
+///     (`Surface.zig:1082-1086`); if that config ever changes, this branch
 ///     must present a read-specific prompt or the read is denied below.
 ///   - `.osc_52_write` — cannot reach the confirm callback at all (its write
 ///     path never travels through `startClipboardRequest`).
@@ -1276,7 +1276,7 @@ extension Ghostty {
         /// `list` is true it also wants a metadata-only MIME listing.
         ///
         /// Result mapping (the core destroys its request state itself on any
-        /// non-`STARTED` result — `apprt/embedded.zig:789-792` — so a
+        /// non-`STARTED` result — `apprt/embedded.zig:804-805` — so a
         /// non-started path must never complete, deny, or retain `state`):
         ///
         ///   - dead context/surface → `UNSUPPORTED`
@@ -1292,8 +1292,9 @@ extension Ghostty {
         /// Thread contract: the core's termio stream handler sends
         /// `.clipboard_read` to the surface MAILBOX from the I/O thread
         /// (`termio/stream_handler.zig:1041`); `Surface.handleMessage` —
-        /// documented "Called from the app thread" (`Surface.zig:982`,
-        /// clipboard arms `:1069-1080`, kitty handlers `:6402-6470`) — handles
+        /// documented "Called from the app thread" (`Surface.zig:995`,
+        /// clipboard arms `:1082-1086` and `:1091-1093`, kitty handlers
+        /// `:6416-6500`) — handles
         /// it on the app thread, which VVTerm's `wakeup` ticks on the main
         /// queue. That is the same thread the main-actor `free()` runs on, so
         /// the surface-handle read below is not a live race. The context is
@@ -1353,7 +1354,7 @@ extension Ghostty {
         /// #327: the ghostty clipboard-confirmation contract. The core calls
         /// this after a clipboard read when the request needs confirmation;
         /// the embedder must then complete or deny the request exactly once
-        /// (`apprt/embedded.zig:60-68`, `:1998-2010`). Only the user-initiated
+        /// (`apprt/embedded.zig:57-62`, `:2281-2295`). Only the user-initiated
         /// paste kind prompts; every other kind is denied immediately, without
         /// a prompt and without copying the payload.
         static func confirmReadClipboard(
@@ -1407,7 +1408,7 @@ extension Ghostty {
             }
 
             // Copy NOW: the confirm payload is borrowed for this callback frame
-            // only (`apprt/embedded.zig:76-84`); `data` is binary-safe with an
+            // only (`apprt/embedded.zig:77-84`); `data` is binary-safe with an
             // explicit length and is not necessarily NUL-terminated
             // (`include/ghostty.h:79-87`).
             guard let confirm else {
@@ -1489,7 +1490,7 @@ extension Ghostty {
         /// Completes a clipboard request. The core's shim owns the one-shot
         /// contract — "can only be called once for a given request. Once it is
         /// called with a request the request pointer will be invalidated"
-        /// (`apprt/embedded.zig:1998-2010`) — so every exit path routes through
+        /// (`apprt/embedded.zig:2281-2295`) — so every exit path routes through
         /// here or `denyClaimed`, and the DEBUG telemetry records each call,
         /// making "at most once" checkable in one place.
         ///
@@ -1561,8 +1562,8 @@ extension Ghostty {
         /// The single deny call site: `ghostty_surface_deny_clipboard_request`
         /// is the only correct deny for every request kind — never
         /// `complete(empty, confirmed: true)`, which for `.kitty_write` applies
-        /// the request's own contents (`Surface.zig:6062-6087`) while the deny
-        /// replies EPERM without writing (`Surface.zig:6119-6165`). Also used
+        /// the request's own contents (`Surface.zig:6064-6099`) while the deny
+        /// replies EPERM without writing (`Surface.zig:6136-6179`). Also used
         /// directly by the synchronous policy deny, which owns no registry
         /// entry.
         private static func deny(
