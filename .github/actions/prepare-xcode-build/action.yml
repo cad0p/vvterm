@@ -63,9 +63,34 @@ runs:
       # irgaly/xcode-cache is purpose-built for Xcode DerivedData caching.
       # It stores a sidecar `xcode-cache-mtime.json` mapping
       # {path, mtime, sha256} and re-applies mtimes via File.utime after
-      # restore (only when SHA-256 matches). It also handles the
-      # SourcePackages cache key separately. The SPM key is shared by every
-      # job and workflow.
+      # restore (only when SHA-256 matches).
+      #
+      # It caches SourcePackages as a separate entry only when a
+      # `sourcepackages-directory` resolves — the explicit input when set,
+      # otherwise the glob `{deriveddata-directory}/*/SourcePackages`
+      # (issue #418). That glob cannot match this repo's explicit
+      # `-derivedDataPath $RUNNER_TEMP/DerivedData` layout (the checkouts
+      # live at `DerivedData/SourcePackages`, with no `<AppName>-<ID>`
+      # level), so the explicit input is required. Before it was wired the
+      # SPM key was computed but never restored or saved (measured:
+      # `sourcePackagesDirectory = null` and `swiftpm-restored = false` in
+      # build job 114094258174; zero `xcode27-spm-*` entries), and the
+      # DerivedData tar silently carried the checkouts.
+      #
+      # With the explicit input the DerivedData tar sheds the checkouts (the
+      # post step replaces `SourcePackages/` with an empty directory) and the
+      # `xcode27-spm-` entry carries them, keyed by the shared
+      # `Package.resolved` hash (every composite caller, per ref, no arm
+      # prefix). A wired restore logs `swiftpm-restored = true`; the SPM half
+      # saves separately from DerivedData. The expected build/ota shared-key
+      # save race: the winner logs `Storing SourcePackages...` →
+      # `Sent <n> of <n>` → `Cached with key: xcode27-spm-…`; the loser logs
+      # `Failed to save: Unable to reserve cache with key …, another job may
+      # be creating this cache.` and still succeeds. `@actions/cache` catches
+      # the reserve conflict internally, so the loser then prints the same
+      # unconditional `Cached with key:` line — a grep for `Cached with key:
+      # xcode27-spm-` false-positives on the loser; identify the winning arm
+      # by its `Sent <n> of <n>` upload and the absence of `Failed to save:`.
       #
       # Measured 2026-10-08 (issue #109): the mtime restore makes the
       # Debug/simulator `build` arm warm on a same-image restore (0 CompileC,
@@ -83,6 +108,7 @@ runs:
         key: ${{ inputs.deriveddata-key-prefix }}-${{ github.workflow }}-${{ github.sha }}
         restore-keys: ${{ inputs.deriveddata-restore-keys }}
         deriveddata-directory: ${{ runner.temp }}/DerivedData
+        sourcepackages-directory: ${{ runner.temp }}/DerivedData/SourcePackages
         swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
         swiftpm-cache-restore-keys: |
           xcode27-spm-

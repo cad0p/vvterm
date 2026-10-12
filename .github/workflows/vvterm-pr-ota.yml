@@ -24,8 +24,9 @@
 # without an empty commit. Completion re-triggers ios-adhoc-pr via
 # workflow_run (which resolves the PR number from the head branch).
 #
-# Cost: ~12 min on xcode-27 per push (self-contained Release archive;
-# SPM cache shared with PR CI via the xcode27-spm- key prefix).
+# Cost: ~12 min on xcode-27 per push (self-contained Release archive; the
+# `xcode27-spm-` SourcePackages cache is shared with PR CI via the same
+# `Package.resolved` hash — issue #418).
 #
 # Queue semantics mirror ios-testflight.yml (latest-wins, never cancel an
 # in-flight build): the per-PR concurrency group serializes runs with
