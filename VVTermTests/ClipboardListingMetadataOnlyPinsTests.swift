@@ -4,8 +4,10 @@
 //  VVTermTests
 //
 //  Source pins for issue #431: `Clipboard.availableMimeTypes()` must stay
-//  metadata-only in both platform arms. This is the only enforcement of the
-//  core's mode-5522 listing privacy guarantee — no runtime test can prove
+//  metadata-only in both platform arms. The pin locks the listing helper's
+//  own text against data reads; the mode-5522 listing guarantee itself rests
+//  on the core's zero-mime `.list` contract (`src/apprt/embedded.zig:757-759`)
+//  plus `clipboard-read = deny` for kitty lists. No runtime test can prove
 //  "no pasteboard provider was poked" (the iOS Simulator unit job cannot even
 //  bind the macOS pasteboard, and a read is only observable through provider
 //  side effects).
@@ -24,8 +26,9 @@
 //    B1  the read callback goes through `Clipboard.data(forMime:)` via
 //        `ClipboardMimeSelection.select` and does not call
 //        `Clipboard.readString()` directly.
-//    B2  the read callback does not re-add a `mime == "text/plain"`-only
-//        guard.
+//    B2  the read callback body contains no `"text/plain"` string literal at
+//        all, so neither a re-added guard (`==`/`!=`) nor a filter can
+//        re-introduce the text/plain-only read semantics.
 //
 //  FORMATTING HEURISTIC, NOT A PROOF: this file parses Swift as text. The
 //  listing body is extracted by the first `{` after the definition token and
@@ -34,7 +37,8 @@
 //  not code).
 //
 //  Measured counterfactual battery (2026-10-12, iPhone 17 / iOS 26.3.1,
-//  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` mutant trees):
+//  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` mutant trees; the fold round re-ran
+//  all 10 mutants with per-mutant exit codes recorded in the #431 walk):
 //    - macOS read in the listing (`data(forType:`)        -> red, A1
 //    - iOS `.string` read in the listing                   -> red, A2
 //    - comment-only token + benign local rename            -> green
@@ -43,6 +47,8 @@
 //    - delete/rename an arm's definition                   -> red, A2 + A3
 //    - arm order swapped                                   -> green
 //    - legitimate provider `pasteboardItems`/`string(forType:`) -> green
+//    - callback serves `Clipboard.readString()` again      -> red, B1
+//    - callback re-adds a `text/plain`-only guard          -> red, B2
 ////
 //  Honest defeat list:
 //    - a read reached through a helper whose call token is not one of the
@@ -52,9 +58,21 @@
 //      helper mutant reds; an innocuously named helper does not. This is the
 //      recorded residual: the pin locks the listing body's own text, not the
 //      transitive call graph;
+//    - the mode-5522 listing guarantee is not enforced by this pin beyond the
+//      listing helper's text: the read callback computes `contents`
+//      unconditionally before its `list` check (upstream's loop shape), so a
+//      future core that passed mimes with `list = true` would read data
+//      during a listing and every assertion here would stay green. The
+//      zero-mime `.list` contract is the core's (`embedded.zig:757-759`), and
+//      `clipboard-read = deny` suppresses kitty lists;
 //    - the pin proves text, not runtime liveness; a callback that wraps the
 //      provider in another function reds B1 only if the wrapper call replaces
 //      the modelled spellings, which is exactly what B1 pins;
+//    - B2 fails closed on the `"text/plain"` literal, so a re-added
+//      `mime != "text/plain"` guard or a `contents.filter { $0.mime ==
+//      "text/plain" }` filter is red as well; a guard that avoids the literal
+//      entirely (e.g. via a shared constant) is the same class as the
+//      helper-call defeat above and remains recorded residual;
 //    - a string literal containing a read spelling (e.g. a log message) fails
 //      A1/A2 conservatively — fail-closed, not an escape;
 //    - a coherent edit of code plus this pin passes; update-on-purpose pins
@@ -175,12 +193,12 @@ struct ClipboardListingMetadataOnlyPinsTests {
     }
 
     @Test
-    func testB2TheReadCallbackDoesNotReAddATextPlainOnlyGuard() throws {
+    func testB2TheReadCallbackContainsNoTextPlainLiteral() throws {
         let body = try Self.readCallbackBody()
-        let guards = Self.occurrences(of: "mime == \"text/plain\"", in: body)
+        let literals = Self.occurrences(of: "\"text/plain\"", in: body)
         #expect(
-            guards == 0,
-            "the read callback must not re-add the text/plain-only guard — every requested mime goes through the provider; found \(guards) (issue #431)"
+            literals == 0,
+            "the read callback must contain no `\"text/plain\"` string literal — every requested mime goes through the provider, and any guard (`==`/`!=`) or filter spelling would re-add the text/plain-only semantics; found \(literals) (issue #431)"
         )
     }
 
