@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, residual): the split string is assembled
-# at runtime (`env -S "$CMD …"` with `CMD: xargs` from the job
-# env:), so the gate cannot know the command and accepts; runtime
-# FLIP, a named residual (issue #350f fold round 1, F1 residual).
+# Fixture (over-refusal pin): the unconditional `env -S` refusal
+# (fold round 2, C1) refuses `env -S 'echo hi'` even though no
+# `xargs` word is present: the split string's decoding space cannot
+# be modelled, so the segment is refused fail-closed. Runtime
+# NOFLIP (issue #350f fold round 2, C1).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,14 +16,13 @@ jobs:
     env:
       x: GITHUB_
       y: ENV
-      CMD: xargs
     steps:
       - name: probe
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
           printf '%s\n' "$(printenv "${x}${y}")" |
-          env -S "$CMD -I{} cp payload {}"
+          env -S 'echo hi'
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the attached brace-fd form (`{fd}>/dev/null`) is one
+# redirection (adjacency rule); the command resolves past it (issue
+# #350f fold round 2, C2; base ACCEPT, runtime FLIP). A space
+# (`{fd} > file`) makes `{fd}` a command word, not a prefix.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          {fd}>/dev/null xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

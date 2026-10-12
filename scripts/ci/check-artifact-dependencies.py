@@ -1269,7 +1269,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 922
+EXPECTED_MANIFEST_CASES = 937
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1294,7 +1294,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 491
+EXPECTED_BASE_VERDICT_CASES = 505
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -6921,13 +6921,23 @@ def _run_id_xargs_unparsed_wrapper_refusal(
     step: ArtifactStep, body: RunBody, wrapper: str, token: str
 ) -> Refusal:
     """Issue #350f: a recognized command wrapper meets an option the
-    modelled grammar cannot parse while an `xargs` word remains unplaced
-    (`env -S 'xargs …'`, `env -Z xargs`). The ambiguity may hide the
-    carrier, so the body refuses fail-closed. The diagnostic names the
-    wrapper and the unparsed token and does not claim `xargs` runs when the
-    walk could not prove it does (fold round 1, F7a: the split-string's
-    decoded command can be `echo xargs`, so the message claims only the
-    unresolved position)."""
+    modelled grammar cannot parse. Two postures share the diagnostic
+    factory: (1) an `env` split-string spelling (`-S`/`--split-string`, any
+    spelling) refuses **unconditionally** (fold round 2, C1) — the split
+    string's decoding space cannot be modelled, so the message names the
+    option and does not claim the payload contains `xargs`; and (2) an
+    option the table cannot parse while an `xargs` word remains unplaced
+    (`env -Z xargs`), where the ambiguity may hide the carrier. Neither
+    message claims `xargs` runs when the walk could not prove it does
+    (fold round 1, F7a: the split-string's decoded command can be `echo
+    xargs`, so the generic message claims only the unresolved position)."""
+    if wrapper == "env" and _env_split_string_spelling(token):
+        return Refusal(
+            step.run_id_line or step.uses_line,
+            f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs "
+            f"`env` with a split string (`{token}`) whose decoding space the extractor "
+            "does not model (refusing rather than guessing)",
+        )
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs "
@@ -7649,6 +7659,32 @@ _CONTINUATION_KEYWORDS = frozenset({"then", "do", "else", "elif"})
 _REDIRECT_OPS = frozenset({"<", "<<", ">", ">>", ">|", "<>"})
 
 
+def _env_split_string_spelling(token: str) -> bool:
+    """True when an `env` word is a `-S`/`--split-string` spelling (issue
+    #350f fold round 2, C1): the exact short option, the short option with
+    an attached string (`-Sxargs`), the long option with or without `=`,
+    and an unambiguous long-option abbreviation (`--s`, `--split`, … — GNU
+    getopt_long resolves them to `--split-string`). A short-option cluster
+    that carries the `S` letter (`-iS`, `-0S`, `-i0S`) matches too: GNU
+    env's getopt reads the no-argument letters (`i`, `0`, `v`) and then `S`
+    takes the rest of the token, or the next argv, as the split string. A
+    cluster whose argument-taking letter (`u`, `C`, `P`) precedes the `S`
+    does not match (`-uS` is `-u` with argument `S`). The spelling test is
+    deliberately a suffix-tolerant over-approximation: a `-S`-bearing word
+    where env's option grammar cannot place it is refused fail-closed
+    rather than modelled."""
+    if token.startswith("--"):
+        return token.startswith("--s")
+    if not token.startswith("-") or len(token) < 2:
+        return False
+    for character in token[1:]:
+        if character in "uCP":
+            return False
+        if character == "S":
+            return True
+    return False
+
+
 def _redirection_prefix_end(
     segment: list[tuple[str, str, int, int]], op_index: int, fd: int | None
 ) -> int | None:
@@ -7700,12 +7736,14 @@ def _consume_leading_redirections(
     segment: list[tuple[str, str, int, int]], position: int
 ) -> int | None:
     """Consume the leading redirection prefixes of a command position
-    (`> /dev/null xargs …`, `2>… xargs …`, `2>&1 xargs …`, `&> … xargs …`)
-    and return the index of the first token after them, or None when the
-    token at `position` does not start a consumable redirection (issue
-    #350f fold round 1, F3). The fd-prefix word must be adjacent to its
-    operator (`2>` is one redirection; `sleep 0.1 & > x` is not: the `&`
-    separator already split the segment)."""
+    (`> /dev/null xargs …`, `2>… xargs …`, `2>&1 xargs …`, `&> … xargs …`,
+    `{fd}> … xargs …`) and return the index of the first token after them,
+    or None when the token at `position` does not start a consumable
+    redirection (issue #350f fold round 1, F3; fold round 2, C2). The
+    fd-prefix word must be adjacent to its operator (`2>` is one
+    redirection; `sleep 0.1 & > x` is not: the `&` separator already split
+    the segment); the bash dynamic-fd `{name}` form shares that adjacency
+    rule, so `{fd} > file` stays a command word rather than a fd prefix."""
     cursor = position
     consumed = False
     while cursor < len(segment):
@@ -7719,6 +7757,20 @@ def _consume_leading_redirections(
             if nxt[0] != "op" or nxt[1] not in _REDIRECT_OPS or end != nxt[2]:
                 break
             fd = int(text)
+            op_index = cursor + 1
+        elif kind == "word" and _FD_PREFIX_BRACE_RE.fullmatch(text):
+            # Bash's dynamic-fd allocation `{name}>`/`{name}<>`/`{name}>>`
+            # (fold round 2, C2): the brace word must be adjacent to its
+            # operator exactly like the numeric form (`{fd} > file` is a
+            # command word, not a fd prefix). The allocated fd is above 10,
+            # so it is never the pipeline's stdin; the `<>` read-write form
+            # is likewise non-stdin.
+            if cursor + 1 >= len(segment):
+                break
+            nxt = segment[cursor + 1]
+            if nxt[0] != "op" or nxt[1] not in _REDIRECT_OPS or end != nxt[2]:
+                break
+            fd = -1
             op_index = cursor + 1
         elif kind != "op" or text not in _REDIRECT_OPS:
             break
@@ -7758,9 +7810,7 @@ def _consume_wrapper_options(
             if token in ("-i", "-0", "-v"):
                 cursor += 1
                 continue
-            if token == "-S" or token.startswith("--split-string") or (
-                token.startswith("-S") and len(token) > 2
-            ):
+            if _env_split_string_spelling(token):
                 return (cursor, ("unparsed", token))
             if token in ("-u", "-C", "-P"):
                 cursor += 2
@@ -7928,54 +7978,37 @@ def _xargs_unparsed_wrapper(
     segment: list[tuple[str, str, int, int]],
 ) -> tuple[str, str] | None:
     """The `(wrapper, token)` of a segment whose effective-command-word
-    walk met an option the table cannot parse while the segment still holds
-    an `xargs` word the walk could not place, or None (issue #350f). The
-    ambiguity can only hide a carrier when an `xargs` word remains: a clean
-    `env -Z sleep 1` is accepted. The refusal diagnostic names the wrapper
-    and the token and does not claim `xargs` runs. GNU `env -S` decodes
-    shell-style quotes in its split string (`env -S 'x"args" …'` runs
-    `xargs …`), so the split-string payload is quote-removed before the
-    xargs word test (fold round 1, F1); a split string assembled at
-    runtime (`env -S "$CMD …"`) stays a named residual."""
+    walk met an option the table cannot parse, or None (issue #350f; fold
+    round 2, C1). Two refusals share this shape: (1) `env` carries a
+    `-S`/`--split-string` spelling (anywhere in the segment: separated,
+    attached, `=`-long, abbreviated, clustered, or behind another unparsed
+    option such as `--ignore-environment`), which refuses
+    **unconditionally** because the split string's decoding space (shell
+    quotes, ANSI-C escapes, `$VAR` expansion) cannot be fully modelled;
+    and (2) any recognized wrapper meets an option the table cannot parse
+    *while an `xargs` word the walk could not place remains* — the
+    ambiguity can only hide a carrier then, so a clean `env -Z sleep 1`
+    is accepted. The refusal diagnostic names the wrapper and the token
+    and does not claim `xargs` runs."""
     walk = _effective_command_word(segment)
     if walk is None or walk[0] != "unparsed":
         return None
     _kind, index, wrapper, token = walk
-    split_string_pending = False
+    if wrapper == "env":
+        # Fold round 2, C1: the first unparsed token alone cannot prove
+        # there is no split string (`env --ignore-environment -S …`
+        # leaves the walk at `--ignore-environment`), so every word of
+        # the command is scanned for a split-string spelling. The gate
+        # ships no `env -S` usage, so the real tree is unaffected.
+        for kind, text, _start, _end in segment[index:]:
+            if kind == "word" and _env_split_string_spelling(text):
+                return (wrapper, text)
     for kind, text, _start, _end in segment[index:]:
         if kind != "word":
             continue
-        candidate = text
-        if wrapper == "env":
-            # `env -S 'xargs …'`/`-Sxargs …`/`--split-string=xargs …`: the
-            # command lives inside the option's string, so check the string
-            # itself (the first word enough for the carrier decision).
-            if candidate in ("-S", "--split-string"):
-                split_string_pending = True
-                continue
-            if candidate.startswith("-S") and len(candidate) > 2:
-                candidate = candidate[2:]
-                candidate = _strip_split_string_quotes(candidate)
-            elif candidate.startswith("--split-string="):
-                candidate = candidate.split("=", 1)[1]
-                candidate = _strip_split_string_quotes(candidate)
-            elif split_string_pending:
-                candidate = _strip_split_string_quotes(candidate)
-        if candidate.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(
-            candidate
-        ):
+        if text.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(text):
             return (wrapper, token)
     return None
-
-
-def _strip_split_string_quotes(text: str) -> str:
-    """GNU `env -S`'s shell-style quote removal for the fail-closed xargs
-    word test (fold round 1, F1): the split string's `"`/`'` quoting is
-    decoded by env before the command runs, so `x"args"` is the command
-    word `xargs`. Only quote characters are dropped: GNU env rejects
-    backslash escapes it does not know (`x\args`, `\170args` are rc 125
-    and do not flip), measured and recorded as NOFLIP controls."""
-    return text.replace('"', "").replace("'", "")
 
 
 def _carrier_refuses_upstream(
