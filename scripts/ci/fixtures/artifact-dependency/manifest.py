@@ -5123,7 +5123,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-xargs-env-split-string.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `env` with an option the extractor cannot parse (`-S`) in a command position that could carry the operand to `xargs` on stdin (refusing rather than guessing)"
+            "reject-runid-github-env-write-xargs-env-split-string.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `env` with an option the extractor cannot parse (`-S`) and an `xargs` word in a position the walk cannot resolve (refusing rather than guessing)"
         ]
     },
     {
@@ -5233,7 +5233,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-xargs-env-unparseable-option.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `env` with an option the extractor cannot parse (`-Z`) in a command position that could carry the operand to `xargs` on stdin (refusing rather than guessing)"
+            "reject-runid-github-env-write-xargs-env-unparseable-option.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `env` with an option the extractor cannot parse (`-Z`) and an `xargs` word in a position the walk cannot resolve (refusing rather than guessing)"
         ]
     },
     {
@@ -5354,7 +5354,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-xargs-multiline-chain-n65.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+            "reject-runid-github-env-write-xargs-multiline-chain-n65.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a continuation chain longer than the physical-line analysis bound (64 lines), so a logical line's write targets or pipeline carrier cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -6032,7 +6032,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+            "reject-runid-github-env-write-continuation-chain-over-analysis-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a continuation chain longer than the physical-line analysis bound (64 lines), so a logical line's write targets or pipeline carrier cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -6053,7 +6053,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+            "reject-overrefusal-runid-github-env-write-continuation-chain-benign-over-bound.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a continuation chain longer than the physical-line analysis bound (64 lines), so a logical line's write targets or pipeline carrier cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -6064,7 +6064,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml:92: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+            "reject-overrefusal-runid-github-env-write-continuation-chain-blank-inflated-over-analysis-bound.yml:92: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a continuation chain longer than the physical-line analysis bound (64 lines), so a logical line's write targets or pipeline carrier cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     {
@@ -6095,7 +6095,7 @@ CASES = [
         "exit": 1,
         "base_exit": 0,
         "diagnostics": [
-            "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing.yml:95: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
+            "reject-overrefusal-runid-github-env-write-continuation-chain-raw-payload-crossing.yml:95: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a continuation chain longer than the physical-line analysis bound (64 lines), so a logical line's write targets or pipeline carrier cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
     # #350 item 12, fold round 1 (lens-1 BLOCKER-1): the cross-line-quote

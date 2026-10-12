@@ -1075,6 +1075,7 @@ at 16, 64 and 64-pending-at-EOF lines), every one
 The former boundary item (`chain|dd|n8` closed, `n9+` open) is closed:
 `n9..n64` now join and are caught by the existing write detection, and a
 longer chain is refused fail-closed, not analysed; the remediation for an
+author is to split the chain into shorter logical lines.longer chain is refused fail-closed, not analysed; the remediation for an
 author is to split the chain into shorter logical lines.
 
 Runtime values were
@@ -4575,14 +4576,21 @@ def _tokens_end_in_pipe_operator(
     )
 
 
-def _line_ends_in_pipe_operator(line: str) -> bool:
-    """The token-level trailing-`|` predicate over one physical line
-    (issue #350f). Scoped to the xargs carrier path: the shared
-    continuation predicates are not touched. A `|` inside a multiline
-    double-quoted string still tokenizes as an operator here (the per-line
-    tokenizer does not carry the quote state in), so the caller gates on
-    the whole-body quote state."""
-    return _tokens_end_in_pipe_operator(_shell_tokens(line))
+def _pipe_line_tokens(
+    line: str, quote_state: str | None
+) -> tuple[list[tuple[str, str, int, int]], int]:
+    """The tokens of one physical line for the trailing-`|` predicate,
+    with the carried whole-body quote state injected as a one-character
+    prefix so a `|` after the quote closes on its line is visible (issue
+    #350f fold round 1, F4). Returns `(tokens, offset)`: token positions
+    are relative to the injected text, so subtract `offset` to map them
+    back to `line`. A `|` that is still inside the open quote stays inside
+    a word and yields no trailing operator, so the inside-quote accept pin
+    keeps its verdict; `quote_state` is `_whole_body_continuation_state`'s
+    `'`/`"`/`$'` at the line start or None."""
+    if quote_state is None:
+        return _shell_tokens(line), 0
+    return _shell_tokens(quote_state + line), len(quote_state)
 
 
 def _command_substitution_depth(
@@ -5628,13 +5636,16 @@ def _pipe_continuation_bound_exceeded(
     Mirrors the new join's walk exactly: blank/comment-inclusive distance
     from the pipe line to the next non-blank, non-comment line, and
     EOF-before-bound returns False (a body-final `|` keeps no join and is an
-    accept boundary). The whole-body quote state gates it exactly as it
-    gates the join — a `|` inside a multiline quoted string never starts a
-    chain. The join and the body-level exceedance predicate share this
-    decision so they cannot drift."""
-    if index >= len(pending) or pending[index][1] is not None:
+    accept boundary). The whole-body quote state is consulted through the
+    same injected-opener tokenization the join uses (fold round 1, F4), so a
+    pipe line that starts inside a quote but closes on its line is a chain
+    start for the bound exactly as it is for the join. The join and the
+    body-level exceedance predicate share this decision so they cannot
+    drift."""
+    if index >= len(pending):
         return False
-    if not _line_ends_in_pipe_operator(lines[index]):
+    tokens, _offset = _pipe_line_tokens(lines[index], pending[index][1])
+    if not _tokens_end_in_pipe_operator(tokens):
         return False
     cursor = index + 1
     while cursor < len(lines):
@@ -6855,22 +6866,23 @@ def _run_id_continuation_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
 
 
 def _run_id_continuation_bound_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
-    """Issue #350e: a preceding mentioning body holds a backslash
-    continuation chain longer than `_CONTINUATION_JOIN_MAX_LINES`, so both
-    joins stop before the chain's terminator and a write target at its end
-    cannot be extracted. The former behaviour returned no join and the
-    run-id rule accepted (a fail-open); the body-level predicate now
-    refuses the body instead. The raw arm does not model heredoc payload
+    """Issue #350e: a preceding mentioning body holds a continuation
+    chain (backslash or trailing-`|`) longer than
+    `_CONTINUATION_JOIN_MAX_LINES`, so the joins stop before the chain's
+    terminator and a write target or pipeline carrier at its end cannot be
+    extracted. The former behaviour returned no join and the run-id rule
+    accepted (a fail-open); the body-level predicate now refuses the body
+    instead. The raw arm does not model heredoc payload
     lines, so a >64 raw run that walks into a payload is also refused (a
     documented fail-closed over-refusal). The remediation is to split the
     chain into shorter logical lines."""
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job has a "
-        "backslash continuation chain longer than the physical-line analysis bound "
-        f"({_CONTINUATION_JOIN_MAX_LINES} lines), so a joined command's write targets "
-        "cannot be extracted (refusing rather than guessing; split the chain into "
-        "shorter logical lines)",
+        "continuation chain longer than the physical-line analysis bound "
+        f"({_CONTINUATION_JOIN_MAX_LINES} lines), so a logical line's write targets or "
+        "pipeline carrier cannot be extracted (refusing rather than guessing; split the "
+        "chain into shorter logical lines)",
     )
 
 
@@ -6882,12 +6894,14 @@ def _run_id_xargs_unparsed_wrapper_refusal(
     (`env -S 'xargs …'`, `env -Z xargs`). The ambiguity may hide the
     carrier, so the body refuses fail-closed. The diagnostic names the
     wrapper and the unparsed token and does not claim `xargs` runs when the
-    walk could not prove it does."""
+    walk could not prove it does (fold round 1, F7a: the split-string's
+    decoded command can be `echo xargs`, so the message claims only the
+    unresolved position)."""
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs "
-        f"`{wrapper}` with an option the extractor cannot parse (`{token}`) in a command "
-        "position that could carry the operand to `xargs` on stdin (refusing rather than "
+        f"`{wrapper}` with an option the extractor cannot parse (`{token}`) and an "
+        "`xargs` word in a position the walk cannot resolve (refusing rather than "
         "guessing)",
     )
 
@@ -7589,6 +7603,99 @@ _COMMAND_WRAPPERS = frozenset(
 # or a bare `xargs` operand; a `-`/`.`/`/`/word-character before it is part
 # of another name and does not count.
 _XARGS_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])xargs(?![A-Za-z0-9_])")
+# The shell's compound-command keywords (issue #350f fold round 1, F6): a
+# command position behind the pipe may sit inside an `if`/`while`/`until`/
+# `for`/`case` body, whose stdin is still the pipeline's.
+# `_PIPE_COMPOUND_OPENERS` are the segment-leading keywords whose body is
+# scanned for the carrier; `_CONTINUATION_KEYWORDS` are skipped inside a
+# segment (`then xargs …`, `do xargs …`, `else xargs …`, `elif xargs …`).
+_PIPE_COMPOUND_OPENERS = frozenset({"if", "while", "until", "for", "case"})
+_CONTINUATION_KEYWORDS = frozenset({"then", "do", "else", "elif"})
+# The redirection operators `_shell_tokens` emits; `&` is its own token, so
+# `2>&1` is `2`, `>`, `&`, `1` and `&>` is `&`, `>`, `target` (fold round 1,
+# F3).
+_REDIRECT_OPS = frozenset({"<", "<<", ">", ">>", ">|", "<>"})
+
+
+def _redirection_prefix_end(
+    segment: list[tuple[str, str, int, int]], op_index: int, fd: int | None
+) -> int | None:
+    """The index just past one leading redirection at `segment[op_index]`
+    and its target, or None when it must not be consumed (issue #350f fold
+    round 1, F3). A stdin redirection (`<`/`<<`/`<>` with no fd prefix or
+    fd 0) takes the carrier's own stdin away from the pipeline, so the walk
+    stops there rather than claiming the pipe feeds the command — except
+    `<&0`/`<&0-`, which duplicates fd 0 from itself and keeps the
+    pipeline's feed. A non-stdin fd redirect leaves the pipeline feed
+    intact. `n>&m`/`n<&m` duplication/closure has no file target and
+    consumes its trailing word (the duplicated fd or file target, never
+    the command)."""
+    op_kind, op_text, _op_start, op_end = segment[op_index]
+    if op_kind != "op" or op_text not in _REDIRECT_OPS:
+        return None
+    if op_index + 1 >= len(segment):
+        return None
+    nxt = segment[op_index + 1]
+    duplicated = nxt[0] == "op" and nxt[1] == "&" and op_end == nxt[2]
+    if duplicated:
+        target_index = op_index + 2
+        target = (
+            segment[target_index][1]
+            if target_index < len(segment) and segment[target_index][0] == "word"
+            else None
+        )
+        if fd == 0 or (fd is None and op_text in ("<", "<>", "<<")):
+            # A stdin fd duplication: only `<&0`/`<&0-` duplicates the
+            # pipeline's own fd 0 from itself, so that spelling is
+            # consumed; every other target replaces the feed.
+            if op_text == "<" and target in ("0", "0-"):
+                return target_index + 1
+            return None
+        # A duplicated/closed non-stdin fd (or stdout/stderr) leaves the
+        # pipeline stdin alone; the trailing word is the duplicated fd or
+        # the file target, never the command.
+        return target_index + (1 if target is not None else 0)
+    if fd == 0 or (fd is None and op_text in ("<", "<<", "<>")):
+        # An operator that replaces fd 0 takes the pipeline feed away.
+        return None
+    if nxt[0] == "word":
+        return op_index + 2
+    return None
+
+
+
+def _consume_leading_redirections(
+    segment: list[tuple[str, str, int, int]], position: int
+) -> int | None:
+    """Consume the leading redirection prefixes of a command position
+    (`> /dev/null xargs …`, `2>… xargs …`, `2>&1 xargs …`, `&> … xargs …`)
+    and return the index of the first token after them, or None when the
+    token at `position` does not start a consumable redirection (issue
+    #350f fold round 1, F3). The fd-prefix word must be adjacent to its
+    operator (`2>` is one redirection; `sleep 0.1 & > x` is not: the `&`
+    separator already split the segment)."""
+    cursor = position
+    consumed = False
+    while cursor < len(segment):
+        kind, text, _start, end = segment[cursor]
+        fd: int | None = None
+        op_index = cursor
+        if kind == "word" and text.isascii() and text.isdigit() and len(text) > 0:
+            if cursor + 1 >= len(segment):
+                break
+            nxt = segment[cursor + 1]
+            if nxt[0] != "op" or nxt[1] not in _REDIRECT_OPS or end != nxt[2]:
+                break
+            fd = int(text)
+            op_index = cursor + 1
+        elif kind != "op" or text not in _REDIRECT_OPS:
+            break
+        after = _redirection_prefix_end(segment, op_index, fd)
+        if after is None:
+            break
+        cursor = after
+        consumed = True
+    return cursor if consumed else None
 
 
 def _consume_wrapper_options(
@@ -7728,24 +7835,36 @@ def _consume_wrapper_options(
 def _effective_command_word(
     segment: list[tuple[str, str, int, int]],
 ) -> tuple[str, int, str] | tuple[str, int, str, str] | None:
-    """The command a segment executes, walking assignment prefixes and the
-    modelled wrapper table (issue #350f). Returns `("resolved", index,
-    name)` for a definite effective command word, `("unparsed", index,
-    wrapper, token)` when a recognized wrapper meets a word the table
-    cannot place where its command must sit, or None when the walk ends
-    without a command word. Used only by the xargs carrier site and its
-    sibling unparsed check: the argv write-target tables already scan every
-    operand word, so filtering them to the effective word could only drop
-    candidates."""
+    """The command a segment executes, walking assignment prefixes, the
+    redirection prefixes and the modelled wrapper table (issue #350f; fold
+    round 1 F3/F6). Returns `("resolved", index, name)` for a definite
+    effective command word, `("unparsed", index, wrapper, token)` when a
+    recognized wrapper meets a word the table cannot place where its
+    command must sit, or None when the walk ends without a command word.
+    Used only by the xargs carrier site and its sibling unparsed check: the
+    argv write-target tables already scan every operand word, so filtering
+    them to the effective word could only drop candidates."""
     position = 0
     pending_wrapper: str | None = None
     while position < len(segment):
+        redirect_end = _consume_leading_redirections(segment, position)
+        if redirect_end is not None:
+            # `> /dev/null xargs …` / `2>&1 xargs …`: a stdout-side
+            # redirection does not touch the pipeline's stdin, so the
+            # command word is resolved past it (fold round 1, F3).
+            position = redirect_end
+            continue
         kind, text, _start, _end = segment[position]
         if kind != "word":
             return None
         if _ASSIGNMENT_OPERAND_RE.match(text):
             # `FOO=1 xargs …` / `env FOO=1 xargs …`: an assignment prefix
             # (or an `env` assignment operand) is not the command word.
+            position += 1
+            continue
+        if text in _CONTINUATION_KEYWORDS:
+            # `then xargs …` / `do xargs …`: a compound body's keyword sits
+            # where its command follows (fold round 1, F6).
             position += 1
             continue
         if pending_wrapper is not None and (
@@ -7781,11 +7900,16 @@ def _xargs_unparsed_wrapper(
     an `xargs` word the walk could not place, or None (issue #350f). The
     ambiguity can only hide a carrier when an `xargs` word remains: a clean
     `env -Z sleep 1` is accepted. The refusal diagnostic names the wrapper
-    and the token and does not claim `xargs` runs."""
+    and the token and does not claim `xargs` runs. GNU `env -S` decodes
+    shell-style quotes in its split string (`env -S 'x"args" …'` runs
+    `xargs …`), so the split-string payload is quote-removed before the
+    xargs word test (fold round 1, F1); a split string assembled at
+    runtime (`env -S "$CMD …"`) stays a named residual."""
     walk = _effective_command_word(segment)
     if walk is None or walk[0] != "unparsed":
         return None
     _kind, index, wrapper, token = walk
+    split_string_pending = False
     for kind, text, _start, _end in segment[index:]:
         if kind != "word":
             continue
@@ -7794,15 +7918,32 @@ def _xargs_unparsed_wrapper(
             # `env -S 'xargs …'`/`-Sxargs …`/`--split-string=xargs …`: the
             # command lives inside the option's string, so check the string
             # itself (the first word enough for the carrier decision).
-            if candidate.startswith("-S"):
+            if candidate in ("-S", "--split-string"):
+                split_string_pending = True
+                continue
+            if candidate.startswith("-S") and len(candidate) > 2:
                 candidate = candidate[2:]
+                candidate = _strip_split_string_quotes(candidate)
             elif candidate.startswith("--split-string="):
                 candidate = candidate.split("=", 1)[1]
+                candidate = _strip_split_string_quotes(candidate)
+            elif split_string_pending:
+                candidate = _strip_split_string_quotes(candidate)
         if candidate.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(
             candidate
         ):
             return (wrapper, token)
     return None
+
+
+def _strip_split_string_quotes(text: str) -> str:
+    """GNU `env -S`'s shell-style quote removal for the fail-closed xargs
+    word test (fold round 1, F1): the split string's `"`/`'` quoting is
+    decoded by env before the command runs, so `x"args"` is the command
+    word `xargs`. Only quote characters are dropped: GNU env rejects
+    backslash escapes it does not know (`x\args`, `\170args` are rc 125
+    and do not flip), measured and recorded as NOFLIP controls."""
+    return text.replace('"', "").replace("'", "")
 
 
 def _carrier_refuses_upstream(
@@ -7868,6 +8009,83 @@ def _xargs_upstream_carrier(
     return None
 
 
+def _pipe_line_upstream(
+    lines: list[str],
+    index: int,
+    op_start: int,
+    pending: list[tuple[bool, str | None]],
+) -> str:
+    """The upstream text a trailing-`|` on `lines[index]` feeds from
+    (issue #350f fold round 1, F4). Normally the line's text before the
+    operator; when the line starts inside a multiline quoted string, the
+    physical lines that opened the quote are part of the same logical line,
+    so they are joined in front of the pre-operator text (bash closes the
+    quote and then reads the operator). `op_start` is already mapped back
+    to `lines[index]` (the injected-opener offset removed)."""
+    start = index
+    while start > 0 and pending[start][1] is not None:
+        start -= 1
+    if start == index:
+        return lines[index][:op_start].strip()
+    return "\n".join(
+        [*lines[start:index], lines[index][:op_start]]
+    ).strip()
+
+
+def _substitution_command_word(
+    segment: list[tuple[str, str, int, int]],
+) -> str | None:
+    """The first word of a command position when it is a command
+    substitution or backtick carrying an `xargs` word, or None (issue
+    #350f fold round 1, F5). `$(echo xargs -I{} cp payload {})` runs its
+    substituted words as the command, so the carrier can hide inside it;
+    a substitution with no xargs word (`$(echo cat)`) stays accepted.
+    Assignment prefixes and compound keywords are skipped like the
+    effective-word walk does."""
+    position = 0
+    while position < len(segment):
+        kind, text, _start, _end = segment[position]
+        if kind != "word":
+            return None
+        if _ASSIGNMENT_OPERAND_RE.match(text) or text in _CONTINUATION_KEYWORDS:
+            position += 1
+            continue
+        if (text.startswith("$(") or text.startswith("`")) and _XARGS_WORD_RE.search(
+            text
+        ):
+            return text
+        return None
+    return None
+
+
+def _pipe_continuation_command(
+    segments: list[list[tuple[str, str, int, int]]],
+) -> str:
+    """Classify the command a trailing-`|` pipeline continuation feeds
+    (issue #350f fold round 1, F2/F5/F6): `"xargs"` when the first segment
+    resolves to the carrier, when a compound keyword's body (`if true;
+    then xargs …`) contains one, or when the first word is a substitution
+    carrying an `xargs` word; `"none"` otherwise. A non-compound first
+    command that is not the carrier does not end the chain here — the
+    caller decides that from the hop line's own trailing operator."""
+    walk = _effective_command_word(segments[0])
+    if walk is not None and walk[0] == "resolved":
+        if walk[2] == "xargs":
+            return "xargs"
+        if walk[2] in _PIPE_COMPOUND_OPENERS:
+            for segment in segments[1:]:
+                nested = _effective_command_word(segment)
+                if (
+                    nested is not None
+                    and nested[0] == "resolved"
+                    and nested[2] == "xargs"
+                ):
+                    return "xargs"
+    if _substitution_command_word(segments[0]) is not None:
+        return "xargs"
+    return "none"
+
+
 def _pipe_continuation_carrier(
     lines: list[str],
     index: int,
@@ -7875,46 +8093,63 @@ def _pipe_continuation_carrier(
     relevant: set[str],
     flip_targets: set[str],
 ) -> str | None:
-    """The upstream text of a trailing-`|` pipeline continuation whose next
-    command is an `xargs` segment the pipe can feed, or None (issue #350f).
-    Bash continues `cmd |` + newline + `xargs …` (past blank and
-    comment-only lines), so the per-line walk cannot see the carrier. The
-    predicate is token-level, gated on the whole-body quote state (a `|`
-    inside a multiline quoted string must not join), and the next command is
-    the first non-blank, non-comment line inside the bound. The upstream is
-    the pipe-terminated line's text before the operator (no re-joined string
-    is sliced) and is classified with the sound predicates only
-    (`require_unresolved_word_catch=False`). Only the first segment of the
+    """The upstream text of a trailing-`|` pipeline chain whose downstream
+    command is an `xargs` the pipe can feed, or None (issue #350f; fold
+    round 1 F2/F4/F5/F6). Bash continues `cmd |` + newline + `xargs …`
+    (past blank and comment-only lines) and chains further hops (`cmd |` +
+    newline + `cat |` + newline + `xargs …`), so the per-line walk cannot
+    see the carrier. The predicate is token-level, with the whole-body
+    quote state injected so a pipe after a multiline quote closes on its
+    line is visible (while a `|` still inside the quote stays inert); each
+    hop's upstream is the logical line's pre-operator text and every hop's
+    upstream is tested with the sound predicates only
+    (`require_unresolved_word_catch=False`). The downstream command may be
+    the carrier itself, a compound body's carrier (`then`/`do`), or a
+    substitution carrying an xargs word. Only the first segment of the
     continuation line is the pipeline's command; a later `;`-separated
     segment is not fed by the pipe."""
-    if index >= len(pending) or pending[index][1] is not None:
+    if index >= len(pending):
         return None
-    tokens = _shell_tokens(lines[index])
-    if not _tokens_end_in_pipe_operator(tokens):
-        return None
-    if _pipe_continuation_bound_exceeded(lines, index, pending):
-        return None
-    operator_index = len(tokens) - 1
-    if tokens[operator_index][1] == "&":
-        operator_index -= 1
-    upstream = lines[index][: tokens[operator_index][2]].strip()
-    cursor = index + 1
-    while cursor < len(lines):
-        stripped = lines[cursor].strip()
-        if stripped and not stripped.startswith("#"):
-            break
-        cursor += 1
-    if cursor >= len(lines):
-        return None
-    segments = _shell_segments(_shell_tokens(lines[cursor]))
-    if not segments:
-        return None
-    walk = _effective_command_word(segments[0])
-    if walk is None or walk[0] != "resolved" or walk[2] != "xargs":
-        return None
-    if not _carrier_refuses_upstream(upstream, relevant, flip_targets, False):
-        return None
-    return upstream
+    cursor = index
+    upstreams: list[str] = []
+    while True:
+        tokens, offset = _pipe_line_tokens(lines[cursor], pending[cursor][1])
+        if not _tokens_end_in_pipe_operator(tokens):
+            return None
+        if _pipe_continuation_bound_exceeded(lines, cursor, pending):
+            return None
+        operator_index = len(tokens) - 1
+        if tokens[operator_index][1] == "&":
+            operator_index -= 1
+        upstreams.append(
+            _pipe_line_upstream(
+                lines, cursor, tokens[operator_index][2] - offset, pending
+            )
+        )
+        next_index = cursor + 1
+        while next_index < len(lines):
+            stripped = lines[next_index].strip()
+            if stripped and not stripped.startswith("#"):
+                break
+            next_index += 1
+        if next_index >= len(lines):
+            return None
+        segments = _shell_segments(_shell_tokens(lines[next_index]))
+        if not segments:
+            return None
+        if _pipe_continuation_command(segments) == "xargs":
+            for upstream in upstreams:
+                if _carrier_refuses_upstream(
+                    upstream, relevant, flip_targets, False
+                ):
+                    return upstream
+            return None
+        hop_tokens, _hop_offset = _pipe_line_tokens(
+            lines[next_index], pending[next_index][1]
+        )
+        if not _tokens_end_in_pipe_operator(hop_tokens):
+            return None
+        cursor = next_index
 
 
 def _refuse_github_env_run_id_write(
