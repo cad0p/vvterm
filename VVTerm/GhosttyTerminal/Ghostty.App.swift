@@ -55,6 +55,11 @@ enum Ghostty {
 
 // MARK: - #327 clipboard confirmation
 
+// Upstream line references in this file are in the **patch-applied** tree
+// (`custom-io.patch` applied to `1e9e14a`) — the tree the vendored core is
+// built from — not the pristine upstream tree (the patch's own insertions
+// shift the numbers).
+
 /// Which ghostty clipboard-request kinds may prompt the user (#327).
 ///
 /// Only the user-initiated paste kind may prompt. Reachability under this
