@@ -62,16 +62,24 @@
 //       coherent — the explicit `sourcepackages-directory`, the full
 //       `swiftpm-cache-key` `Package.resolved` expression and the
 //       `swiftpm-cache-restore-keys` `xcode27-spm-` value are either all
-//       present-and-exact (the wired arm) or all absent (the deleted arm),
-//       never the pre-#418 mixed state (key + restore-keys present,
-//       directory absent — the SPM half was inert while the DerivedData tar
-//       carried the checkouts). The `sourcepackages-directory` value is
-//       bound relationally to `deriveddata-directory` + `/SourcePackages`,
-//       and both SPM keys are duplicate-guarded (YAML is last-wins).
-//       Mutation reds: base mixed state, removed line, wrong path, renamed
-//       key, dropped `hashFiles`/`Package.resolved` term, restore-key
-//       suffix `xcode27-spm-debug-`, duplicate key, `deriveddata-directory`
-//       drift. (issue #418)
+//       present-and-exact at the `with:`-child indent (the wired arm) or all
+//       absent (the deleted arm), never the pre-#418 mixed state (key +
+//       restore-keys present, directory absent — the SPM half was inert
+//       while the DerivedData tar carried the checkouts). The container
+//       check requires the input lines at the 8-space `with:` child indent
+//       (the block-scalar value at 10), so relocating one to the step-field
+//       indent or `env:` reds. The `sourcepackages-directory` value is bound
+//       relationally to `deriveddata-directory` + `/SourcePackages`, and
+//       both SPM keys are duplicate-guarded (YAML is last-wins). If
+//       upstream's glob default ever starts matching this layout, re-derive
+//       this pin deliberately (the one-line removal this test forbids is
+//       then a legitimate clean delete of all three) — never delete one
+//       line to make a red go away. Mutation reds: base mixed state, removed
+//       line, wrong path, renamed key, dropped `hashFiles`/`Package.resolved`
+//       term, restore-key suffix `xcode27-spm-debug-`, duplicate key,
+//       `deriveddata-directory` drift, `with:`-child misindent, duplicate
+//       `deriveddata-directory:`, duplicate block-scalar value line.
+//       (issue #418)
 //
 //  The `find | head -1 | while … done || true` guard is a measured deviation
 //  from the plan's verbatim probe block: under the runner's composite bash
@@ -397,6 +405,10 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     /// which `swiftpm-cache-key` + `swiftpm-cache-restore-keys` were passed
     /// but `sourcepackages-directory` was not, leaving the SPM half inert
     /// while the DerivedData tar silently carried the checkouts (issue #418).
+    /// The wired-arm lines are also container-checked at the `with:`-child
+    /// indent (8 spaces; the block-scalar value at 10), so a line moved to
+    /// the step-field indent or `env:` reds instead of staying green
+    /// (issue #418).
     @Test
     func testCacheStepSPMInputsAreAllOrNoneCoherent() throws {
         let steps = try Self.compositeSteps()
@@ -427,17 +439,24 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         )
 
         if allPresent {
+            // Container check: the SPM inputs must sit at the 8-space
+            // `with:`-child indent (the block-scalar value at 10), not
+            // merely somewhere in the step block — `hasLine` trims
+            // indentation, so without these a line moved to the step-field
+            // indent or `env:` would stay green while no longer being an
+            // action input (issue #418).
             #expect(
-                Self.hasLine(cache, equalTo: directoryLine),
-                "the wired arm must pass exactly `\(directoryLine)`; the action's implemented default is the `{deriveddata-directory}/*/SourcePackages` glob, which cannot match this repo's explicit -derivedDataPath layout, so a wrong or renamed value restores nothing while still counting as present (issue #418)"
+                Self.hasLine(cache, equalTo: directoryLine, atIndent: 8),
+                "the wired arm must pass `\(directoryLine)` at the `with:`-child indent (8 spaces) — a value at another indent is no longer an action input; the action's implemented default is the `{deriveddata-directory}/*/SourcePackages` glob, which cannot match this repo's explicit -derivedDataPath layout, so a wrong, renamed or relocated value restores nothing while still counting as present (issue #418)"
             )
             #expect(
-                Self.hasLine(cache, equalTo: keyLine),
-                "the wired arm must keep the full `Package.resolved`-keyed `swiftpm-cache-key` expression exactly; a dropped `hashFiles(...)`/`Package.resolved` term (or a moved project path) would key the checkouts on a stale hash (issue #418)"
+                Self.hasLine(cache, equalTo: keyLine, atIndent: 8),
+                "the wired arm must keep the full `Package.resolved`-keyed `swiftpm-cache-key` expression exactly at the `with:`-child indent (8 spaces); a dropped `hashFiles(...)`/`Package.resolved` term (or a moved project path) would key the checkouts on a stale hash (issue #418)"
             )
             #expect(
-                Self.exactLineCount(cache, equalTo: restoreKeysValueLine) == 1,
-                "the `swiftpm-cache-restore-keys` block-scalar value must be exactly `\(restoreKeysValueLine)` once; the `|` key line is not the value, and a suffix such as `xcode27-spm-debug-` must red (issue #418)"
+                Self.hasLine(cache, equalTo: "swiftpm-cache-restore-keys: |", atIndent: 8)
+                    && Self.hasLine(cache, equalTo: restoreKeysValueLine, atIndent: 10),
+                "the `swiftpm-cache-restore-keys` key must sit at the `with:`-child indent (8 spaces) with its block-scalar value `\(restoreKeysValueLine)` at 10; the `|` key line is not the value, and a suffix such as `xcode27-spm-debug-` must red (issue #418)"
             )
 
             // The two absolute lines can drift apart in one edit and
@@ -457,18 +476,9 @@ struct WorkflowPrepareXcodeBuildPinsTests {
                 Issue.record("could not parse `deriveddata-directory:`/`sourcepackages-directory:` from the cache step — re-derive this pin (issue #418)")
             }
         } else if allAbsent {
-            #expect(
-                directoryCount == 0,
-                "the deleted arm must leave no `sourcepackages-directory:` behind (found \(directoryCount)); the SPM config is either fully wired or fully removed (issue #418)"
-            )
-            #expect(
-                keyCount == 0,
-                "the deleted arm must remove `swiftpm-cache-key:` (found \(keyCount)); a leftover key is the inert half of the pre-#418 state (issue #418)"
-            )
-            #expect(
-                restoreKeysCount == 0,
-                "the deleted arm must remove `swiftpm-cache-restore-keys:` (found \(restoreKeysCount)); a leftover restore key is the inert half of the pre-#418 state (issue #418)"
-            )
+            // `allAbsent` above already guarantees all three counts are
+            // zero; the only non-tautological delete-arm check is the stray
+            // block-scalar value line left behind by a partial removal.
             #expect(
                 Self.exactLineCount(cache, equalTo: restoreKeysValueLine) == 0,
                 "the deleted arm must remove the `\(restoreKeysValueLine)` block-scalar value line too (issue #418)"
@@ -488,6 +498,26 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     /// full-scalar bind a suffix rename (`…-ct`, `…-v2`) must fail.
     private static func hasLine(_ block: StepBlock, equalTo exact: String) -> Bool {
         block.lines.contains { $0.trimmingCharacters(in: .whitespaces) == exact }
+    }
+
+    /// True when the block contains `exact` as a whole line at exactly
+    /// `indent` leading spaces — the `with:`-child container check. `hasLine`
+    /// trims leading whitespace, so it cannot tell a `with:` child from a
+    /// step field or an `env:` entry; this one fails such a relocation
+    /// (issue #418).
+    private static func hasLine(_ block: StepBlock, equalTo exact: String, atIndent indent: Int) -> Bool {
+        indentedLineCount(block, equalTo: exact, indent: indent) == 1
+    }
+
+    /// The count of lines equal to `exact` after trimming at exactly `indent`
+    /// leading spaces (a tab or a deeper/shallower indent does not count).
+    private static func indentedLineCount(_ block: StepBlock, equalTo exact: String, indent: Int) -> Int {
+        let prefix = String(repeating: " ", count: indent)
+        return block.lines.filter { line in
+            guard line.hasPrefix(prefix) else { return false }
+            let remainder = line.dropFirst(prefix.count)
+            return !remainder.hasPrefix(" ") && remainder.trimmingCharacters(in: .whitespaces) == exact
+        }.count
     }
 
     /// The count of exact whole trimmed lines — hand-rolled so a block-scalar
