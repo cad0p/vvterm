@@ -10,9 +10,10 @@
 //
 //  The classification and composition live here, one layer above the
 //  platform pasteboard, so every arm is executable on the iOS Simulator
-//  (unit tests) and in the macOS-destination oracle suite. The platform
-//  providers only extract pasteboard values and wrap the results back into
-//  AppKit/UIKit types.
+//  (unit tests). The macOS provider is targeted by the macOS-destination
+//  oracle suite, which is runtime-unverified on this tree — see the #431
+//  verification walk §2. The platform providers only extract pasteboard
+//  values and wrap the results back into AppKit/UIKit types.
 //
 
 import Foundation
@@ -56,11 +57,18 @@ enum ClipboardOpinionatedItem: Equatable, Sendable {
 
     /// Classifies one provider extraction. A decoded URL that is not a file
     /// URL (and a missing decode) falls through to the string representation.
-    static func classify(decodedURL: URL?, plainString: String?) -> ClipboardOpinionatedItem {
+    /// The plain string is an autoclosure so a file-URL item never triggers
+    /// the provider's `.string` read: upstream's `if/else` only asks for the
+    /// string in its non-file branch, and this restores that short-circuit
+    /// without moving the `isFileURL` decision out of this neutral layer.
+    static func classify(
+        decodedURL: URL?,
+        plainString: @autoclosure () -> String?
+    ) -> ClipboardOpinionatedItem {
         if let decodedURL, decodedURL.isFileURL {
             return .fileURL(decodedURL)
         }
-        return .text(plainString)
+        return .text(plainString())
     }
 }
 
@@ -122,6 +130,11 @@ enum ClipboardMimeMapping {
     /// `UTType(mimeType:)`'s identifier. A structurally invalid mime gets no
     /// UTType and falls back to the raw mime string (valid unknown mimes
     /// resolve to a dynamic identifier, as upstream does).
+    ///
+    /// The `text/plain` branch mirrors upstream's failable write-path
+    /// pasteboard-type initializer; the read path handles `text/plain` in its
+    /// own switch case, so the branch is currently exercised only by the
+    /// helper tests.
     static func pasteboardTypeIdentifier(forMime mime: String) -> String {
         if mime == "text/plain" {
             return UTType.utf8PlainText.identifier

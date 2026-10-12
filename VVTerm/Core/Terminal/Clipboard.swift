@@ -108,7 +108,9 @@ enum Clipboard {
     /// The opinionated `text/plain` contents: per item, the escaped path of a
     /// decodable file URL, else the plain string; nil elements are dropped and
     /// the survivors are joined by a space. The `isFileURL` filter lives in
-    /// `ClipboardOpinionatedItem.classify`, not here.
+    /// `ClipboardOpinionatedItem.classify`, not here, and `classify` takes the
+    /// string lazily so a file-URL item never asks for `.string` (upstream's
+    /// `if/else` short-circuit).
     private static func opinionatedStringContents() -> String? {
         let items = (NSPasteboard.general.pasteboardItems ?? []).map { item in
             ClipboardOpinionatedItem.classify(
