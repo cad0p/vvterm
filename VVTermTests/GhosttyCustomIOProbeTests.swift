@@ -72,7 +72,7 @@ struct GhosttyCustomIOProbeTests {
 
         // OSC 10 color query: ESC ] 10 ; ? ST
         harness.surface.feedText("\u{1B}]10;?\u{07}")
-        pumpRunloop()
+        pumpRunloopUntil { firstOSCResponse(in: harness.collector.combinedString(), index: "10") != nil }
 
         let response = try #require(firstOSCResponse(in: harness.collector.combinedString(), index: "10"))
         #expect(response.hasPrefix("\u{1B}]10;rgb:"))
@@ -92,7 +92,7 @@ struct GhosttyCustomIOProbeTests {
         defer { harness.cleanup() }
 
         harness.surface.sendText("probe\r")
-        pumpRunloop()
+        pumpRunloopUntil { harness.collector.combinedString().contains("probe") }
 
         let stream = harness.collector.combinedString()
         #expect(!stream.isEmpty)
@@ -161,12 +161,26 @@ struct GhosttyCustomIOProbeTests {
         )
     }
 
-    /// Pumps the run loop a few times to flush any deferred dispatch used by
-    /// the redraw scheduler. libghostty emits OSC responses synchronously
-    /// during feed_data on the custom-I/O path, so the pumps are a flush, not
-    /// the delivery mechanism.
-    private func pumpRunloop() {
-        for _ in 0..<10 {
+    /// A bounded poll for a custom-I/O callback result: pump the runloop
+    /// until `condition` holds or the deadline passes.
+    ///
+    /// The single-shot `pumpRunloop()` this replaces was a scheduler-delay
+    /// flake (issue #257): one run read a delayed write callback as an inert
+    /// custom-I/O config (empty collector) while the same suite passed on
+    /// the previous head. libghostty normally emits the OSC response
+    /// synchronously during `feed_data`, so the pumps are a flush — but
+    /// "normally" is not a scheduling guarantee.
+    ///
+    /// A genuinely inert config still fails: the condition never becomes
+    /// true and the caller's `#require`/`#expect` runs against the empty
+    /// stream. The 2 s bound is far above the observed callback latency and
+    /// far below the 300 s per-test allowance.
+    private func pumpRunloopUntil(
+        deadline: TimeInterval = 2,
+        condition: () -> Bool
+    ) {
+        let end = Date(timeIntervalSinceNow: deadline)
+        while !condition() && Date() < end {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.005))
         }
     }
