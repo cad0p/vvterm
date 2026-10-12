@@ -131,19 +131,18 @@ git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/build.zig pkg/ma
   src/build/Config.zig src/build/GhosttyXCFramework.zig src/build/MetallibStep.zig \
   HACKING.md macos/build.nu nix/devShell.nix \
   > scripts/patches/ghostty/custom-io.patch
+echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
 ```
 
 The list is the **19-path set** (18 fork files + `pkg/macos/build.zig`);
 `pkg/macos/build.zig` carries only the iOS `-fblocks` restoration, so a future rebase
 must keep that hunk when upstream's translate-c call changes again.
-echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
 
 **Regeneration gotcha**: `src/termio/Callback.zig` is a NEW file (not in upstream) —
 `git apply` leaves it untracked and `git diff` silently skips untracked files, so a
 regenerated patch will DROP it and the build fails with `unable to load
 'termio/Callback.zig'`. Run `git add -N src/termio/Callback.zig` (intent-to-add)
 before `git diff` and verify the output contains `new file mode` for it.
-```
 
 Validate before committing (a Linux box can compile-verify the core — see below):
 
