@@ -1395,7 +1395,12 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// guard step's whole code body line-exact (comments cut, trailing
     /// whitespace trimmed, blank lines dropped, so a benign comment stays
     /// allowed while any code edit reds) plus its
-    /// delegation/id/env/output registration, the verify step's runtime
+    /// delegation/id/output registration and each guard step's `env:` region
+    /// as a mapping — exactly the pinned keys, so a duplicated, quoted or
+    /// extra key reds (a duplicate key is last-wins for the resolved value:
+    /// a second `EVENT_NAME: schedule` would re-enable the bump on a
+    /// `create_bump_pr=false` dispatch while every per-binding count above
+    /// stays green; closure re-lens CR-1) — the verify step's runtime
     /// guards, the whole step-level `if:` scalar of both consumers (a
     /// reverted conjunct, a re-derived input comparison, an added `|| …` —
     /// inline or as a YAML plain-scalar continuation line — reds), and a
@@ -1448,6 +1453,17 @@ struct WorkflowXcodebuildFlagPinsTests {
                 "the `Resolve bump-PR gate` step must bind `\(binding)` exactly once in its `env:` (found \(matches.count)) — the raw values reach the script through env, never interpolated shell text — re-derive this pin (issue #435)"
             )
         }
+        // Fold round 3 (closure re-lens CR-1): the per-binding counts above
+        // are a line count, not a mapping lock. A duplicate or extra key in
+        // the region is last-wins for the resolved value — a second
+        // `EVENT_NAME: schedule` (plain or quoted) resolves the gate to
+        // `true` on a `create_bump_pr=false` dispatch while all counts stay
+        // green — so the region is locked to exactly the two pinned keys.
+        let gateEnvTokens = Self.envRegionKeyTokens(in: gateBlock)
+        #expect(
+            gateEnvTokens.sorted() == ["CREATE_BUMP_PR", "EVENT_NAME"],
+            "the `Resolve bump-PR gate` step's `env:` region must bind exactly `EVENT_NAME` and `CREATE_BUMP_PR` (found \(gateEnvTokens.sorted())) — a duplicated, quoted or extra key is last-wins for the resolved value and can silently re-enable the bump — re-derive this pin (issue #435)"
+        )
         let gateBody = try #require(
             Self.dedentedRunBlockScalar(in: workflow, stepLineIndex: gateStepLine),
             "the `Resolve bump-PR gate` step must keep exactly one `run: |` literal block scalar — re-derive this pin (issue #435)"
@@ -1556,6 +1572,14 @@ struct WorkflowXcodebuildFlagPinsTests {
         #expect(
             verifyEventBindings.count == 1,
             "the `Verify bump-PR gate output` step must bind `EVENT_NAME: ${{ github.event_name }}` exactly once in its `env:` (found \(verifyEventBindings.count)) — the schedule guard reads it from there — re-derive this pin (issue #435)"
+        )
+        // Fold round 3 (closure re-lens CR-1, same class): the verify step's
+        // env region is locked as a mapping too — a duplicate `EVENT_NAME`
+        // key is last-wins and can silently disable the schedule guard.
+        let verifyEnvTokens = Self.envRegionKeyTokens(in: verifyBlock)
+        #expect(
+            verifyEnvTokens.sorted() == ["EVENT_NAME"],
+            "the `Verify bump-PR gate output` step's `env:` region must bind exactly `EVENT_NAME` (found \(verifyEnvTokens.sorted())) — a duplicated, quoted or extra key is last-wins and can silently disable the schedule guard — re-derive this pin (issue #435)"
         )
         #expect(
             verifyBodyLines.filter { $0.contains("$" + "{{") }.count == 1,
@@ -1931,6 +1955,30 @@ struct WorkflowXcodebuildFlagPinsTests {
             probe += 1
         }
         return Array(lines[stepLineIndex..<stepEnd])
+    }
+
+    /// The raw key tokens of a step block's `env:` region: every non-blank,
+    /// comment-cut line after the step's `env:` key up to the first line at
+    /// or above the `env:` indent, reduced to the text before its first `:`.
+    /// Returned raw (quotes and all) so the caller can lock the region as a
+    /// *mapping*: a duplicated, quoted or extra key is visible, where a
+    /// per-binding line count is blind to it (issue #435, closure re-lens
+    /// CR-1 — YAML duplicate keys are last-wins for the resolved value).
+    private static func envRegionKeyTokens(in stepBlock: [String]) -> [String] {
+        guard let envIndex = stepBlock.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "env:"
+        }) else { return [] }
+        let envIndent = stepBlock[envIndex].prefix { $0 == " " || $0 == "\t" }.count
+        var tokens: [String] = []
+        for line in stepBlock[(envIndex + 1)...] {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            let indent = line.prefix { $0 == " " || $0 == "\t" }.count
+            if indent <= envIndent { break }
+            let token = trimmed.firstIndex(of: ":").map { String(trimmed[..<$0]) } ?? trimmed
+            tokens.append(token.trimmingCharacters(in: .whitespaces))
+        }
+        return tokens
     }
 
     /// The whole value of the exactly-one step-level `if:` key of the step at
