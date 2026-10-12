@@ -732,7 +732,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// The direct `readClipboard` probe below is a refusal check, not the
     /// invalidation oracle: after `cleanup()` the view's `surface` is nil
     /// (`GhosttyTerminalView+iOS.swift:1825-1826`), so the probe returns
-    /// `false` whether or not the context was invalidated. The oracle is
+    /// `UNSUPPORTED` whether or not the context was invalidated. The oracle is
     /// `context.resolve() == nil` above, while the view is still alive; the
     /// probe runs with a non-empty clipboard so the refusal is against
     /// readable content. No deferred-free drain here: `cleanup()` frees
@@ -763,14 +763,17 @@ struct GhosttySurfaceCallbackRoutingTests {
             #expect(weakView != nil, "cleanup() must not deallocate the retained view")
             #expect(context.resolve() == nil, "free() must invalidate the context while the view is still alive")
 
-            let handled = Ghostty.App.readClipboard(
+            let result = Ghostty.App.readClipboard(
                 context.userdata,
                 location: GHOSTTY_CLIPBOARD_STANDARD,
-                state: nil
+                state: nil,
+                mimes: nil,
+                mimesLen: 0,
+                list: false
             )
             #expect(
-                handled == false,
-                "the clipboard probe must refuse once cleanup() has run"
+                result == GHOSTTY_CLIPBOARD_READ_UNSUPPORTED,
+                "the clipboard probe must report UNSUPPORTED once cleanup() has run"
             )
         }
     }
@@ -780,7 +783,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// #327 acceptance (allow): a non-bracketed multi-line paste that the user
     /// allows must reach the terminal CR-encoded (`\n` → `\r`,
     /// `input/paste.zig:109-115`) and complete the request exactly once with the
-    /// payload length and `confirmed == true`.
+    /// payload length, `confirmed == true`, and `denied == false`.
     @Test
     func unsafePasteAllowedCompletesOnceWithTheCREncodedPayload() async throws {
         let app = Ghostty.App()
@@ -834,12 +837,13 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
         #expect(completions.first?.byteLength == payload.utf8.count)
         #expect(completions.first?.confirmed == true)
+        #expect(completions.first?.denied == false, "an allowed completion must not be recorded as a denial")
         #expect(GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE])
         #endif
     }
 
-    /// #327 acceptance (deny): an unsafe paste the user denies must complete the
-    /// request exactly once as a deny (empty data + `confirmed: true`), write
+    /// #327 acceptance (deny): an unsafe paste the user denies must deny the
+    /// request exactly once (empty byte length, `denied == true`), write
     /// nothing, and consult the seam exactly once — asserted before the
     /// no-write claim so the deny branch cannot pass vacuously.
     @Test
@@ -887,10 +891,11 @@ struct GhosttySurfaceCallbackRoutingTests {
             "the seam must be consulted exactly once (asserted before the no-write claim)"
         )
         let completions = GhosttyClipboardConfirmDebug.completions
-        #expect(completions.count == 1, "the request must be completed exactly once")
+        #expect(completions.count == 1, "the request must be received exactly once")
         #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
-        #expect(completions.first?.byteLength == 0, "the deny form completes with empty data")
+        #expect(completions.first?.byteLength == 0, "the deny form records an empty payload")
         #expect(completions.first?.confirmed == true)
+        #expect(completions.first?.denied == true, "the user deny must be recorded as a denial")
         #endif
 
         // The deny completion carries empty data, so the core returns before
@@ -903,9 +908,9 @@ struct GhosttySurfaceCallbackRoutingTests {
 
     /// #329: completion-time gate + teardown drain. If the surface dies while
     /// the confirmation request is in flight, the drain added to
-    /// `Ghostty.Surface.free()` releases the request as the documented deny
-    /// completion exactly once, and the completion gate must not issue a
-    /// second completion afterwards.
+    /// `Ghostty.Surface.free()` releases the request with the deny API exactly
+    /// once, and the completion gate must not issue a second termination
+    /// afterwards.
     ///
     /// WHAT THIS CONSTRUCTION IS. The seam runs inside the completion `Task`
     /// *after* the callback-frame resolve guard, so freeing the surface there
@@ -918,10 +923,11 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// main-serialized.
     ///
     /// What this proves: the drain releases the in-flight request exactly once
-    /// in the deny shape (`byteLength == 0`, `confirmed == true`), the drain is
-    /// labelled as such by `teardownDrains`, the Task does not complete it
-    /// again, and the registry ends empty. The registry-emptiness assertion is
-    /// the direct "no retained state" observation.
+    /// in the deny shape (`byteLength == 0`, `confirmed == true`,
+    /// `denied == true`), the drain is labelled as such by `teardownDrains`,
+    /// the Task does not terminate it again, and the registry ends empty. The
+    /// registry-emptiness assertion is the direct "no retained state"
+    /// observation.
     @Test
     func surfaceDeathDuringTheConfirmationSeamReleasesTheRequestAsADeny() async throws {
         let app = Ghostty.App()
@@ -979,10 +985,11 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(released, "the free-path drain must release the in-flight request")
         _ = await Self.waitUntil(timeout: 0.5) { false }
         let completions = GhosttyClipboardConfirmDebug.completions
-        #expect(completions.count == 1, "the teardown drain must issue exactly one completion")
+        #expect(completions.count == 1, "the teardown drain must issue exactly one termination")
         #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
-        #expect(completions.first?.byteLength == 0, "the drain's deny form completes with empty data")
+        #expect(completions.first?.byteLength == 0, "the drain's deny form records an empty payload")
         #expect(completions.first?.confirmed == true)
+        #expect(completions.first?.denied == true, "the teardown drain must be recorded as a denial")
         #expect(
             GhosttyClipboardConfirmDebug.teardownDrains == [GHOSTTY_CLIPBOARD_REQUEST_PASTE],
             "the completion must be labelled as a teardown drain, not a completion-path one"
@@ -1152,7 +1159,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// #327 posture: `clipboard-read = deny` means an OSC 52 read never starts a
     /// request. A remote OSC 52 read is fed, then an OSC 52 *write* of a known
     /// barrier value; both travel the same FIFO mailbox
-    /// (`stream_handler.zig:963-984`), so the barrier landing on the pasteboard
+    /// (`stream_handler.zig:1041-1047`), so the barrier landing on the pasteboard
     /// proves the read was handled first. Without that barrier the test is
     /// green pre-fix and proves nothing.
     @Test
@@ -1233,7 +1240,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// recorded before the resolve guard. `state: nil` is safe here because
     /// the production resolve guard returns before any state use. The guard
     /// *ordering* is not observable through this test (with `state: nil`, the
-    /// `complete` helper's own nil-state guard makes the two orderings
+    /// terminal helper's own nil-state guard makes the two orderings
     /// indistinguishable); it is pinned structurally by P-E in
     /// `GhosttySurfaceUserdataLifetimePinsTests`. Accepted dead-surface
     /// residual, tracked in the follow-up issue.
@@ -1272,12 +1279,27 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(weakContext.value != nil, "the held wrapper must keep the context alive after the view drops")
 
         "vvterm-#327-dead-payload".withCString { payloadCString in
-            Ghostty.App.confirmReadClipboard(
-                userdata,
-                string: payloadCString,
-                state: nil,
-                request: GHOSTTY_CLIPBOARD_REQUEST_PASTE
+            var content = ghostty_clipboard_content_s(
+                mime: payloadCString,
+                data: payloadCString,
+                len: strlen(payloadCString)
             )
+            withUnsafePointer(to: &content) { contentsPointer in
+                var confirm = ghostty_clipboard_confirm_s(
+                    contents: contentsPointer,
+                    contents_len: 1,
+                    available: nil,
+                    available_len: 0,
+                    name: nil,
+                    can_remember: false
+                )
+                Ghostty.App.confirmReadClipboard(
+                    userdata,
+                    confirm: &confirm,
+                    state: nil,
+                    request: GHOSTTY_CLIPBOARD_REQUEST_PASTE
+                )
+            }
         }
 
         // No Task may have been scheduled and no completion may have landed.
