@@ -90,7 +90,10 @@
 //       count, and no `SYMROOT=`/`BUILD_DIR=` assignment is allowed —
 //       asserted at a token boundary, because `CONFIGURATION_BUILD_DIR=`
 //       contains `BUILD_DIR=` and a trimmed line-prefix check would miss
-//       `export BUILD_DIR=…`/mid-line spellings. A11 deliberately
+//       `export BUILD_DIR=…`/mid-line spellings, and the `env:` key
+//       spelling (`SYMROOT:`/`BUILD_DIR:`) is rejected at the step and at
+//       every workflow indent, because xcodebuild reads build settings from
+//       the environment. A11 deliberately
 //       re-asserts A9's `OBJROOT` token and kept `-derivedDataPath` line:
 //       the #427 relocation is only valid on top of the #422 one.
 //       (issue #427)
@@ -151,9 +154,11 @@
 //    `PlugIns/*.appex` listing are that runtime oracle. A11's `OBJROOT` /
 //    `-derivedDataPath` assertions deliberately overlap A9: the #427
 //    relocation is only valid on top of the #422 relocation, and A11 states
-//    the full invocation contract in one place. A setting routed through a
-//    shell variable (`S="BUILD_DIR=…"; xcodebuild … $S`) remains invisible to
-//    this text scanner — the general scanner-heuristic defeat below.
+//    the full invocation contract in one place. A build setting routed
+//    through a shell variable (`S="BUILD_DIR=…"; xcodebuild … $S`) or through
+//    an indirection the scanner cannot read (a `*.xcconfig`, a Reusable
+//    Workflow input) remains invisible — the general scanner-heuristic defeat
+//    below. The direct `env:` spellings are covered. (impl lens 2 F4)
 //  - The scanner is a text heuristic: an indented or flow-style `runs:` /
 //    `steps:` spelling, a quoted `ota-archive` key, or content at the step
 //    indent that is not a list item throws `PinFailure` rather than scanning
@@ -610,6 +615,35 @@ struct WorkflowPrepareXcodeBuildPinsTests {
                 alternative to the pinned per-configuration relocation; checked at a \
                 token boundary because `CONFIGURATION_BUILD_DIR=` contains \
                 `BUILD_DIR=` (issue #427)
+                """
+            )
+        }
+
+        // The same settings spelled as YAML `env:` keys (step-, job- or
+        // workflow-level) are real evasions: xcodebuild reads build settings
+        // from the environment, so `env: SYMROOT: …` moves the archive
+        // exactly like the command-line spelling (impl lens 2 F4). The step
+        // scan sees a step-level `env:` mapping but skips job-level content,
+        // so count over the whole workflow file too.
+        let workflowLines = try Self.commentCutLines(of: Self.otaWorkflowPath)
+        let workflowBlock = StepBlock(lines: workflowLines)
+        for setting in ["SYMROOT:", "BUILD_DIR:"] {
+            let stepCount = Self.tokenOccurrenceCount(archive, token: setting)
+            let fileCount = Self.tokenOccurrenceCount(workflowBlock, token: setting)
+            #expect(
+                stepCount == 0,
+                """
+                the OTA archive step must not declare `\(setting)` (found \(stepCount)); \
+                an `env:` mapping is honored by xcodebuild as a build setting and moves \
+                the archive just like the command-line spelling (issue #427)
+                """
+            )
+            #expect(
+                fileCount == 0,
+                """
+                \(Self.otaWorkflowPath) must not declare `\(setting)` at any indent \
+                (found \(fileCount)); job- or workflow-level env build settings are \
+                inherited by the archive step (issue #427)
                 """
             )
         }
