@@ -1391,11 +1391,12 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// boolean `false` equals the empty string (`false == ''` -> `0 == 0` ->
     /// true); the old in-expression gate therefore ran the bump steps on a
     /// `create_bump_pr=false` validation dispatch (issue #435, measured
-    /// 2026-10-12: run 38216971222 created bump PR #434). The pin binds the
-    /// gate step's delegation/id/env/output registration (exactly one `GATE=`
-    /// assignment and one `$GITHUB_OUTPUT` write), the verify step's runtime
-    /// guards (exactly one `REGISTERED=` assignment, no `$GITHUB_OUTPUT`
-    /// write), the whole step-level `if:` scalar of both consumers (a
+    /// 2026-10-12: run 38216971222 created bump PR #434). The pin binds each
+    /// guard step's whole code body line-exact (comments cut, trailing
+    /// whitespace trimmed, blank lines dropped, so a benign comment stays
+    /// allowed while any code edit reds) plus its
+    /// delegation/id/env/output registration, the verify step's runtime
+    /// guards, the whole step-level `if:` scalar of both consumers (a
     /// reverted conjunct, a re-derived input comparison, an added `|| …` —
     /// inline or as a YAML plain-scalar continuation line — reds), and a
     /// workflow-wide code-line allow-list over the bare `create_bump_pr`
@@ -1478,24 +1479,30 @@ struct WorkflowXcodebuildFlagPinsTests {
             !gateBody.contains("$" + "{{"),
             "the `Resolve bump-PR gate` step's run body must carry no `${{ }}` (the event/raw input reach it only via `env:`) — re-derive this pin (issue #435)"
         )
-        // Impl-lens fold (lens 2, MAJOR): the body is already presence-bound
-        // (each pinned line exactly once), so an appended override line keeps
-        // every assertion above green while it rewrites the decision. Count
-        // the assignment and output-write shapes instead of only their
-        // presence.
-        let gateAssignments = gateBodyLines.filter {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix("GATE=")
-        }
+        // Fold round 2 (closure lens, CL-1 MAJOR): the shape counts that
+        // replaced the presence pins (one line-leading `GATE=`, one
+        // `$GITHUB_OUTPUT` write) still let a workflow-only edit resolve
+        // `enabled=true` on a `create_bump_pr=false` dispatch — an inline
+        // `[ … ] || GATE=true`, `export GATE=true`, a `false) GATE=true;;`
+        // case arm, or an `EVENT_NAME`/`CREATE_BUMP_PR` reassignment. Pin the
+        // whole normalized code body line-exact instead, so a benign comment
+        // line stays allowed anywhere and any code edit reds; the named
+        // presence assertions above stay as diagnostics.
+        let expectedGateBody = """
+            set -euo pipefail
+            echo "resolve-bump-gate" > "$RUNNER_TEMP/ghostty-probe-step"
+            GATE="$(bash scripts/ci/ghostty-probe-bump-gate.sh "$EVENT_NAME" "$CREATE_BUMP_PR")"
+            case "$GATE" in
+              true|false) ;;
+              *) echo "::error::bump gate produced an invalid token: '$GATE'"; exit 1 ;;
+            esac
+            echo "bump-pr gate: enabled=$GATE (event=$EVENT_NAME input=$CREATE_BUMP_PR)"
+            echo "enabled=$GATE" >> "$GITHUB_OUTPUT"
+            """
+        let gateBodyCode = Self.normalizedBodyCodeLines(gateBody)
         #expect(
-            gateAssignments.count == 1,
-            "the `Resolve bump-PR gate` step's run body must contain exactly one `GATE=` assignment line, found \(gateAssignments.count) — an appended `GATE=true` after the `case` overrides the script decision while every pinned line stays intact — re-derive this pin (issue #435)"
-        )
-        let gateOutputWrites = gateBodyLines.filter {
-            $0.contains(#">> "$GITHUB_OUTPUT""#)
-        }
-        #expect(
-            gateOutputWrites.count == 1,
-            "the `Resolve bump-PR gate` step's run body must write to `$GITHUB_OUTPUT` exactly once (the `enabled=$GATE` registration), found \(gateOutputWrites.count) — a second write can register a re-derived `enabled=true` beside the pinned one — re-derive this pin (issue #435)"
+            gateBodyCode == expectedGateBody,
+            "the `Resolve bump-PR gate` step's code body (comments cut, trailing whitespace trimmed, blank lines dropped) must equal the pinned literal exactly; found:\n\(gateBodyCode)\nexpected:\n\(expectedGateBody)\n- any added, removed, reordered or re-spelled code line can re-derive the gate decision while the named assertions above stay green - re-derive this pin (issue #435)"
         )
 
         // (2) Exactly one verify step: the registered output must be a valid
@@ -1554,21 +1561,28 @@ struct WorkflowXcodebuildFlagPinsTests {
             verifyBodyLines.filter { $0.contains("$" + "{{") }.count == 1,
             "the `Verify bump-PR gate output` step's run body must carry exactly one `${{ }}` (the registered output read) — re-derive this pin (issue #435)"
         )
-        // Impl-lens fold (lens 1, MINOR): an inserted `REGISTERED=true` keeps
-        // every pinned line intact while it blinds both runtime guards.
-        let registeredAssignments = verifyBodyLines.filter {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix("REGISTERED=")
-        }
+        // Fold round 2 (closure lens, CL-1 MAJOR): the verify step's shape
+        // counts (one `REGISTERED=` assignment, no `$GITHUB_OUTPUT` write)
+        // were the same partial lock as the gate's; pin the whole normalized
+        // code body line-exact (an inserted `REGISTERED=true`, an output
+        // write, or any guard re-spelling reds).
+        let expectedVerifyBody = """
+            set -euo pipefail
+            echo "verify-bump-gate" > "$RUNNER_TEMP/ghostty-probe-step"
+            REGISTERED='${{ steps.bump-gate.outputs.enabled }}'
+            echo "bump-gate.outputs.enabled='$REGISTERED'"
+            case "$REGISTERED" in
+              true|false) ;;
+              *) echo "::error::bump-gate output not registered (got '$REGISTERED')"; exit 1 ;;
+            esac
+            if [[ "$EVENT_NAME" == "schedule" && "$REGISTERED" != "true" ]]; then
+              echo "::error::scheduled run resolved the bump gate to '$REGISTERED' — the weekly bump would silently stop"; exit 1
+            fi
+            """
+        let verifyBodyCode = Self.normalizedBodyCodeLines(verifyBody)
         #expect(
-            registeredAssignments.count == 1,
-            "the `Verify bump-PR gate output` step's run body must contain exactly one `REGISTERED=` assignment line, found \(registeredAssignments.count) — an inserted `REGISTERED=true` blinds the schedule guard while every pinned line stays intact — re-derive this pin (issue #435)"
-        )
-        let verifyOutputWrites = verifyBodyLines.filter {
-            $0.contains(#">> "$GITHUB_OUTPUT""#)
-        }
-        #expect(
-            verifyOutputWrites.isEmpty,
-            "the `Verify bump-PR gate output` step's run body must not write to `$GITHUB_OUTPUT`, found \(verifyOutputWrites.count) — the guard only reads the registered output — re-derive this pin (issue #435)"
+            verifyBodyCode == expectedVerifyBody,
+            "the `Verify bump-PR gate output` step's code body (comments cut, trailing whitespace trimmed, blank lines dropped) must equal the pinned literal exactly; found:\n\(verifyBodyCode)\nexpected:\n\(expectedVerifyBody)\n- an inserted assignment, an output write or a re-spelled guard blinds the silent-weekly-stop runtime lock - re-derive this pin (issue #435)"
         )
 
         // (3) Both consumers gate on the whole resolved scalar.
@@ -2177,6 +2191,20 @@ struct WorkflowXcodebuildFlagPinsTests {
             previousWasWhitespace = character.isWhitespace
         }
         return result
+    }
+
+    /// Fold round 2 (closure lens, CL-1): the normalized code lines of a
+    /// `run: |` body — per line a trailing `#`-comment is cut
+    /// (`cuttingLineComment`), trailing whitespace is trimmed, and blank or
+    /// comment-only lines are dropped. The #435 body pins compare this form
+    /// line-exact, so a benign comment line stays allowed anywhere while an
+    /// added, removed, reordered or re-spelled code line reds.
+    private static func normalizedBodyCodeLines(_ body: String) -> String {
+        body.components(separatedBy: "\n")
+            .map { cuttingLineComment($0) }
+            .map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
