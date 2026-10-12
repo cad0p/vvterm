@@ -1392,15 +1392,20 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// true); the old in-expression gate therefore ran the bump steps on a
     /// `create_bump_pr=false` validation dispatch (issue #435, measured
     /// 2026-10-12: run 38216971222 created bump PR #434). The pin binds the
-    /// gate step's delegation/id/env/output registration, the verify step's
-    /// runtime guards, the whole step-level `if:` scalar of both consumers (a
-    /// reverted conjunct, a re-derived input comparison or an added `|| …`
-    /// reds), and a workflow-wide code-line allow-list of the two benign
-    /// `inputs.create_bump_pr` uses (the gate step's `env:` value and the
-    /// bump step's diagnostic echo — the rewritten comments may name the old
-    /// expression by design). Defeat class: a coherent rewrite of the
-    /// workflow *and* this pin passes; the E2E dispatch is the runtime
-    /// acceptance.
+    /// gate step's delegation/id/env/output registration (exactly one `GATE=`
+    /// assignment and one `$GITHUB_OUTPUT` write), the verify step's runtime
+    /// guards (exactly one `REGISTERED=` assignment, no `$GITHUB_OUTPUT`
+    /// write), the whole step-level `if:` scalar of both consumers (a
+    /// reverted conjunct, a re-derived input comparison, an added `|| …` —
+    /// inline or as a YAML plain-scalar continuation line — reds), and a
+    /// workflow-wide code-line allow-list over the bare `create_bump_pr`
+    /// token: the four benign lines (the input declaration, the gate step's
+    /// `env:` value, the bump step's diagnostic echo, and the alarm body's
+    /// validation-dispatch hint), so bracket/index spellings red without a
+    /// separate needle (the rewritten comments may name the old expression by
+    /// design). The one delegation is matched as a whole shell word. Defeat
+    /// class: a coherent rewrite of the workflow *and* this pin passes; the
+    /// E2E dispatch is the runtime acceptance.
     @Test
     func testTheGhosttyProbeBumpGateIsResolvedByTheScriptAndConsumedByBothSteps() throws {
         let workflowPath = ".github/workflows/ghostty-upstream-probe.yml"
@@ -1473,6 +1478,25 @@ struct WorkflowXcodebuildFlagPinsTests {
             !gateBody.contains("$" + "{{"),
             "the `Resolve bump-PR gate` step's run body must carry no `${{ }}` (the event/raw input reach it only via `env:`) — re-derive this pin (issue #435)"
         )
+        // Impl-lens fold (lens 2, MAJOR): the body is already presence-bound
+        // (each pinned line exactly once), so an appended override line keeps
+        // every assertion above green while it rewrites the decision. Count
+        // the assignment and output-write shapes instead of only their
+        // presence.
+        let gateAssignments = gateBodyLines.filter {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("GATE=")
+        }
+        #expect(
+            gateAssignments.count == 1,
+            "the `Resolve bump-PR gate` step's run body must contain exactly one `GATE=` assignment line, found \(gateAssignments.count) — an appended `GATE=true` after the `case` overrides the script decision while every pinned line stays intact — re-derive this pin (issue #435)"
+        )
+        let gateOutputWrites = gateBodyLines.filter {
+            $0.contains(#">> "$GITHUB_OUTPUT""#)
+        }
+        #expect(
+            gateOutputWrites.count == 1,
+            "the `Resolve bump-PR gate` step's run body must write to `$GITHUB_OUTPUT` exactly once (the `enabled=$GATE` registration), found \(gateOutputWrites.count) — a second write can register a re-derived `enabled=true` beside the pinned one — re-derive this pin (issue #435)"
+        )
 
         // (2) Exactly one verify step: the registered output must be a valid
         // token, and a scheduled run must resolve to enabled=true (the
@@ -1530,6 +1554,22 @@ struct WorkflowXcodebuildFlagPinsTests {
             verifyBodyLines.filter { $0.contains("$" + "{{") }.count == 1,
             "the `Verify bump-PR gate output` step's run body must carry exactly one `${{ }}` (the registered output read) — re-derive this pin (issue #435)"
         )
+        // Impl-lens fold (lens 1, MINOR): an inserted `REGISTERED=true` keeps
+        // every pinned line intact while it blinds both runtime guards.
+        let registeredAssignments = verifyBodyLines.filter {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("REGISTERED=")
+        }
+        #expect(
+            registeredAssignments.count == 1,
+            "the `Verify bump-PR gate output` step's run body must contain exactly one `REGISTERED=` assignment line, found \(registeredAssignments.count) — an inserted `REGISTERED=true` blinds the schedule guard while every pinned line stays intact — re-derive this pin (issue #435)"
+        )
+        let verifyOutputWrites = verifyBodyLines.filter {
+            $0.contains(#">> "$GITHUB_OUTPUT""#)
+        }
+        #expect(
+            verifyOutputWrites.isEmpty,
+            "the `Verify bump-PR gate output` step's run body must not write to `$GITHUB_OUTPUT`, found \(verifyOutputWrites.count) — the guard only reads the registered output — re-derive this pin (issue #435)"
+        )
 
         // (3) Both consumers gate on the whole resolved scalar.
         for consumer in [
@@ -1544,10 +1584,12 @@ struct WorkflowXcodebuildFlagPinsTests {
             )
         }
 
-        // (4) Workflow-wide allow-list: the only code lines naming
-        // `inputs.create_bump_pr` are the gate step's `env:` value and the
-        // bump step's diagnostic echo. A comparison spelling (with or without
-        // spaces, `contains(...)`, …) lands in neither and reds.
+        // (4) Workflow-wide allow-list: every code line naming the bare
+        // `create_bump_pr` token must be one of the four benign lines (the
+        // input declaration, the gate step's `env:` value, the bump step's
+        // diagnostic echo and the alarm body's validation-dispatch hint). A
+        // comparison spelling (dotted, bracket, `contains(...)`, …) lands in
+        // none and reds, with no separate needle per spelling.
         let codeLines = Self.strippingYAMLComments(workflow)
             .components(separatedBy: "\n")
             .map { Self.cuttingLineComment($0) }
@@ -1565,23 +1607,50 @@ struct WorkflowXcodebuildFlagPinsTests {
             diagnosticOccurrences.count == 1,
             "the diagnostic `inputs.create_bump_pr` echo must stay exactly once, found \(diagnosticOccurrences.count) — it is the operator-visible record of what the dispatch sent — re-derive this pin (issue #435)"
         )
-        let inputOccurrenceLines = codeLines.enumerated().filter {
-            $0.element.contains("inputs.create_bump_pr")
+        // The bare token `create_bump_pr` — dotted (`inputs.create_bump_pr`),
+        // bracket (`inputs['create_bump_pr']`) or
+        // `github.event.inputs["create_bump_pr"]` — must occur only on the
+        // four allow-listed lines; a scan on the dotted spelling alone misses
+        // index syntax, so the allow-list is over the bare token.
+        let allowedCreateBumpPrLines: Set<String> = [
+            "create_bump_pr:",
+            "CREATE_BUMP_PR: ${{ inputs.create_bump_pr }}",
+            #"echo "inputs.create_bump_pr='${{ inputs.create_bump_pr }}'""#,
+            "3. Update `scripts/patches/ghostty/BASE`, then re-dispatch the probe (workflow_dispatch, force_rebuild=true, create_bump_pr=false) to validate before the real bump.",
+        ]
+        let createBumpPrLines = codeLines.enumerated().filter {
+            $0.element.contains("create_bump_pr")
+        }
+        let allowListViolations = createBumpPrLines.filter {
+            !allowedCreateBumpPrLines.contains($0.element.trimmingCharacters(in: .whitespaces))
         }
         #expect(
-            inputOccurrenceLines.count == 2,
-            "only the gate step's `env:` value and the bump step's diagnostic echo may name `inputs.create_bump_pr` on a code line; found \(inputOccurrenceLines.count) at line(s) \(inputOccurrenceLines.map { String($0.offset + 1) }.joined(separator: ", ")): \(inputOccurrenceLines.map { $0.element.trimmingCharacters(in: .whitespaces) }.joined(separator: " | ")) — a reintroduced comparison regenerates the defect (issue #435) — re-derive this pin"
+            allowListViolations.isEmpty,
+            "every code line naming `create_bump_pr` must be one of the allow-listed lines (the input declaration, the gate step's `env:` value, the bump step's diagnostic echo, the alarm body's validation-dispatch hint); line(s) \(allowListViolations.map { String($0.offset + 1) }.joined(separator: ", ")): \(allowListViolations.map { $0.element.trimmingCharacters(in: .whitespaces) }.joined(separator: " | ")) — any comparison spelling (dotted, bracket, `github.event.inputs[…]`) re-derives the boolean coercion (issue #435) — re-derive this pin"
+        )
+        let allowListCoverage = Set(createBumpPrLines.map {
+            $0.element.trimmingCharacters(in: .whitespaces)
+        })
+        #expect(
+            allowListCoverage == allowedCreateBumpPrLines,
+            "all four allow-listed `create_bump_pr` lines must still be present in \(workflowPath); found \(allowListCoverage.sorted().joined(separator: " | ")) — a removed declaration/env/diagnostic line breaks the gate contract — re-derive this pin (issue #435)"
         )
 
         // (5) Exactly one workflow-wide `ghostty-bump-pr.sh` delegation (the
         // #396 pin is scoped to the named bump step; a third consumer under
         // its own gate would otherwise be invisible).
-        let bumpScriptDelegations = codeLines.enumerated().filter {
-            $0.element.trimmingCharacters(in: .whitespaces).hasPrefix("bash scripts/ci/ghostty-bump-pr.sh")
+        // Impl-lens fold (lens 2, MINOR): a prefix match accepts an appended
+        // path suffix (`ghostty-bump-pr.sh.evil`), so the delegation path is
+        // compared as an exact whole shell word.
+        let bumpScriptDelegations = codeLines.enumerated().filter { pair in
+            let words = Self.shellWords(pair.element.trimmingCharacters(in: .whitespaces))
+            return words.count >= 2
+                && words[0] == "bash"
+                && words[1] == "scripts/ci/ghostty-bump-pr.sh"
         }
         #expect(
             bumpScriptDelegations.count == 1,
-            "exactly one `bash scripts/ci/ghostty-bump-pr.sh` delegation may exist in \(workflowPath), found \(bumpScriptDelegations.count) at line(s) \(bumpScriptDelegations.map { String($0.offset + 1) }.joined(separator: ", ")) — re-derive this pin (issue #435)"
+            "exactly one `bash scripts/ci/ghostty-bump-pr.sh` delegation (the path a whole shell word) may exist in \(workflowPath), found \(bumpScriptDelegations.count) at line(s) \(bumpScriptDelegations.map { String($0.offset + 1) }.joined(separator: ", ")) — a path suffix such as `.evil` bypasses the #396 content pin — re-derive this pin (issue #435)"
         )
 
         // (6) The input declaration stays boolean/default-true.
@@ -1852,11 +1921,16 @@ struct WorkflowXcodebuildFlagPinsTests {
 
     /// The whole value of the exactly-one step-level `if:` key of the step at
     /// `stepLineIndex`, comment-cut and whitespace-normalized (each run of
-    /// whitespace collapses to one space). The #435 pin compares the scalar
-    /// whole, so a reverted conjunct or an added `|| …` suffix reds rather
-    /// than passing a substring test. Fail-closed: zero/several step-level
-    /// `if:` keys, an empty value, or a block/folded scalar throws
-    /// `PinFailure` instead of scanning a partial expression.
+    /// whitespace collapses to one space). YAML plain scalars may continue on
+    /// following lines indented deeper than the key (impl-lens fold, lens 1
+    /// MAJOR: a 10-space `|| true` continuation after the key folds into the
+    /// scalar), so the extractor assembles the full folded value before the
+    /// comparison; the #435 pin then compares it whole, so a reverted
+    /// conjunct or an added `|| …` — inline or folded over a continuation
+    /// line — reds rather than passing a substring test. Fail-closed:
+    /// zero/several step-level `if:` keys, an empty value, or a block,
+    /// folded or quoted scalar throws `PinFailure` instead of scanning a
+    /// partial expression.
     private static func stepIfScalar(in source: String, stepLineIndex: Int) throws -> String {
         let stepBlock = stepBlockLines(in: source, stepLineIndex: stepLineIndex)
         guard !stepBlock.isEmpty else {
@@ -1879,13 +1953,41 @@ struct WorkflowXcodebuildFlagPinsTests {
                 "the step-level `if:` key at line \(stepLineIndex + ifKeys[0].offset + 1) lost its key text — re-derive this pin (issue #435)"
             )
         }
-        let value = String(cut[keyRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty, !value.hasPrefix("|"), !value.hasPrefix(">") else {
+        let firstLineValue = String(cut[keyRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        guard !firstLineValue.isEmpty, !firstLineValue.hasPrefix("|"), !firstLineValue.hasPrefix(">") else {
             throw PinFailure(
-                "the step-level `if:` at line \(stepLineIndex + ifKeys[0].offset + 1) is not a non-empty inline scalar (found `\(value)`) — a block/folded `if:` is not scannable (issue #435); re-derive this pin"
+                "the step-level `if:` at line \(stepLineIndex + ifKeys[0].offset + 1) is not a non-empty inline scalar (found `\(firstLineValue)`) — a block/folded `if:` is not scannable (issue #435); re-derive this pin"
             )
         }
-        return value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard !firstLineValue.hasPrefix("'"), !firstLineValue.hasPrefix("\"") else {
+            throw PinFailure(
+                "the step-level `if:` at line \(stepLineIndex + ifKeys[0].offset + 1) is a quoted scalar (found `\(firstLineValue)`) — a quoted multi-line `if:` folds differently and is not scannable (issue #435); re-derive this pin"
+            )
+        }
+        // Plain-scalar continuation lines: YAML folds any following line
+        // that is blank or indented deeper than the key into the scalar
+        // (blank lines become a newline, all other breaks a space). Collect
+        // the whole fold; the normalization below then collapses it to the
+        // single-space canonical form.
+        var pieces = [firstLineValue]
+        var sawContinuation = false
+        var cursor = ifKeys[0].offset + 1
+        while cursor < stepBlock.count {
+            let rawLine = stepBlock[cursor]
+            let trimmed = cuttingLineComment(rawLine).trimmingCharacters(in: .whitespaces)
+            let indent = rawLine.prefix { $0 == " " }.count
+            if trimmed.isEmpty {
+                if sawContinuation { pieces.append("") }
+                cursor += 1
+                continue
+            }
+            guard indent > keyIndent else { break }
+            sawContinuation = true
+            pieces.append(trimmed)
+            cursor += 1
+        }
+        return pieces.joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     }
 
     private static func workflowSource(_ relativePath: String) throws -> String {
