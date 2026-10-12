@@ -635,16 +635,23 @@ fold does not close: `-f` script bodies, interpreters outside the inline-program
 resolve (`exec`/`ionice`/`chrt`/`taskset`, a long-option abbreviation, a
 grouped command position `(xargs …)`, `xargs … < pf`, an untraced
 `$`-word on a joined line — including the indirect expansion `${!v}` — a
-nested assignment body, and a split string assembled at runtime
-(`env -S "$CMD …"`) — the measured
+nested assignment body — the measured
 wrapper/assignment/continuation spellings (`env xargs`, `FOO=1 xargs`,
 `nice xargs`, `command xargs`, `time xargs`, a trailing-`|` or backslash
 multi-line pipeline) now refuse since #350f, and the bare
 `… | xargs cp payload {}` form has refused since A13; the #350f fold
-round 1 additionally refuses the split-string quote decoding, the
+round 1 additionally refuses the split-string payload spellings, the
 multi-hop pipe chain, the redirection-prefixed command position, the
 quote-close-then-pipe ordering, the substitution and compound-keyword
-command positions, and the unlisted valid long option fail-closed), the
+command positions, and the unlisted valid long option fail-closed; the
+#350f fold round 2 makes `env -S`/`--split-string` an unconditional
+refusal at any spelling (separated, attached, `=`-long, abbreviated,
+short-option cluster, or behind another unparsed option — closing the
+former runtime-assembled `$CMD` residual), consumes bash's dynamic-fd
+`{name}` redirect prefix, carries the quote and backslash state across
+pipeline hop lines (a post-quote or joined `|` counts, and an
+internal-pipe hop command is classified), and ships the wrapper-option
+census fixtures with the rest demoted to this list), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
@@ -682,10 +689,12 @@ string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); an argv
 operand fed on stdin behind an unlisted wrapper (`exec xargs`), a
-long-option abbreviation or a grouped command position (`(xargs …)`)
-still sits outside the carrier table, and a split string assembled at
-runtime (`env -S "$CMD …"`; measured FLIP with `CMD=xargs`) is invisible
-to the literal word test; a valid unlisted long option of a listed
+long-option abbreviation that is not a `--split-string` spelling, or a
+grouped command position (`(xargs …)`) still sits outside the carrier
+table (the split string is refused unconditionally at any spelling since
+#350f fold round 2, so the former runtime-assembled `$CMD` residual is
+closed; the refusal does not claim the payload contains `xargs`); a
+valid unlisted long option of a listed
 wrapper (`env --ignore-environment`/`--chdir=DIR`/`--null`) refuses
 fail-closed rather than being parsed (the listed wrappers, assignment
 prefixes, redirection prefixes, quote-close pipes, multi-hop chains,
@@ -890,14 +899,19 @@ effective command word is resolved through assignment prefixes, the
 redirection prefixes and a fixture-bounded wrapper table (`env`/`nice`/
 `command`/`time`/`nohup`/`setsid`/`stdbuf`/`timeout`), an unparseable
 option after a recognized wrapper with an `xargs` word still unplaced
-refuses fail-closed (the split string's quotes are removed first, so
-`env -S 'x"args" …'` refuses), the two backslash joins and the
+refuses fail-closed, and an `env` `-S`/`--split-string` spelling
+(separated, attached, `=`-long, abbreviated, a short-option cluster, or
+behind another unparsed option) refuses **unconditionally** with a
+split-string-specific diagnostic (fold round 2, C1); the two backslash
+joins and the
 trailing-`|` pipeline join feed the carrier with the sound predicates
-only, the pipe join walks multi-hop chains and reconstructs a
+only, the pipe join walks multi-hop chains, treats each hop as its whole
+logical line (a quote or backslash span across hop lines, with an
+internal pipe classified by the command after it), and reconstructs a
 quote-continuation logical line, and a substitution or compound-keyword
 command position carrying an `xargs` word refuses; `command -v`/`-V`
 stops the walk; the
-unlisted wrappers (`exec`/`ionice`/`chrt`/`taskset`), long-option
+unlisted wrappers (`exec`/`ionice`/`chrt`/`taskset`), non-split long-option
 abbreviations, the grouped command positions, the untraced `$`-word on a
 joined line and the
 assignment-wrapped nested form whose upstream is a bare command
@@ -1269,7 +1283,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 944
+EXPECTED_MANIFEST_CASES = 957
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1294,7 +1308,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 511
+EXPECTED_BASE_VERDICT_CASES = 524
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -5664,15 +5678,18 @@ def _pipe_continuation_bound_exceeded(
 ) -> bool:
     """True when the trailing-`|` join would hit its analysis bound for the
     chain that starts at `lines[index]` and yield no join (issue #350f).
-    Mirrors the new join's walk exactly: blank/comment-inclusive distance
-    from the pipe line to the next non-blank, non-comment line, and
+    Mirrors the join's physical-hop stepping exactly: blank/comment-inclusive
+    distance from the pipe line to the next non-blank, non-comment line, and
     EOF-before-bound returns False (a body-final `|` keeps no join and is an
     accept boundary). The whole-body quote state is consulted through the
     same injected-opener tokenization the join uses (fold round 1, F4), so a
     pipe line that starts inside a quote but closes on its line is a chain
-    start for the bound exactly as it is for the join. The join and the
-    body-level exceedance predicate share this decision so they cannot
-    drift."""
+    start for the bound exactly as it is for the join. Fold round 2 makes
+    each hop the whole logical line (quote/backslash spans), which is
+    bounded by the body's own physical lines and can only add refusals, so
+    the shared physical-hop decision is unchanged; the join and the
+    body-level exceedance predicate still cannot drift for the stepping the
+    fold-1 guard was measured on."""
     if index >= len(pending):
         return False
     tokens, _offset = _pipe_line_tokens(lines[index], pending[index][1])
@@ -7794,9 +7811,17 @@ def _consume_wrapper_options(
     option position, or `("query",)` for `command -v`/`-V` (a query does
     not execute the operand). The grammar is bounded by fixtures: every
     form the table keeps ships a reject fixture, and every spelling the
-    table lacks (a long-option abbreviation, an unlisted wrapper) stays a
-    named residual. `env -S`/`--split-string` is the command-in-string
-    spelling: it is refused fail-closed rather than parsed."""
+    table lacks (a non-split long-option abbreviation, an unlisted
+    wrapper) stays a named residual. The fold round 2 census closes the
+    option groups the first fold left un-fixtured (`env -i`/`-v`/`-C`,
+    `nice --adjustment=`, `command -p`, `time -a -o`, `timeout -k`,
+    `timeout --preserve-status`, `stdbuf --input=`, `stdbuf -o`,
+    `setsid -f`) and demotes the rest with a reason (walk note census:
+    `env -0` cannot host a runtime carrier because GNU env rejects it with
+    a command, `env -P` is BSD-only, `time -v` is GNU-time-only, and the
+    remaining spellings share a fixtured branch). `env
+    -S`/`--split-string` is the command-in-string spelling: any spelling
+    refuses unconditionally rather than being parsed (fold round 2, C1)."""
     cursor = position + 1
     if verb == "nohup":
         return (cursor, None)
@@ -8742,8 +8767,10 @@ def _refuse_github_env_run_id_write(
             # Bash continues the pipeline on the next non-blank,
             # non-comment line, so the physical per-line walk cannot see a
             # carried operand; the pipe join reads the pipe line's upstream
-            # text directly and the continuation line's own tokenization,
-            # gated on the whole-body quote state and the pipe-chain bound.
+            # text directly and walks every hop as its whole logical line
+            # (fold round 2, C3: quote/backslash spans across hop lines and
+            # an internal post-quote pipe), gated on the whole-body quote
+            # state and the pipe-chain bound.
             pipe_carrier = _pipe_continuation_carrier(
                 lines, index, continuation_pending, relevant_names, flip_targets
             )

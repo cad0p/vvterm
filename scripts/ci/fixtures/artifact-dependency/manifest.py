@@ -8865,4 +8865,147 @@ CASES = [
         "diagnostics": [
         ]
     },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-ignore-environment",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-ignore-environment.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-ignore-environment.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-debug",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-debug.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-debug.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-env-chdir",
+        "files": [
+            "reject-runid-github-env-write-xargs-env-chdir.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-env-chdir.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-nice-adjustment-equals",
+        "files": [
+            "reject-runid-github-env-write-xargs-nice-adjustment-equals.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-nice-adjustment-equals.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-command-path",
+        "files": [
+            "reject-runid-github-env-write-xargs-command-path.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-command-path.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-time-output",
+        "files": [
+            "reject-runid-github-env-write-xargs-time-output.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-time-output.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-timeout-kill-after",
+        "files": [
+            "reject-runid-github-env-write-xargs-timeout-kill-after.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-timeout-kill-after.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-timeout-preserve-status",
+        "files": [
+            "reject-runid-github-env-write-xargs-timeout-preserve-status.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-timeout-preserve-status.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-stdbuf-input-equals",
+        "files": [
+            "reject-runid-github-env-write-xargs-stdbuf-input-equals.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-stdbuf-input-equals.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-stdbuf-output-separated",
+        "files": [
+            "reject-runid-github-env-write-xargs-stdbuf-output-separated.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-stdbuf-output-separated.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-setsid-fork",
+        "files": [
+            "reject-runid-github-env-write-xargs-setsid-fork.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-setsid-fork.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-fd-input",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-fd-input.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-fd-input.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
 ]

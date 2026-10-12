@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 944
-    private static let expectedBaseVerdictCases = 511
+    private static let expectedManifestCases = 957
+    private static let expectedBaseVerdictCases = 524
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1175,12 +1175,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-runid-github-env-write-xargs-env-split-string-noncommand.yml",
         "reject-overrefusal-runid-github-env-write-xargs-multiline-pipe-bound.yml",
         "reject-runid-github-env-write-xargs-env-unlisted-long-option.yml",
-        // #350f fold round 2 (C1/C2/C3): the unconditional `env -S`
-        // refusal (ANSI-C, attached, `=`-long, abbreviated, clustered and
-        // behind-an-unparsed-option spellings, plus the `$CMD` residual
-        // and the benign over-refusal pin), the dynamic-fd `{fd}`
-        // redirect prefix, and the quote/backslash spanned hop lines with
-        // the internal-pipe hop command.
+        // #350f fold round 2 (C1/C2/C3 + L2-4 census): the
+        // unconditional `env -S` refusal (ANSI-C, attached, `=`-long,
+        // abbreviated, clustered and behind-an-unparsed-option spellings,
+        // plus the `$CMD` residual and the benign over-refusal pin), the
+        // dynamic-fd `{fd}` redirect prefix, the quote/backslash spanned
+        // hop lines and internal-pipe hop command, and the wrapper-option
+        // census fixtures (NEW-5 redirect-hop and NEW-7 fd-input pins
+        // included).
         "reject-runid-github-env-write-xargs-env-split-string-abbreviation.yml",
         "reject-runid-github-env-write-xargs-env-split-string-ansic-embedded.yml",
         "reject-runid-github-env-write-xargs-env-split-string-ansic-hex-attached.yml",
@@ -1203,7 +1205,19 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-xargs-multiline-quote-span-hop-eol.yml",
         "reject-runid-github-env-write-xargs-multiline-quote-span-hop-tee.yml",
         "reject-runid-github-env-write-xargs-multiline-quote-span-hop.yml",
-
+        "reject-runid-github-env-write-xargs-command-path.yml",
+        "reject-runid-github-env-write-xargs-env-chdir.yml",
+        "reject-runid-github-env-write-xargs-env-debug.yml",
+        "reject-runid-github-env-write-xargs-env-ignore-environment.yml",
+        "reject-runid-github-env-write-xargs-nice-adjustment-equals.yml",
+        "reject-runid-github-env-write-xargs-setsid-fork.yml",
+        "reject-runid-github-env-write-xargs-stdbuf-input-equals.yml",
+        "reject-runid-github-env-write-xargs-stdbuf-output-separated.yml",
+        "reject-runid-github-env-write-xargs-time-output.yml",
+        "reject-runid-github-env-write-xargs-timeout-kill-after.yml",
+        "reject-runid-github-env-write-xargs-timeout-preserve-status.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-multiline-redirect-hop.yml",
+        "reject-runid-github-env-write-xargs-redirection-fd-input.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
