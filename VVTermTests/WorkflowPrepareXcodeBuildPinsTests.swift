@@ -80,6 +80,18 @@
 //       `deriveddata-directory` drift, `with:`-child misindent, duplicate
 //       `deriveddata-directory:`, duplicate block-scalar value line.
 //       (issue #418)
+//    A11 (products): the OTA archive keeps its Swift-product materialization
+//       inside the cached DerivedData root — `CONFIGURATION_BUILD_DIR` to
+//       `Build/OTAProducts/Release-iphoneos` and `DWARF_DSYM_FOLDER_PATH`
+//       back to the default products path (the archive stages the
+//       `.xcarchive` dSYMs only from there). Each exact token and each bare
+//       assignment is bound exactly once (build settings are last-wins),
+//       `-derivedDataPath "$RUNNER_TEMP/DerivedData"` is kept, and no
+//       `SYMROOT=`/`BUILD_DIR=` assignment is allowed — asserted
+//       line-anchored, because `CONFIGURATION_BUILD_DIR=` contains
+//       `BUILD_DIR=`. A11 deliberately re-asserts A9's `OBJROOT` token and
+//       kept `-derivedDataPath` line: the #427 relocation is only valid on
+//       top of the #422 one. (issue #427)
 //
 //  The `find | head -1 | while … done || true` guard is a measured deviation
 //  from the plan's verbatim probe block: under the runner's composite bash
@@ -129,6 +141,14 @@
 //  - A9 binds the exact OBJROOT token and the kept `-derivedDataPath` line,
 //    but cannot prove xcodebuild honors OBJROOT at runtime; the E1
 //    same-image OTA sample is that runtime oracle.
+//  - A11 binds the exact product/dSYM tokens and the line-anchored
+//    `SYMROOT=`/`BUILD_DIR=` absence, but cannot prove xcodebuild honors
+//    `CONFIGURATION_BUILD_DIR`/`DWARF_DSYM_FOLDER_PATH` at runtime; the E1
+//    same-image OTA sample plus the sampled artifact's `dSYMs/` and
+//    `PlugIns/*.appex` listing are that runtime oracle. A11's `OBJROOT` /
+//    `-derivedDataPath` assertions deliberately overlap A9: the #427
+//    relocation is only valid on top of the #422 relocation, and A11 states
+//    the full invocation contract in one place.
 //  - The scanner is a text heuristic: an indented or flow-style `runs:` /
 //    `steps:` spelling, a quoted `ota-archive` key, or content at the step
 //    indent that is not a list item throws `PinFailure` rather than scanning
@@ -486,6 +506,107 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         }
     }
 
+    /// A11: the OTA archive keeps its Swift-product materialization inside
+    /// the cached DerivedData root. The archive recreates
+    /// `ArchiveIntermediates/VVTerm/BuildProductsPath` on every invocation
+    /// and re-materializes the `.swiftmodule` copies importers read;
+    /// `builtin-copy` re-stamps every copied destination, so each importer's
+    /// recorded input signature mismatches and 32 `SwiftCompile` tasks re-run
+    /// on a same-image restore (measured, issue #427).
+    /// `CONFIGURATION_BUILD_DIR` moves the per-configuration products dir
+    /// under the cached root so the copies land on restored,
+    /// mtime-preserved files. The archive stages `.xcarchive/dSYMs` only
+    /// from the DEFAULT products path, so `DWARF_DSYM_FOLDER_PATH` is pinned
+    /// back to that default path (with the relocation alone the `.xcarchive`
+    /// dSYMs are 0 B, measured).
+    ///
+    /// The pin binds each exact token once (widening it outside
+    /// `$RUNNER_TEMP/DerivedData` reds), each bare assignment count
+    /// (build settings are last-wins, so a differently-valued duplicate
+    /// reds), the kept `-derivedDataPath`, and the line-anchored absence of
+    /// `SYMROOT=` (measured rc 70) and `BUILD_DIR=` in the step. The absence
+    /// check is line-anchored on purpose: `CONFIGURATION_BUILD_DIR=` contains
+    /// the substring `BUILD_DIR=`, so a substring count would red the
+    /// correct source (closure CR-1).
+    ///
+    /// A11 deliberately re-asserts A9's `OBJROOT` token and kept
+    /// `-derivedDataPath` line: the #427 fix is only valid on top of the
+    /// #422 relocation, and this pin is the one that states the full
+    /// invocation contract.
+    @Test
+    func testOTAArchiveRelocatesProductsAndPinsTheDSYMPath() throws {
+        let steps = try Self.otaSteps()
+        let archive = steps[try Self.stepIndex(containing: "xcodebuild archive", in: steps, label: "OTA archive step")]
+
+        let settings = [
+            #"OBJROOT="$RUNNER_TEMP/DerivedData/Build/OTAIntermediates""#,
+            #"CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/DerivedData/Build/OTAProducts/Release-iphoneos""#,
+            #"DWARF_DSYM_FOLDER_PATH="$RUNNER_TEMP/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/VVTerm/BuildProductsPath/Release-iphoneos""#,
+        ]
+        for setting in settings {
+            let count = archive.text.components(separatedBy: setting).count - 1
+            #expect(
+                count == 1,
+                """
+                the OTA archive step must set `\(setting)` exactly once (found \(count)); \
+                the product materialization must stay inside the cached \
+                `$RUNNER_TEMP/DerivedData` root so a same-image restore reuses \
+                the `.swiftmodule` copies instead of re-copying them \
+                (issue #427)
+                """
+            )
+        }
+
+        // Any second assignment of the same setting — whatever its value —
+        // shadows the pinned one (xcodebuild build settings are last-wins),
+        // so a bare assignment count is what makes a differently-valued
+        // duplicate red.
+        let assignments = ["OBJROOT=", "CONFIGURATION_BUILD_DIR=", "DWARF_DSYM_FOLDER_PATH="]
+        for assignment in assignments {
+            let count = archive.text.components(separatedBy: assignment).count - 1
+            #expect(
+                count == 1,
+                """
+                the OTA archive step must carry exactly one `\(assignment)` \
+                assignment (found \(count)); a second assignment with any value \
+                is last-wins and silently overrides the pinned relocation \
+                (issue #427)
+                """
+            )
+        }
+
+        #expect(
+            archive.text.contains(#"-derivedDataPath "$RUNNER_TEMP/DerivedData""#),
+            """
+            the product relocation must keep `-derivedDataPath "$RUNNER_TEMP/DerivedData"`; \
+            CONFIGURATION_BUILD_DIR is relative to the cached root, not a replacement \
+            for it (issue #427)
+            """
+        )
+
+        // Line-anchored, not substring: `CONFIGURATION_BUILD_DIR=` contains
+        // `BUILD_DIR=` (closure CR-1), so a substring count would red the
+        // correct source. `SYMROOT` was measured rc 70 (the archive
+        // finalization needs the default products path); `BUILD_DIR` is a
+        // viable but wider knob that must not silently replace the pinned
+        // per-configuration setting.
+        let forbidden = ["SYMROOT=", "BUILD_DIR="]
+        for setting in forbidden {
+            let count = Self.trimmedPrefixLineCount(archive, hasPrefix: setting)
+            #expect(
+                count == 0,
+                """
+                the OTA archive step must not assign `\(setting)` (found \(count) \
+                line(s)); SYMROOT was measured rc 70 (the archive finalization \
+                needs the default products path) and BUILD_DIR is the wider \
+                alternative to the pinned per-configuration relocation; checked \
+                line-anchored because `CONFIGURATION_BUILD_DIR=` contains \
+                `BUILD_DIR=` (issue #427)
+                """
+            )
+        }
+    }
+
     // MARK: - Scanner
 
     private struct StepBlock {
@@ -524,6 +645,15 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     /// value line can be duplicate-guarded too (`hasLine` is presence-only).
     private static func exactLineCount(_ block: StepBlock, equalTo exact: String) -> Int {
         block.lines.filter { $0.trimmingCharacters(in: .whitespaces) == exact }.count
+    }
+
+    /// The count of lines whose trimmed text starts with `prefix` — the
+    /// line-anchored negative check for A11. A substring count would be
+    /// wrong: `CONFIGURATION_BUILD_DIR=` contains `BUILD_DIR=` (closure
+    /// CR-1), so the correct source would red if the check were not anchored
+    /// at the start of the trimmed line (issue #427).
+    private static func trimmedPrefixLineCount(_ block: StepBlock, hasPrefix prefix: String) -> Int {
+        block.lines.filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix(prefix) }.count
     }
 
     /// The trimmed value after `key:` on the first line starting with that
