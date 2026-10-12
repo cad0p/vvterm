@@ -629,6 +629,64 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(drained, "the deferred free block must run and release the context")
     }
 
+    /// #376 dead-context branch of `Ghostty.App.readClipboard`: a dead context
+    /// must answer `UNSUPPORTED` directly, never complete the request, and never
+    /// touch the pasteboard. The request is seeded with a `text/plain` mime and
+    /// a readable clipboard so a servable path would complete; the core destroys
+    /// its own state on the non-started result (`apprt/embedded.zig:789-792`),
+    /// which is why the embedder must make no C call here.
+    @Test
+    func readClipboardOnADeadContextReturnsUnsupported() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+
+        let weakView = WeakBox<GhosttyTerminalView>()
+        let weakContext = WeakBox<Ghostty.SurfaceCallbackContext>()
+        var heldSurface: Ghostty.Surface?
+        var userdata: UnsafeMutableRawPointer?
+
+        let payload = "vvterm-#376-dead-read-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the clipboard must be seeded before the dead-read probe")
+
+        autoreleasepool {
+            let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-dead-read")
+            weakView.value = terminal
+            guard let surface = terminal.surface, let cHandle = surface.unsafeCValue else { return }
+            heldSurface = surface
+            weakContext.value = surface.callbackContext
+            userdata = surface.callbackContext.userdata
+        }
+
+        await Self.waitUntilViewDeallocates(weakView)
+        #expect(weakView.value == nil, "the view must deallocate once its last reference drops")
+        #expect(heldSurface != nil, "the held wrapper must keep the surface alive after the view drops")
+
+        let result = "text/plain".withCString { mimePointer in
+            var mimes: [UnsafePointer<CChar>?] = [mimePointer]
+            return mimes.withUnsafeBufferPointer { buffer in
+                Ghostty.App.readClipboard(
+                    userdata,
+                    location: GHOSTTY_CLIPBOARD_STANDARD,
+                    state: nil,
+                    mimes: buffer.baseAddress,
+                    mimesLen: buffer.count,
+                    list: false
+                )
+            }
+        }
+        #expect(
+            result == GHOSTTY_CLIPBOARD_READ_UNSUPPORTED,
+            "a dead context must report UNSUPPORTED, not UNAVAILABLE/STARTED"
+        )
+
+        heldSurface = nil
+        #expect(weakContext.value != nil, "the queued deferred free block must retain the context")
+        let drained = await Self.drainUntilNil(weakContext)
+        #expect(drained, "the deferred free block must run and release the context")
+    }
+
     /// Live-path acceptance for `Ghostty.App.closeSurface` (#312): the close
     /// callback resolves the live view and dispatches `onProcessExit`.
     ///
@@ -1129,15 +1187,20 @@ struct GhosttySurfaceCallbackRoutingTests {
         #endif
     }
 
-    /// #327 policy: only `.paste` requires the user prompt. The callback is
-    /// deliberately not invoked with a synthetic `state`: the core allocates
-    /// that state itself (`embedded.zig:701`) and a test-supplied pointer would
-    /// be a nil deref or a wrong-allocator free.
+    /// #327/#376 policy: only `.paste` requires the user prompt; every other
+    /// request kind (including the kitty and list kinds added by the new core)
+    /// is denied without a prompt. The callback is deliberately not invoked
+    /// with a synthetic `state`: the core allocates that state itself
+    /// (`apprt/embedded.zig:734-770`) and a test-supplied pointer would be a
+    /// nil deref or a wrong-allocator free.
     @Test
     func onlyPasteRequestsRequireUserPrompt() {
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_PASTE))
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ) == false)
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE) == false)
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ) == false)
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE) == false)
+        #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_LIST) == false)
     }
 
     /// #327 copy: the prompt body is neutral, never contains the payload, and
