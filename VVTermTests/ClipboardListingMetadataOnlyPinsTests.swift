@@ -36,9 +36,11 @@
 //  mis-slice it (comments are stripped first, so a comment-embedded decoy is
 //  not code).
 //
-//  Measured counterfactual battery (2026-10-12, iPhone 17 / iOS 26.3.1,
-//  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` mutant trees; the fold round re-ran
-//  all 10 mutants with per-mutant exit codes recorded in the #431 walk):
+//  Measured counterfactual battery (2026-10-12, `VVTERM_PINS_SOURCE_ROOT`
+//  mutant trees; the fold round re-ran all 10 mutants through a standalone
+//  SwiftTesting runner because the xcodebuild harness wedged before `Testing
+//  started`, and the #431 walk records each mutant's verdict and failing
+//  assertion; its rc column is derived from the runner's exit status):
 //    - macOS read in the listing (`data(forType:`)        -> red, A1
 //    - iOS `.string` read in the listing                   -> red, A2
 //    - comment-only token + benign local rename            -> green
