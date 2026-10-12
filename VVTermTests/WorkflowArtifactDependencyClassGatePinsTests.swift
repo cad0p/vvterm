@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 859
-    private static let expectedBaseVerdictCases = 428
+    private static let expectedManifestCases = 897
+    private static let expectedBaseVerdictCases = 466
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -790,8 +790,50 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-xargs-literal-upstream.yml",
         "accept-runid-github-env-write-xargs-padding-short.yml",
         "accept-runid-github-env-write-xargs-padding-long.yml",
-        "accept-runid-github-env-write-xargs-env-wrapper.yml",
-        "accept-runid-github-env-write-xargs-multiline-pipe.yml",
+        // #350f: the wrapper-prefix and pipeline-continuation sub-classes.
+        // The two former accept boundary pins moved to the reject set; the
+        // wrapper table, the fail-closed unparsed branch, the trailing-`|`
+        // join and its boundary/over-refusal pins follow.
+        "reject-runid-github-env-write-xargs-env-wrapper.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe.yml",
+        "reject-runid-github-env-write-xargs-assignment-prefixed.yml",
+        "reject-runid-github-env-write-xargs-env-option-attached.yml",
+        "reject-runid-github-env-write-xargs-env-end-of-options.yml",
+        "reject-runid-github-env-write-xargs-env-split-string.yml",
+        "reject-runid-github-env-write-xargs-nice-adjustment.yml",
+        "reject-runid-github-env-write-xargs-nice-attached.yml",
+        "reject-runid-github-env-write-xargs-command-builtin.yml",
+        "reject-runid-github-env-write-xargs-time-keyword.yml",
+        "reject-runid-github-env-write-xargs-nohup.yml",
+        "reject-runid-github-env-write-xargs-setsid.yml",
+        "reject-runid-github-env-write-xargs-stdbuf-attached.yml",
+        "reject-runid-github-env-write-xargs-timeout.yml",
+        "reject-runid-github-env-write-xargs-nested-wrapper.yml",
+        "reject-runid-github-env-write-xargs-env-unparseable-option.yml",
+        "reject-runid-github-env-write-xargs-option-separated.yml",
+        "reject-runid-github-env-write-xargs-option-equals.yml",
+        "reject-runid-github-env-write-xargs-option-long-space.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-backslash.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-pipe-backslash.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-comment.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-blank-line.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-comment-line.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-amp.yml",
+        "reject-runid-github-env-write-xargs-multiline-chain-n64.yml",
+        "reject-runid-github-env-write-xargs-multiline-chain-n65.yml",
+        "accept-runid-github-env-write-xargs-command-query.yml",
+        "accept-runid-github-env-write-xargs-wrapper-literal-upstream.yml",
+        "accept-runid-github-env-write-xargs-multiline-pipe-literal.yml",
+        "accept-runid-github-env-write-xargs-multiline-pipe-blank-line-literal.yml",
+        "accept-runid-github-env-write-xargs-multiline-double-pipe.yml",
+        "accept-runid-github-env-write-xargs-multiline-redirect-pipe.yml",
+        "accept-runid-github-env-write-xargs-multiline-quoted-pipe.yml",
+        "accept-runid-github-env-write-xargs-multiline-heredoc-payload.yml",
+        "accept-runid-github-env-write-xargs-multiline-unterminated.yml",
+        "accept-runid-github-env-write-xargs-env-unparseable-option.yml",
+        "accept-runid-github-env-write-xargs-untraced-word-joined.yml",
+        "accept-runid-github-env-write-xargs-grouped.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-wrapper-unresolved-upstream.yml",
         // Fold round 1 boundary pins: the item-2 assignment-wrapped nested
         // form, the substitution-nested continuation, and the array
         // slice/offset/literal-newline-subscript spellings.
@@ -1514,6 +1556,11 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "inside a `trap` action",
             "inside a command substitution that",
             "via `.`/`source` of a script",
+            // #350f: the fail-closed unparsed-wrapper refusal (`env -S`,
+            // `env -Z xargs`); the carrier refusal itself reuses the
+            // `with a command string that names the value the download`
+            // fragment above.
+            "an option the extractor cannot parse",
         ]
         for diagnostic in requiredDiagnostics {
             #expect(

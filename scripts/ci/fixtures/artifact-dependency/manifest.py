@@ -5357,6 +5357,137 @@ CASES = [
             "reject-runid-github-env-write-xargs-multiline-chain-n65.yml:91: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job has a backslash continuation chain longer than the physical-line analysis bound (64 lines), so a joined command's write targets cannot be extracted (refusing rather than guessing; split the chain into shorter logical lines)"
         ]
     },
+    {
+        "id": "accept-runid-github-env-write-xargs-command-query",
+        "files": [
+            "accept-runid-github-env-write-xargs-command-query.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-wrapper-literal-upstream",
+        "files": [
+            "accept-runid-github-env-write-xargs-wrapper-literal-upstream.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-pipe-literal",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-pipe-literal.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-pipe-blank-line-literal",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-pipe-blank-line-literal.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-double-pipe",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-double-pipe.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-redirect-pipe",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-redirect-pipe.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-quoted-pipe",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-quoted-pipe.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-heredoc-payload",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-heredoc-payload.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-multiline-unterminated",
+        "files": [
+            "accept-runid-github-env-write-xargs-multiline-unterminated.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-env-unparseable-option",
+        "files": [
+            "accept-runid-github-env-write-xargs-env-unparseable-option.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-untraced-word-joined",
+        "files": [
+            "accept-runid-github-env-write-xargs-untraced-word-joined.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-grouped",
+        "files": [
+            "accept-runid-github-env-write-xargs-grouped.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": []
+    },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-xargs-wrapper-unresolved-upstream",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-xargs-wrapper-unresolved-upstream.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-xargs-wrapper-unresolved-upstream.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven \u2014 a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)"
+        ]
+    },
     # #350 fold round 1: boundary accepts for the newly named residual
     # sub-shapes — the item-2 assignment-wrapped nested form, the
     # substitution-nested continuation, and the array slice/offset/
