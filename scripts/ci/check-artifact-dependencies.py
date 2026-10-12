@@ -1269,7 +1269,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 937
+EXPECTED_MANIFEST_CASES = 944
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1294,7 +1294,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 505
+EXPECTED_BASE_VERDICT_CASES = 511
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -8151,6 +8151,70 @@ def _pipe_continuation_command(
     return "none"
 
 
+def _pipe_hop_span(
+    lines: list[str], start: int, pending: list[tuple[bool, str | None]]
+) -> int:
+    """The last physical-line index of the logical line that starts at
+    `lines[start]` (issue #350f fold round 2, C3). A line that leaves a
+    quote open consumes the following physical lines (their newline is
+    inside the quoted word), and a line whose whole-body flag is set is a
+    backslash continuation that joins the next non-blank physical line
+    (the `\\`+newline pair is removed), exactly as the sibling
+    `_bash_joined_continuation_text` walk joins. The backslash test runs
+    first because the pair is removed inside double quotes too, while
+    inside single quotes the whole-body flag is already False. The span is
+    bounded by the body's physical lines."""
+    cursor = start
+    while cursor + 1 < len(lines):
+        if pending[cursor][0]:
+            nxt = cursor + 1
+            while nxt < len(lines) and not lines[nxt].strip():
+                nxt += 1
+            if nxt >= len(lines):
+                return cursor
+            cursor = nxt
+            continue
+        if pending[cursor + 1][1] is not None:
+            cursor += 1
+            continue
+        return cursor
+    return cursor
+
+
+def _pipe_hop_text(
+    lines: list[str], start: int, last: int, pending: list[tuple[bool, str | None]]
+) -> str:
+    """The tokenizable text of the logical line `lines[start..last]`
+    (issue #350f fold round 2, C3): the physical lines joined with a quote
+    span's newlines kept, a backslash continuation's `\\`+newline pair
+    dropped (and the blanks it skipped), and the start-of-line quote state
+    re-opened in front so a closing quote on the span's last line closes it
+    exactly where bash would. The construction mirrors the sibling
+    `_bash_joined_continuation_text` join's rules for the same inputs, so
+    the pipe walk tokenizes quote-span and backslash-span hops the way the
+    joined-carrier sites do."""
+    parts: list[str] = []
+    cursor = start
+    while True:
+        current = lines[cursor]
+        if cursor >= last:
+            parts.append(current)
+            break
+        if pending[cursor][0]:
+            parts.append(current[:-1])
+            nxt = cursor + 1
+            while nxt < last and not lines[nxt].strip():
+                nxt += 1
+            cursor = nxt
+            continue
+        parts.append(current + "\n")
+        cursor += 1
+    text = "".join(parts)
+    if pending[start][1] is not None:
+        text = pending[start][1] + text
+    return text
+
+
 def _pipe_continuation_carrier(
     lines: list[str],
     index: int,
@@ -8160,25 +8224,79 @@ def _pipe_continuation_carrier(
 ) -> str | None:
     """The upstream text of a trailing-`|` pipeline chain whose downstream
     command is an `xargs` the pipe can feed, or None (issue #350f; fold
-    round 1 F2/F4/F5/F6). Bash continues `cmd |` + newline + `xargs …`
-    (past blank and comment-only lines) and chains further hops (`cmd |` +
-    newline + `cat |` + newline + `xargs …`), so the per-line walk cannot
-    see the carrier. The predicate is token-level, with the whole-body
-    quote state injected so a pipe after a multiline quote closes on its
-    line is visible (while a `|` still inside the quote stays inert); each
-    hop's upstream is the logical line's pre-operator text and every hop's
-    upstream is tested with the sound predicates only
-    (`require_unresolved_word_catch=False`). The downstream command may be
-    the carrier itself, a compound body's carrier (`then`/`do`), or a
-    substitution carrying an xargs word. Only the first segment of the
-    continuation line is the pipeline's command; a later `;`-separated
-    segment is not fed by the pipe."""
+    round 1 F2/F4/F5/F6; fold round 2 C3). Bash continues `cmd |` +
+    newline + `xargs …` (past blank and comment-only lines) and chains
+    further hops (`cmd |` + newline + `cat |` + newline + `xargs …`), so
+    the per-line walk cannot see the carrier. The predicate is token-level,
+    with the whole-body quote state injected so a pipe after a multiline
+    quote closes on its line is visible (while a `|` still inside the quote
+    stays inert). Fold round 2 makes each hop the whole **logical** line:
+    a hop that leaves a quote open (or a backslash continuation) spans the
+    following physical lines, its post-quote `|` is a real operator, and a
+    pipe inside the logical line (`cat - "` newline `" | xargs …`) is
+    classified by the command that follows it. Every hop's upstream is the
+    logical line's pre-operator text and every hop's upstream is tested
+    with the sound predicates only (`require_unresolved_word_catch=False`).
+    The downstream command may be the carrier itself, a compound body's
+    carrier (`then`/`do`), or a substitution carrying an xargs word. Only
+    the first segment of a continuation line is the pipeline's command; a
+    later `;`-separated segment is not fed by the pipe."""
     if index >= len(pending):
         return None
     cursor = index
     upstreams: list[str] = []
+    fed_by_previous_pipe = False
     while True:
-        tokens, offset = _pipe_line_tokens(lines[cursor], pending[cursor][1])
+        hop_last = _pipe_hop_span(lines, cursor, pending)
+        hop_text: str | None = None
+        if hop_last == cursor:
+            tokens, offset = _pipe_line_tokens(lines[cursor], pending[cursor][1])
+        else:
+            hop_text = _pipe_hop_text(lines, cursor, hop_last, pending)
+            tokens = _shell_tokens(hop_text)
+            offset = 0
+
+        def _hop_upstream(operator_index: int) -> str:
+            if hop_text is not None:
+                return hop_text[: tokens[operator_index][2]]
+            return _pipe_line_upstream(
+                lines, cursor, tokens[operator_index][2] - offset, pending
+            )
+
+        if fed_by_previous_pipe:
+            # The previous hop's trailing pipe feeds this logical line's
+            # first command; the operand reaches it directly.
+            segments = _shell_segments(tokens)
+            if segments and _pipe_continuation_command(segments) == "xargs":
+                for upstream in upstreams:
+                    if _carrier_refuses_upstream(
+                        upstream, relevant, flip_targets, False
+                    ):
+                        return upstream
+                return None
+        # A pipe inside the logical line (a quote-span hop that closes on
+        # a `|`, or a backslash-joined `|`) feeds the command after it; the
+        # operand flows through every hop of the chain, so each such pipe
+        # is classified (fold round 2, C3).
+        for operator_index, token in enumerate(tokens):
+            if token[0] != "op" or token[1] != "|":
+                continue
+            if operator_index == len(tokens) - 1:
+                continue
+            post = tokens[operator_index + 1 :]
+            if post and post[0][0] == "op" and post[0][1] == "&":
+                post = post[1:]
+            if not post:
+                continue
+            if _pipe_continuation_command(_shell_segments(post)) != "xargs":
+                continue
+            candidate = _hop_upstream(operator_index)
+            for upstream in [*upstreams, candidate]:
+                if _carrier_refuses_upstream(
+                    upstream, relevant, flip_targets, False
+                ):
+                    return upstream
+            return None
         if not _tokens_end_in_pipe_operator(tokens):
             return None
         if _pipe_continuation_bound_exceeded(lines, cursor, pending):
@@ -8186,12 +8304,8 @@ def _pipe_continuation_carrier(
         operator_index = len(tokens) - 1
         if tokens[operator_index][1] == "&":
             operator_index -= 1
-        upstreams.append(
-            _pipe_line_upstream(
-                lines, cursor, tokens[operator_index][2] - offset, pending
-            )
-        )
-        next_index = cursor + 1
+        upstreams.append(_hop_upstream(operator_index))
+        next_index = hop_last + 1
         while next_index < len(lines):
             stripped = lines[next_index].strip()
             if stripped and not stripped.startswith("#"):
@@ -8199,22 +8313,8 @@ def _pipe_continuation_carrier(
             next_index += 1
         if next_index >= len(lines):
             return None
-        segments = _shell_segments(_shell_tokens(lines[next_index]))
-        if not segments:
-            return None
-        if _pipe_continuation_command(segments) == "xargs":
-            for upstream in upstreams:
-                if _carrier_refuses_upstream(
-                    upstream, relevant, flip_targets, False
-                ):
-                    return upstream
-            return None
-        hop_tokens, _hop_offset = _pipe_line_tokens(
-            lines[next_index], pending[next_index][1]
-        )
-        if not _tokens_end_in_pipe_operator(hop_tokens):
-            return None
         cursor = next_index
+        fed_by_previous_pipe = True
 
 
 def _refuse_github_env_run_id_write(

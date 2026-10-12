@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 937
-    private static let expectedBaseVerdictCases = 505
+    private static let expectedManifestCases = 944
+    private static let expectedBaseVerdictCases = 511
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1175,12 +1175,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-overrefusal-runid-github-env-write-xargs-env-split-string-noncommand.yml",
         "reject-overrefusal-runid-github-env-write-xargs-multiline-pipe-bound.yml",
         "reject-runid-github-env-write-xargs-env-unlisted-long-option.yml",
-        // #350f fold round 2 (C1/C2): the unconditional `env -S`
+        // #350f fold round 2 (C1/C2/C3): the unconditional `env -S`
         // refusal (ANSI-C, attached, `=`-long, abbreviated, clustered and
         // behind-an-unparsed-option spellings, plus the `$CMD` residual
-        // and the benign over-refusal pin) and the dynamic-fd `{fd}`
-        // redirect prefix.
-        "reject-runid-github-env-write-xargs-env-split-string-variable.yml",
+        // and the benign over-refusal pin), the dynamic-fd `{fd}`
+        // redirect prefix, and the quote/backslash spanned hop lines with
+        // the internal-pipe hop command.
         "reject-runid-github-env-write-xargs-env-split-string-abbreviation.yml",
         "reject-runid-github-env-write-xargs-env-split-string-ansic-embedded.yml",
         "reject-runid-github-env-write-xargs-env-split-string-ansic-hex-attached.yml",
@@ -1196,6 +1196,13 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-xargs-redirection-brace-fd-env.yml",
         "reject-runid-github-env-write-xargs-redirection-brace-fd-read-write.yml",
         "reject-runid-github-env-write-xargs-redirection-brace-fd.yml",
+        "accept-runid-github-env-write-xargs-multiline-quote-span-hop-literal.yml",
+        "reject-runid-github-env-write-xargs-multiline-internal-pipe-hop.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-span-hop-backslash.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-span-hop-env.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-span-hop-eol.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-span-hop-tee.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-span-hop.yml",
 
     ]
 
