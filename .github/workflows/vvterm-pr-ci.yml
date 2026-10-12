@@ -94,11 +94,12 @@
 #     The download takes ~20s per job; caching it across jobs is not practical
 #     because it installs into the Xcode toolchain directory (part of the
 #     runner image, not a user-cacheable path). The cache key prefixes
-#     (`xcode27-` / `xcode27-spm-`) namespace the entries by toolchain
-#     generation, so a toolchain bump misses them.
+#     (`xcode27-` / `xcode27-spm-`) are static literals naming the toolchain
+#     generation; a toolchain bump misses them only when the prefix is
+#     renamed here.
 #   - The composite wires `sourcepackages-directory`, so the `xcode27-spm-`
-#     entry (keyed by the shared `Package.resolved` hash) carries the SPM
-#     checkouts while the DerivedData entry carries the build products; a
+#     entry (keyed by the shared `Package.resolved` hash, per ref) carries the
+#     SPM checkouts while the DerivedData entry carries the build products; a
 #     wired restore logs `swiftpm-restored = true` (issue #418).
 #   - After restoring the SPM/DerivedData caches, a step removes the stale
 #     ModuleCache.noindex (PCM) directory. When the runner image updates, SDK
