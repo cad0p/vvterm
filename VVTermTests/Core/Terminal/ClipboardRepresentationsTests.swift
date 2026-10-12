@@ -158,6 +158,25 @@ struct ClipboardRepresentationsTests {
         )
     }
 
+    @Test
+    func opinionatedItemClassificationDefersTheStringReadForFileURLs() {
+        var reads = 0
+        _ = ClipboardOpinionatedItem.classify(
+            decodedURL: URL(fileURLWithPath: "/tmp/a b"),
+            plainString: {
+                reads += 1
+                return "plain"
+            }()
+        )
+        #expect(reads == 0, "a decoded file URL must short-circuit before the plain-string read (upstream's if/else)")
+
+        _ = ClipboardOpinionatedItem.classify(decodedURL: nil, plainString: {
+            reads += 1
+            return "plain"
+        }())
+        #expect(reads == 1, "a non-file item must fall through and read the plain string exactly once")
+    }
+
     // MARK: - ClipboardURIList
 
     @Test
@@ -199,13 +218,23 @@ struct ClipboardRepresentationsTests {
 
     #if os(iOS)
     /// #431 iOS provider: `text/plain` serves the general pasteboard's string
-    /// as UTF-8 bytes; every other requested MIME is unservable. A file-URL
-    /// copy has no `.string` payload on iOS, so the opinionated file-path
-    /// representation stays macOS-only.
+    /// as UTF-8 bytes; every other requested MIME is unservable. The seeding
+    /// puts a PNG and a file URL on the pasteboard first, so the `nil`
+    /// assertions falsify the mime policy rather than merely an absent
+    /// payload. A file-URL copy has no `.string` payload on iOS, so the
+    /// opinionated file-path representation stays macOS-only.
     @Test
     func iosProviderServesOnlyTextPlain() {
         let payload = "vvterm-#431-ios-\(UUID().uuidString)"
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let fileURL = URL(fileURLWithPath: "/tmp/vvterm-431-ios.txt")
+        let pasteboard = UIPasteboard.general
         Clipboard.copy(payload)
+        pasteboard.addItems([[
+            UTType.png.identifier: png,
+            UTType.fileURL.identifier: Data(fileURL.absoluteString.utf8),
+        ]])
+        #expect(pasteboard.string == payload, "positive control: the seeded text item still reads back")
         #expect(Clipboard.data(forMime: "text/plain") == Data(payload.utf8))
         #expect(Clipboard.data(forMime: "text/uri-list") == nil)
         #expect(Clipboard.data(forMime: "image/png") == nil)

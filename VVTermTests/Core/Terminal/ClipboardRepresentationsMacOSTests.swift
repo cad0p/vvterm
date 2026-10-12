@@ -3,8 +3,9 @@
 //  ClipboardRepresentationsMacOSTests.swift
 //  VVTermTests
 //
-//  #431 executed oracle for the macOS `Clipboard.data(forMime:)` provider
-//  (the `#if os(macOS)` half of `VVTerm/Core/Terminal/Clipboard.swift`).
+//  #431 macOS-destination oracle suite for the macOS
+//  `Clipboard.data(forMime:)` provider (the `#if os(macOS)` half of
+//  `VVTerm/Core/Terminal/Clipboard.swift`).
 //  The neutral seam is Simulator-executed by
 //  `ClipboardRepresentationsTests.swift`; this suite drives the real
 //  provider against `NSPasteboard.general` for the three upstream arms:
@@ -14,9 +15,14 @@
 //    - a text copy -> the string;
 //    - a UTType-mapped MIME -> the pasteboard type's data.
 //
-//  Runs at `-destination 'platform=macOS,arch=arm64'`. The suite mutates the
-//  general pasteboard, so it is serialized (it does not run in the iOS
-//  Simulator unit job; the macOS run targets this suite explicitly).
+//  Targets `-destination 'platform=macOS,arch=arm64'`
+//  (`-only-testing:VVTermTests/ClipboardRepresentationsMacOSTests`), but the
+//  run is runtime-unverified on this tree: the exclusion round compiles the
+//  target, while the host-app/XCTest bootstrap fails (see the #431
+//  verification walk §2 for the exact commands, rcs and errors). Do not read
+//  this file as executed evidence. The suite mutates the general pasteboard,
+//  so it is serialized (it does not run in the iOS Simulator unit job; the
+//  macOS run targets this suite explicitly).
 //
 
 #if os(macOS)
