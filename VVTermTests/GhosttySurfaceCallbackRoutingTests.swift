@@ -547,6 +547,26 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(Clipboard.readString() == payload, "the clipboard seed must read back before the paste")
         #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
 
+        // #431: these asserts call the provider and the selector directly,
+        // so they show that the seeded text paste is served as UTF-8
+        // text/plain, deduped, with the unservable URI list skipped. The
+        // end-to-end callback wiring lock is pin B1/B2 in
+        // `ClipboardListingMetadataOnlyPinsTests`; this test remains the
+        // seeded-text-paste regression guard.
+        #expect(
+            Clipboard.data(forMime: "text/plain") == Data(payload.utf8),
+            "the #431 read provider must serve the seeded payload as UTF-8 text/plain"
+        )
+        let selected = ClipboardMimeSelection.select(
+            requested: ["text/plain", "text/uri-list", "text/plain"]
+        ) { mime in
+            Clipboard.data(forMime: mime)
+        }
+        #expect(
+            selected == [ClipboardRepresentation(mime: "text/plain", data: Data(payload.utf8))],
+            "the live provider must dedupe text/plain and skip the unservable text/uri-list"
+        )
+
         let handled = surface.perform(action: "paste_from_clipboard")
         #expect(handled, "the live paste binding must report true")
 

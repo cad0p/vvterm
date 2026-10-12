@@ -1288,11 +1288,11 @@ extension Ghostty {
         ///   - nothing servable and `!list` → `UNAVAILABLE`
         ///   - otherwise complete synchronously and return `STARTED`
         ///
-        /// Only `text/plain` is served today: the app's `Clipboard.readString()`
-        /// can produce that representation, and every other requested mime is
-        /// skipped exactly like upstream skips unservable representations. The
-        /// non-text representations (`text/uri-list`, arbitrary UTType payloads)
-        /// remain a tracked follow-up (issue #431).
+        /// Every requested mime is served from `Clipboard.data(forMime:)` and
+        /// deduped by `ClipboardMimeSelection.select`, matching upstream's
+        /// loop: the macOS provider ports upstream's `text/plain`,
+        /// `text/uri-list` and UTType-mapped cases, and the iOS provider
+        /// serves `text/plain` only. Unservable representations are skipped.
         ///
         /// Thread contract: the core's termio stream handler sends
         /// `.clipboard_read` to the surface MAILBOX from the I/O thread
@@ -1321,17 +1321,15 @@ extension Ghostty {
                 return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
             }
 
-            var contents: [(mime: String, data: Data)] = []
-            var seen = Set<String>()
-            if let mimes {
-                for index in 0..<mimesLen {
-                    guard let ptr = mimes[index] else { continue }
-                    let mime = String(cString: ptr)
-                    guard seen.insert(mime).inserted else { continue }
-                    guard mime == "text/plain" else { continue }
-                    guard let clipboardString = Clipboard.readString() else { continue }
-                    contents.append((mime: mime, data: Data(clipboardString.utf8)))
-                }
+            // The core asks for specific representations; serve every one the
+            // clipboard can produce, deduped, in the requested order. The
+            // listing below stays metadata-only by contract.
+            let requested: [String] = (0..<mimesLen).compactMap { index in
+                guard let mimes, let pointer = mimes[index] else { return nil }
+                return String(cString: pointer)
+            }
+            let contents = ClipboardMimeSelection.select(requested: requested) { mime in
+                Clipboard.data(forMime: mime)
             }
 
             // The listing is metadata-only by contract: `Clipboard.availableMimeTypes()`
@@ -1422,7 +1420,7 @@ extension Ghostty {
                 return
             }
             let c = confirm.pointee
-            var payloads: [(mime: String, data: Data)] = []
+            var payloads: [ClipboardRepresentation] = []
             if let contents = c.contents {
                 for index in 0..<c.contents_len {
                     let content = contents[index]
@@ -1431,7 +1429,7 @@ extension Ghostty {
                     } else {
                         Data()
                     }
-                    payloads.append((mime: String(cString: content.mime), data: data))
+                    payloads.append(ClipboardRepresentation(mime: String(cString: content.mime), data: data))
                 }
             }
             var available: [String] = []
@@ -1442,8 +1440,9 @@ extension Ghostty {
                 }
             }
 
-            // The prompt shows the text representation when there is one; the
-            // completion still carries the exact copied payloads.
+            // The presenters render only `promptTitle` + `promptBody` (the
+            // line count); this decoded text exists to compute that count, and
+            // the completion still carries the exact copied payloads.
             let displayPayload = payloads.first(where: { $0.mime == "text/plain" })
                 .flatMap { String(data: $0.data, encoding: .utf8) } ?? ""
 
@@ -1509,7 +1508,7 @@ extension Ghostty {
         /// nil-state guard, then claim, then telemetry, then the C call.
         private static func complete(
             surface: ghostty_surface_t,
-            contents: [(mime: String, data: Data)],
+            contents: [ClipboardRepresentation],
             available: [String],
             state: UnsafeMutableRawPointer?,
             kind: ghostty_clipboard_request_e,
@@ -1596,7 +1595,7 @@ extension Ghostty {
         /// the call only; the caller owns the claim and telemetry discipline.
         private static func completeRequest(
             surface: ghostty_surface_t,
-            contents: [(mime: String, data: Data)],
+            contents: [ClipboardRepresentation],
             available: [String],
             state: UnsafeMutableRawPointer?,
             confirmed: Bool
