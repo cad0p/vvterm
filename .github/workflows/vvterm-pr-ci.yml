@@ -191,6 +191,15 @@ jobs:
           python3 scripts/ci/check-artifact-dependencies.py --selftest
           python3 scripts/ci/check-artifact-dependencies.py
 
+      # Ghostty probe bump gate (issue #435): the probe's bump-PR decision is
+      # made by scripts/ci/ghostty-probe-bump-gate.sh — the old in-expression
+      # gate could not skip a validation dispatch because GitHub casts a real
+      # JSON boolean `false` equal to the empty string (`false == ''`). Its
+      # selftest pins the whole dispatch matrix here in the required build
+      # job; ~0.1 s and no new job or macOS slot.
+      - name: Check ghostty probe bump gate
+        run: bash scripts/ci/ghostty-probe-bump-gate.sh --selftest
+
       # Ghostty config acceptance check (issue #247): the generated config
       # fixtures must load through the vendored libghostty with zero
       # diagnostics. The fixture pin test keeps both files byte-identical to
