@@ -109,18 +109,26 @@ struct GhosttyPatchQueuePinsTests {
         "src/termio/message.zig",
     ]
 
-    /// Every `diff --git a/<path> b/<path>` path in the patch, in order.
-    /// A header this parser cannot read (a quoted path, say) is skipped, but it
-    /// cannot pass silently: the caller compares the parsed list against the
-    /// exact pinned list, so a skipped header makes the counts differ and reds.
-    private static func patchPaths(in text: String) -> [String] {
+    /// Every `diff --git a/<path> b/<path>` path in the patch, in order, plus
+    /// any `diff --git` header this parser could not read (a quoted path, say).
+    /// The caller asserts the unreadable list is empty: a header this parser
+    /// skips must fail closed, and comparing only the parsed list is not enough
+    /// — an *added* unreadable header leaves the parsed list at the pinned 19
+    /// and would pass silently (measured: appending
+    /// `diff --git "a/foo bar.txt" "b/foo bar.txt"` to the patch kept the pin
+    /// green before this check existed).
+    private static func patchPaths(in text: String) -> (paths: [String], unreadable: [String]) {
         var paths: [String] = []
-        for line in text.components(separatedBy: "\n") where line.hasPrefix("diff --git a/") {
-            let rest = line.dropFirst("diff --git a/".count)
-            guard let separator = rest.range(of: " b/") else { continue }
+        var unreadable: [String] = []
+        for line in text.components(separatedBy: "\n") where line.hasPrefix("diff --git ") {
+            let rest = line.dropFirst("diff --git ".count)
+            guard rest.hasPrefix("a/"), let separator = rest.range(of: " b/") else {
+                unreadable.append(line)
+                continue
+            }
             paths.append(String(rest[..<separator.lowerBound]))
         }
-        return paths
+        return (paths, unreadable)
     }
 
     // MARK: - Pins
@@ -150,10 +158,14 @@ struct GhosttyPatchQueuePinsTests {
     /// file whose whole value is reviewability.
     @Test
     func testPatchDiffSetMatchesTheDocumentedFileList() throws {
-        let paths = Self.patchPaths(in: try patchText())
+        let parsed = Self.patchPaths(in: try patchText())
         #expect(
-            paths == Self.expectedPatchPaths,
-            "patch paths changed; update the pin and the README's 19-path regeneration list together. found: \(paths)"
+            parsed.unreadable.isEmpty,
+            "every `diff --git` header must be readable by this pin; unreadable: \(parsed.unreadable)"
+        )
+        #expect(
+            parsed.paths == Self.expectedPatchPaths,
+            "patch paths changed; update the pin and the README's 19-path regeneration list together. found: \(parsed.paths)"
         )
     }
 
