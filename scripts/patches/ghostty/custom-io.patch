@@ -1,5 +1,5 @@
 diff --git a/HACKING.md b/HACKING.md
-index ed9c84591..042687be6 100644
+index ed9c845..042687b 100644
 --- a/HACKING.md
 +++ b/HACKING.md
 @@ -50,7 +50,7 @@ dependencies:
@@ -12,7 +12,7 @@ index ed9c84591..042687be6 100644
  A common issue is that the incorrect version of Xcode is either
  installed or selected. Use the `xcode-select` command to
 diff --git a/include/ghostty.h b/include/ghostty.h
-index df9472d21..f7efe4d6f 100644
+index eec6550..7e1a387 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
 @@ -72,6 +72,11 @@ typedef enum {
@@ -27,7 +27,7 @@ index df9472d21..f7efe4d6f 100644
  typedef enum {
    GHOSTTY_CLIPBOARD_STANDARD,
    GHOSTTY_CLIPBOARD_SELECTION,
-@@ -481,6 +486,7 @@ typedef struct {
+@@ -518,6 +523,7 @@ typedef struct {
    const char* initial_input;
    bool wait_after_command;
    ghostty_surface_context_e context;
@@ -35,7 +35,7 @@ index df9472d21..f7efe4d6f 100644
  } ghostty_surface_config_s;
  
  typedef struct {
-@@ -1135,6 +1141,10 @@ GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
+@@ -1186,6 +1192,10 @@ GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
  GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
  GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
  GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
@@ -47,7 +47,7 @@ index df9472d21..f7efe4d6f 100644
  GHOSTTY_API void ghostty_surface_set_focus(ghostty_surface_t, bool);
  GHOSTTY_API void ghostty_surface_set_occlusion(ghostty_surface_t, bool);
 diff --git a/macos/build.nu b/macos/build.nu
-index 98d0b40d2..8c456d9b6 100755
+index 98d0b40..8c456d9 100755
 --- a/macos/build.nu
 +++ b/macos/build.nu
 @@ -4,7 +4,7 @@
@@ -60,10 +60,10 @@ index 98d0b40d2..8c456d9b6 100755
      --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
  ] {
 diff --git a/nix/devShell.nix b/nix/devShell.nix
-index 609a8a31f..7f8fd6381 100644
+index bbe7910..1afd881 100644
 --- a/nix/devShell.nix
 +++ b/nix/devShell.nix
-@@ -222,7 +222,8 @@ in
+@@ -234,7 +234,8 @@ in
        '')
        + (lib.optionalString stdenv.hostPlatform.isDarwin ''
          # On macOS, we unset the macOS SDK env vars that Nix sets up because
@@ -73,8 +73,23 @@ index 609a8a31f..7f8fd6381 100644
          unset SDKROOT
          unset DEVELOPER_DIR
  
+diff --git a/pkg/macos/build.zig b/pkg/macos/build.zig
+index f6b6f2e..9b83e08 100644
+--- a/pkg/macos/build.zig
++++ b/pkg/macos/build.zig
+@@ -74,6 +74,10 @@ pub fn build(b: *std.Build) !void {
+         ) } },
+         .target = target,
+         .optimize = optimize,
++        // Blocks (^) are used by the Apple framework headers and Aro does
++        // not enable them for every Darwin target (the iOS slices VVTerm
++        // restores hit this), so pass the flag explicitly.
++        .extra_args = &.{"-fblocks"},
+     });
+ 
+     const lib = b.addLibrary(.{
 diff --git a/pkg/macos/iosurface/iosurface.zig b/pkg/macos/iosurface/iosurface.zig
-index 37f8712ba..6a546f1d8 100644
+index 37f8712..6a546f1 100644
 --- a/pkg/macos/iosurface/iosurface.zig
 +++ b/pkg/macos/iosurface/iosurface.zig
 @@ -20,6 +20,10 @@ pub const IOSurface = opaque {
@@ -126,10 +141,10 @@ index 37f8712ba..6a546f1d8 100644
              0,
              null,
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 3002e9f58..408abe31a 100644
+index b5b0ee4..344aa56 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -634,51 +634,64 @@ pub fn init(
+@@ -640,51 +640,64 @@ pub fn init(
          break :command config.command;
      };
  
@@ -226,7 +241,7 @@ index 3002e9f58..408abe31a 100644
              .mailbox = io_mailbox,
              .renderer_state = &self.renderer_state,
              .renderer_wakeup = render_thread.wakeup,
-@@ -1333,6 +1346,7 @@ fn childExitedAbnormally(
+@@ -1353,6 +1366,7 @@ fn childExitedAbnormally(
      // Build up our command for the error message
      const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
          .exec => |*exec| exec.subprocess.args,
@@ -235,7 +250,7 @@ index 3002e9f58..408abe31a 100644
      const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
  
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
-index a380dc50c..9ba640d2b 100644
+index b90366a..8c95697 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
 @@ -22,6 +22,7 @@ const CoreSurface = @import("../Surface.zig");
@@ -246,7 +261,7 @@ index a380dc50c..9ba640d2b 100644
  
  const log = std.log.scoped(.embedded_window);
  
-@@ -430,6 +431,7 @@ pub const Surface = struct {
+@@ -448,6 +449,7 @@ pub const Surface = struct {
      app: *App,
      platform: Platform,
      userdata: ?*anyopaque = null,
@@ -254,7 +269,7 @@ index a380dc50c..9ba640d2b 100644
      core_surface: CoreSurface,
      content_scale: apprt.ContentScale,
      size: apprt.SurfaceSize,
-@@ -481,6 +483,9 @@ pub const Surface = struct {
+@@ -499,6 +501,9 @@ pub const Surface = struct {
  
          /// Context for the new surface
          context: apprt.surface.NewSurfaceContext = .window,
@@ -264,7 +279,7 @@ index a380dc50c..9ba640d2b 100644
      };
  
      pub fn init(self: *Surface, app: *App, opts: Options) !void {
-@@ -488,6 +493,7 @@ pub const Surface = struct {
+@@ -506,6 +511,7 @@ pub const Surface = struct {
              .app = app,
              .platform = try .init(opts.platform_tag, opts.platform),
              .userdata = opts.userdata,
@@ -272,7 +287,7 @@ index a380dc50c..9ba640d2b 100644
              .core_surface = undefined,
              .content_scale = .{
                  .x = @floatCast(opts.scale_factor),
-@@ -2241,5 +2247,44 @@ pub const CAPI = struct {
+@@ -2521,5 +2527,44 @@ pub const CAPI = struct {
                  ptr.backend = null;
              }
          }
@@ -318,10 +333,10 @@ index a380dc50c..9ba640d2b 100644
      };
  };
 diff --git a/src/build/Config.zig b/src/build/Config.zig
-index 07e047ef5..d5ddf8ea5 100644
+index 71fa4d2..dbc2070 100644
 --- a/src/build/Config.zig
 +++ b/src/build/Config.zig
-@@ -106,17 +106,6 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
+@@ -129,17 +129,6 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
              result = b.resolveTargetQuery(query);
          }
  
@@ -339,7 +354,7 @@ index 07e047ef5..d5ddf8ea5 100644
          // If we have no minimum OS version, we set the default based on
          // our tag. Not all tags have a minimum so this may be null.
          if (result.query.os_version_min == null) {
-@@ -742,6 +731,13 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+@@ -796,6 +785,13 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
              .patch = 0,
          } },
  
@@ -353,7 +368,7 @@ index 07e047ef5..d5ddf8ea5 100644
          // This should never happen currently. If we add a new target then
          // we should add a new case here.
          else => null,
-@@ -752,8 +748,7 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+@@ -806,8 +802,7 @@ pub fn osVersionMin(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
  ///
  /// This should only be used for Darwin targets.
  pub fn osVersionMinLibVt(tag: std.Target.Os.Tag) ?std.Target.Query.OsVersion {
@@ -364,7 +379,7 @@ index 07e047ef5..d5ddf8ea5 100644
      return osVersionMin(tag);
  }
 diff --git a/src/build/GhosttyXCFramework.zig b/src/build/GhosttyXCFramework.zig
-index 3f3b97eb2..a19dd18af 100644
+index 3f3b97e..a19dd18 100644
 --- a/src/build/GhosttyXCFramework.zig
 +++ b/src/build/GhosttyXCFramework.zig
 @@ -24,6 +24,35 @@ pub fn init(
@@ -421,7 +436,7 @@ index 3f3b97eb2..a19dd18af 100644
  
              .native => &.{.{
 diff --git a/src/build/MetallibStep.zig b/src/build/MetallibStep.zig
-index 81c7a4a9f..fcf3055f8 100644
+index 81c7a4a..fcf3055 100644
 --- a/src/build/MetallibStep.zig
 +++ b/src/build/MetallibStep.zig
 @@ -24,10 +24,20 @@ output: LazyPath,
@@ -454,7 +469,7 @@ index 81c7a4a9f..fcf3055f8 100644
      };
  
 diff --git a/src/font/shaper/coretext.zig b/src/font/shaper/coretext.zig
-index 5172744d8..ec7a2791c 100644
+index 6960c32..777432f 100644
 --- a/src/font/shaper/coretext.zig
 +++ b/src/font/shaper/coretext.zig
 @@ -76,8 +76,8 @@ pub const Shaper = struct {
@@ -565,10 +580,10 @@ index 5172744d8..ec7a2791c 100644
  
          for (items) |ref| macos.foundation.CFRelease(ref);
 diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
-index 9247454db..093b218ef 100644
+index a98dce8..318b4b8 100644
 --- a/src/renderer/Metal.zig
 +++ b/src/renderer/Metal.zig
-@@ -167,6 +167,14 @@ pub fn loopEnter(self: *Metal) void {
+@@ -151,6 +151,14 @@ pub fn loopEnter(self: *Metal) void {
          @ptrCast(&displayCallback),
          @ptrCast(renderer),
      );
@@ -583,7 +598,7 @@ index 9247454db..093b218ef 100644
  }
  
  fn displayCallback(renderer: *Renderer) align(8) void {
-@@ -251,6 +259,13 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+@@ -235,6 +243,13 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
  
  /// Present the provided target.
  pub inline fn present(self: *Metal, target: Target, sync: bool) !void {
@@ -598,7 +613,7 @@ index 9247454db..093b218ef 100644
          self.layer.setSurfaceSync(target.surface);
      } else {
 diff --git a/src/renderer/metal/IOSurfaceLayer.zig b/src/renderer/metal/IOSurfaceLayer.zig
-index cd97126a4..0d0c2b9e5 100644
+index cd97126..0d0c2b9 100644
 --- a/src/renderer/metal/IOSurfaceLayer.zig
 +++ b/src/renderer/metal/IOSurfaceLayer.zig
 @@ -3,14 +3,13 @@
@@ -679,7 +694,7 @@ index cd97126a4..0d0c2b9e5 100644
  
      if (!subclass.addIvar("display_cb")) return error.ObjCFailed;
 diff --git a/src/termio.zig b/src/termio.zig
-index b16885109..7950fb111 100644
+index b168851..7950fb1 100644
 --- a/src/termio.zig
 +++ b/src/termio.zig
 @@ -22,6 +22,7 @@ const stream_handler = @import("termio/stream_handler.zig");
@@ -692,7 +707,7 @@ index b16885109..7950fb111 100644
  pub const Termio = @import("termio/Termio.zig");
 diff --git a/src/termio/Callback.zig b/src/termio/Callback.zig
 new file mode 100644
-index 000000000..446d7660a
+index 0000000..446d766
 --- /dev/null
 +++ b/src/termio/Callback.zig
 @@ -0,0 +1,177 @@
@@ -874,10 +889,10 @@ index 000000000..446d7660a
 +    userdata: ?*anyopaque = null,
 +};
 diff --git a/src/termio/Thread.zig b/src/termio/Thread.zig
-index 6b860a0d1..9d0cbe246 100644
+index de26835..2bd3f37 100644
 --- a/src/termio/Thread.zig
 +++ b/src/termio/Thread.zig
-@@ -357,6 +357,16 @@ fn drainMailbox(
+@@ -365,6 +365,16 @@ fn drainMailbox(
                      self.flags.linefeed_mode,
                  );
              },
@@ -895,7 +910,7 @@ index 6b860a0d1..9d0cbe246 100644
      }
  
 diff --git a/src/termio/backend.zig b/src/termio/backend.zig
-index c29009acb..234a3d054 100644
+index c29009a..234a3d0 100644
 --- a/src/termio/backend.zig
 +++ b/src/termio/backend.zig
 @@ -11,28 +11,34 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
@@ -1009,20 +1024,20 @@ index c29009acb..234a3d054 100644
      }
  
 diff --git a/src/termio/message.zig b/src/termio/message.zig
-index e51865e39..03bf2265a 100644
+index 2416874..19fb9b3 100644
 --- a/src/termio/message.zig
 +++ b/src/termio/message.zig
-@@ -91,6 +91,9 @@ pub const Message = union(enum) {
+@@ -97,6 +97,9 @@ pub const Message = union(enum) {
      /// Write where the data is allocated and must be freed.
      write_alloc: WriteReq.Alloc,
  
 +    /// Set the write callback for the callback backend.
 +    set_write_callback: SetWriteCallback,
 +
-     /// Return a write request for the given data. This will use
-     /// write_small if it fits or write_alloc otherwise. This should NOT
-     /// be used for stable pointers which can be manually set to write_stable.
-@@ -117,6 +120,12 @@ pub const Message = union(enum) {
+     /// The payload of the kitty_clipboard_grant_* messages. The
+     /// password is allocated and must be freed.
+     pub const KittyClipboardGrant = struct {
+@@ -133,6 +136,12 @@ pub const Message = union(enum) {
  
      /// The types of size reports that we support.
      pub const SizeReport = terminal.size_report.Style;

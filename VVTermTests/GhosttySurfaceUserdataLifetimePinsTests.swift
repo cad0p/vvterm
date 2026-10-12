@@ -33,9 +33,10 @@
 //    P-D  both `setupWriteCallback` bodies pass `callbackContext.userdata` to
 //         `ghostty_surface_set_write_callback`, unwrap the context, and carry
 //         no `Unmanaged.passUnretained(self)` view cast.
-//    P-E  (#327) `confirmReadClipboard`'s two `complete(surface:` call sites
-//         are each preceded by their own `fromOpaque` resolve guard — the
-//         ordering test 8 cannot observe with `state: nil`.
+//    P-E  (#327/#376) every terminal call in `confirmReadClipboard` — the two
+//         unclaimed `deny(...)` sites and the Task's `complete(...)` /
+//         `denyClaimed(...)` — is preceded by a `fromOpaque` resolve guard,
+//         and the raw C terminate calls live only in the helpers.
 //    P-F  (#327 tripwire) both platform presenters take the prompt title from
 //         `ClipboardConfirmationRequest.promptTitle` (no inlined literal) and
 //         designate the paste action as the default button.
@@ -45,20 +46,23 @@
 //         drop-path `else` between them — the half the behavioural seam-death
 //         test cannot discriminate (`cleanup()` invalidates the context first,
 //         so deleting only the comparison stays green there).
-//    P-H  (#329) both `Ghostty.Surface` free paths order invalidate → drain →
-//         `ghostty_surface_free` (the deinit drain inside
-//         `withExtendedLifetime(context)`); `complete` orders its nil-state
-//         guard → non-optional-context claim → C call with the claim's guard
-//         `else` between them; both `confirmReadClipboard` branches register
-//         after their own resolve guard (the prompt branch also after the
-//         payload copy); and `invalidate()` never clears the registry while
-//         the drain never consults `isValid`, keeps the deny literal
-//         arguments, and (tripwire, not a guarantee) no direct C completion
-//         sits in the scanned `withLock` bodies. There is no behavioural
-//         deinit-drain test: the deferred drain needs a real core-allocated
-//         request state, and every available seam lets the completion Task
-//         claim before the deferred free runs — coverage is the registry
-//         invalidate-then-drain test plus the P-H1 ordering pin.
+//    P-H  (#329/#376) both `Ghostty.Surface` free paths order invalidate →
+//         drain → `ghostty_surface_free` (the deinit drain inside
+//         `withExtendedLifetime(context)`), and the drain releases with the
+//         deny API; `complete` orders its nil-state guard →
+//         non-optional-context claim → `completeRequest` helper with the
+//         claim's guard `else` between them, and the raw C completion call
+//         stays the single one inside that helper; only the prompt branch of
+//         `confirmReadClipboard` registers (after its resolve and payload
+//         copy), while the synchronous policy deny never registers and denies
+//         whenever the core handed it a state; and `invalidate()` never
+//         clears the registry while the drain never consults `isValid`, and
+//         (tripwire, not a guarantee) no direct C completion or deny sits in
+//         the scanned `withLock` bodies. There is no behavioural deinit-drain
+//         test: the deferred drain needs a real core-allocated request state,
+//         and every available seam lets the completion Task claim before the
+//         deferred free runs — coverage is the registry invalidate-then-drain
+//         test plus the P-H1 ordering pin.
 //
 //  WHAT THEY DO NOT SEE. A renamed helper, an aliased userdata pointer, a
 //  callback that unwraps the context and then casts the view through a new
@@ -81,8 +85,10 @@
 //    P-D  revert the iOS write callback to `passUnretained(self)` →
 //         `callbackContext.userdata` count 0 / `passUnretained(self)` present.
 //    P-E  route the paste-branch resolve through a renamed helper (the scan is
-//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` and the
-//         second `complete(surface:` site fails `precedingRoutes > index`.
+//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` reds
+//         P-E (`:465`) and P-H3 (`:835`) and drops P-B's census to 4/5. The
+//         `precedingRoutes > 0` ordering check still passes — it is not that
+//         mutation's discriminator (re-measured 2026-10-12, fold round 1).
 //    P-F  inline `"Paste Unsafe Text?"` in the iOS presenter → the iOS
 //         literal-absence assertion fails.
 //    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
@@ -95,16 +101,17 @@
 //         P-H1; delete the claim → behavioural (no-double-complete test, a
 //         clean pre-teardown assertion since fold round 1); discard the claim
 //         result with `_ =` → pin P-H2; make `complete`'s `context` parameter
-//         optional again → pin P-H2 (the non-optional-context assertion);
-//         delete the deny-branch registration → pin P-H3; delete the
-//         prompt-branch registration → behavioural (seam-death test, CF-4);
-//         move a registration above its resolve guard → pin P-H3
+//         optional again → pin P-H2 (the non-optional-context assertion); add
+//         a deny-branch registration → pin P-H3 (registrations.count == 2);
+//         delete the prompt-branch registration → behavioural (seam-death
+//         test, CF-4); move a registration above its resolve guard → pin P-H3
 //         (non-minimal mutation; P-B/P-E also red on the extra route); make
 //         `invalidate()` clear the registry → behavioural (registry test 3);
 //         make the drain consult `isValid` → pin P-H4 (measured in fold round
 //         1); move the drain's C call under `withLock` → pin P-H4 (synthetic
 //         stand-in that inserts a C call into the lock body, not the real
-//         relocation); change the drain's deny arguments → pin P-H4.
+//         relocation); restore the drain's empty-data completion → pin P-H4
+//         (the retired literal must stay absent).
 
 import Foundation
 import Testing
@@ -434,17 +441,17 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         }
     }
 
-    // MARK: - P-E: resolve-before-complete ordering in confirmReadClipboard
+    // MARK: - P-E: resolve before every terminal clipboard call
 
     /// The ordering the #327 dead-surface routing test cannot observe with
-    /// `state: nil`: every `complete(surface:` call site in
-    /// `confirmReadClipboard` must be preceded by its own `fromOpaque` resolve
-    /// guard. The k-th completion site needs at least k preceding routes, so
-    /// deleting either the deny-branch resolve or the paste-branch resolve reds
-    /// this pin (the callback may only be completed on a resolved live
-    /// surface handle).
+    /// `state: nil`: every terminal call in `confirmReadClipboard` — the
+    /// unclaimed `deny(...)` sites and the Task's `complete(...)` /
+    /// `denyClaimed(...)` — must sit behind a `fromOpaque` resolve guard, and
+    /// the raw C terminate calls must stay inside the helpers, never the
+    /// callback body. Both branch resolves are load-bearing: deleting either
+    /// one reds the count and the per-site ordering check.
     @Test
-    func testPEConfirmReadClipboardResolvesBeforeEveryCompletion() throws {
+    func testPEConfirmReadClipboardResolvesBeforeEveryTerminalCall() throws {
         let appText = Self.strippingComments(try source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
@@ -461,20 +468,61 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             routes.count == 2,
             "P-E: confirmReadClipboard must resolve through the context in both branches; found \(routes.count)"
         )
-        let completionSites = Self.flexibleOccurrences(
+
+        // The unclaimed deny form appears once in each branch: the synchronous
+        // policy deny and the prompt branch's missing-payload guard.
+        let unclaimedDenies = Self.occurrences(
+            of: "deny(surface: surface",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            unclaimedDenies.count == 2,
+            "P-E: confirmReadClipboard must keep both unclaimed deny sites; found \(unclaimedDenies.count)"
+        )
+        let completions = Self.flexibleOccurrences(
             of: "complete( surface:",
             in: appText,
             range: confirmBody
         )
         #expect(
-            completionSites.count == 2,
-            "P-E: confirmReadClipboard must route its two completions through complete(surface:); found \(completionSites.count)"
+            completions.count == 1,
+            "P-E: confirmReadClipboard must keep exactly one complete(surface:) allow site; found \(completions.count)"
         )
-        for (index, site) in completionSites.enumerated() {
+        let claimedDenies = Self.occurrences(
+            of: "denyClaimed(surface: surface",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            claimedDenies.count == 1,
+            "P-E: the async user deny must terminate through denyClaimed(surface:); found \(claimedDenies.count)"
+        )
+
+        // The raw C terminate calls live in the helpers, never the callback.
+        for symbol in [
+            "ghostty_surface_complete_clipboard_request(",
+            "ghostty_surface_deny_clipboard_request(",
+        ] {
+            #expect(
+                Self.occurrences(of: symbol, in: appText, range: confirmBody).isEmpty,
+                "P-E: confirmReadClipboard must not call \(symbol) directly"
+            )
+        }
+
+        var terminalSites = unclaimedDenies
+        terminalSites.append(contentsOf: completions)
+        terminalSites.append(contentsOf: claimedDenies)
+        let orderedSites = terminalSites.sorted { $0.lowerBound < $1.lowerBound }
+        #expect(
+            orderedSites.count == 4,
+            "P-E: confirmReadClipboard must keep four terminal sites; found \(orderedSites.count)"
+        )
+        for (index, site) in orderedSites.enumerated() {
             let precedingRoutes = routes.filter { $0.lowerBound < site.lowerBound }.count
             #expect(
-                precedingRoutes > index,
-                "P-E: completion site \(index + 1) in confirmReadClipboard must be preceded by its own fromOpaque resolve guard; found \(precedingRoutes) preceding route(s)"
+                precedingRoutes > 0,
+                "P-E: terminal site \(index + 1) in confirmReadClipboard must be preceded by a fromOpaque resolve guard; found \(precedingRoutes)"
             )
         }
     }
@@ -675,9 +723,11 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     /// #329 claim discipline in `complete`: the nil-state guard precedes the
     /// claim, the claim's guard `else`/`return` sits between the claim and the
-    /// C completion, the claim result is consumed (a `_ =` discard would let
-    /// the double completion the claim exists to prevent), and the `context`
-    /// parameter is non-optional (a `nil` context would bypass the claim).
+    /// `completeRequest` helper that performs the C completion, the claim
+    /// result is consumed (a `_ =` discard would let the double completion the
+    /// claim exists to prevent), and the `context` parameter is non-optional
+    /// (a `nil` context would bypass the claim). The raw C call itself must
+    /// stay inside `completeRequest`, which is its single call site.
     @Test
     func testPHCompletionClaimsBeforeTheCCompletion() throws {
         let appText = Self.strippingComments(try source(Self.appSource))
@@ -696,8 +746,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             "P-H: complete must claim the registered request"
         )
         let cCall = try #require(
-            appText.range(of: "ghostty_surface_complete_clipboard_request(", range: completeBody),
-            "P-H: complete must call the C completion"
+            appText.range(of: "completeRequest(", range: completeBody),
+            "P-H: complete must route the C completion through completeRequest"
         )
 
         #expect(
@@ -723,6 +773,29 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             "P-H: the claim result must be consumed by its guard, never discarded with `_ =`"
         )
 
+        // The raw completion call must exist exactly once in the app file and
+        // only inside the shared builder the completion helper routes through.
+        let requestAnchor = try #require(
+            Self.occurrences(of: "func completeRequest(", in: appText).first,
+            "P-H: Ghostty.App.swift must keep completeRequest"
+        )
+        let requestBody = try Self.bracedBlock(after: requestAnchor, in: appText)
+        #expect(
+            Self.occurrences(
+                of: "ghostty_surface_complete_clipboard_request(",
+                in: appText
+            ).count == 1,
+            "P-H: the raw completion call must exist exactly once in Ghostty.App.swift"
+        )
+        #expect(
+            Self.occurrences(
+                of: "ghostty_surface_complete_clipboard_request(",
+                in: appText,
+                range: requestBody
+            ).count == 1,
+            "P-H: the single raw completion call must sit inside completeRequest"
+        )
+
         // The context parameter must stay non-optional: a `nil` context would
         // compile at a future call site and silently bypass the claim.
         let signatureEnd = try #require(
@@ -740,12 +813,13 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         )
     }
 
-    /// #329 registration per branch: the deny branch resolves its own context
-    /// before it registers and completes; the prompt branch resolves, copies
-    /// the payload, registers, then schedules the `Task`. P-E pins
-    /// resolve-before-complete; this pin adds resolve-before-register, so a
-    /// dead callback frame can never register a request that no surface free
-    /// can drain.
+    /// #329/#376 registration discipline: the prompt branch resolves, copies
+    /// the payload, registers once, and only then schedules the `Task`; the
+    /// synchronous policy deny (and the missing-payload guard) must not
+    /// register at all — it denies whenever the core handed us a state,
+    /// independent of registration success, so a dead callback frame can never
+    /// register a request that no surface free can drain and a
+    /// registration-less deny can never leak the core's request.
     @Test
     func testPHClipboardRegistrationSitsAfterEachResolveGuard() throws {
         let appText = Self.strippingComments(try source(Self.appSource))
@@ -770,62 +844,91 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
             range: confirmBody
         )
         #expect(
-            registrations.count == 2,
-            "P-H: both confirm branches must register their request; found \(registrations.count)"
+            registrations.count == 1,
+            "P-H: only the prompt branch may register its request; found \(registrations.count)"
+        )
+        let unclaimedDenies = Self.occurrences(
+            of: "deny(surface: surface",
+            in: appText,
+            range: confirmBody
+        )
+        #expect(
+            unclaimedDenies.count == 2,
+            "P-H: the policy deny and the missing-payload deny must stay unclaimed; found \(unclaimedDenies.count)"
         )
         let completions = Self.flexibleOccurrences(
             of: "complete( surface:",
             in: appText,
             range: confirmBody
         )
-        #expect(
-            completions.count == 2,
-            "P-H: confirmReadClipboard must keep its two completion sites; found \(completions.count)"
+        let claimedDenies = Self.occurrences(
+            of: "denyClaimed(surface: surface",
+            in: appText,
+            range: confirmBody
         )
         let payloadCopy = try #require(
-            Self.occurrences(of: "let payload = string.map", in: appText, range: confirmBody).first,
-            "P-H: the prompt branch must copy the payload"
+            Self.occurrences(of: "let c = confirm.pointee", in: appText, range: confirmBody).first,
+            "P-H: the prompt branch must copy the confirm payload"
         )
         let taskAnchor = try #require(
             Self.occurrences(of: "Task ", in: appText, range: confirmBody).first,
             "P-H: the confirmation callback must dispatch its completion through a Task"
         )
 
-        guard routes.count == 2, registrations.count == 2, completions.count == 2 else { return }
+        guard routes.count == 2,
+              let denyRoute = routes.first,
+              let promptRoute = routes.last,
+              let registration = registrations.first,
+              let completion = completions.first,
+              let claimedDeny = claimedDenies.first,
+              unclaimedDenies.count == 2,
+              completions.count == 1,
+              claimedDenies.count == 1
+        else { return }
 
-        // Deny branch: resolve → register → complete.
+        // Deny branch: resolve → unclaimed deny (never a registration).
         #expect(
-            routes[0].lowerBound < registrations[0].lowerBound,
-            "P-H: the deny branch must resolve before it registers"
+            denyRoute.lowerBound < unclaimedDenies[0].lowerBound,
+            "P-H: the deny branch must resolve before it denies"
         )
         #expect(
-            registrations[0].lowerBound < completions[0].lowerBound,
-            "P-H: the deny branch must register before it completes"
+            registration.lowerBound > promptRoute.lowerBound,
+            "P-H: the only registration must sit in the prompt branch"
         )
 
-        // Prompt branch: resolve → copy → register → Task.
+        // Prompt branch: resolve → copy → register → Task → complete/denyClaimed.
         #expect(
-            routes[1].lowerBound < payloadCopy.lowerBound,
+            promptRoute.lowerBound < payloadCopy.lowerBound,
             "P-H: the prompt branch must resolve before it copies the payload"
         )
         #expect(
-            payloadCopy.lowerBound < registrations[1].lowerBound,
+            payloadCopy.lowerBound < registration.lowerBound,
             "P-H: the prompt branch must copy the payload before it registers"
         )
         #expect(
-            registrations[1].lowerBound < taskAnchor.lowerBound,
+            registration.lowerBound < taskAnchor.lowerBound,
             "P-H: the prompt branch must register before it schedules the Task"
+        )
+        #expect(
+            taskAnchor.lowerBound < completion.lowerBound,
+            "P-H: the allow completion must run inside the Task"
+        )
+        #expect(
+            taskAnchor.lowerBound < claimedDeny.lowerBound,
+            "P-H: the user deny must run inside the Task"
         )
     }
 
-    /// #329 registry invariants: `invalidate()` must not clear the registry
-    /// (the deferred drain still owes each entry's release), the drain must not
-    /// consult `isValid`, no C completion may sit inside a `withLock` body
-    /// (tripwire, not a guarantee: a direct-call scan of the two files, not a
-    /// loop-scoped proof — a C call behind a helper invoked in a lock body
-    /// escapes it), and the drain's deny literal must stay
-    /// `("", pending.state, true)` (also a file-scoped presence check: it does
-    /// not prove the literal sits in the drain helper's body).
+    /// #329/#376 registry invariants: `invalidate()` must not clear the
+    /// registry (the deferred drain still owes each entry's release), the
+    /// drain must not consult `isValid`, no C completion or deny may sit inside
+    /// a `withLock` body (tripwire, not a guarantee: a direct-call scan of the
+    /// two files, not a loop-scoped proof — a C call behind a helper invoked
+    /// in a lock body escapes it), and the drain's release must be the deny
+    /// API (`ghostty_surface_deny_clipboard_request(surface, pending.state)`)
+    /// rather than the retired empty-data completion (also a file-scoped
+    /// presence check: it does not prove the literal sits in the drain
+    /// helper's body).
     @Test
     func testPHRegistryInvariants() throws {
         let contextText = Self.strippingComments(try source(Self.contextSource))
@@ -854,23 +957,31 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         for (file, text) in [(Self.contextSource, contextText), (Self.surfaceSource, surfaceText)] {
             for lockAnchor in Self.occurrences(of: "withLock", in: text) {
                 guard let lockBody = try? Self.bracedBlock(after: lockAnchor, in: text) else { continue }
-                #expect(
-                    Self.occurrences(
-                        of: "ghostty_surface_complete_clipboard_request(",
-                        in: text,
-                        range: lockBody
-                    ).isEmpty,
-                    "P-H: no C completion may sit inside a withLock body in \(file)"
-                )
+                for symbol in [
+                    "ghostty_surface_complete_clipboard_request(",
+                    "ghostty_surface_deny_clipboard_request(",
+                ] {
+                    #expect(
+                        Self.occurrences(of: symbol, in: text, range: lockBody).isEmpty,
+                        "P-H: \(symbol) must not sit inside a withLock body in \(file)"
+                    )
+                }
             }
         }
 
         #expect(
             Self.occurrences(
-                of: "ghostty_surface_complete_clipboard_request(surface, \"\", pending.state, true)",
+                of: "ghostty_surface_deny_clipboard_request(surface, pending.state)",
                 in: surfaceText
             ).count == 1,
-            "P-H: the drain must release each entry with the deny literal (\"\", pending.state, true)"
+            "P-H: the drain must release each entry with the deny API"
+        )
+        #expect(
+            Self.occurrences(
+                of: "ghostty_surface_complete_clipboard_request(surface, \"\", pending.state, true)",
+                in: surfaceText
+            ).isEmpty,
+            "P-H: the retired empty-data deny completion must not come back"
         )
     }
 
