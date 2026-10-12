@@ -58,6 +58,20 @@
 //       once and keeps `-derivedDataPath "$RUNNER_TEMP/DerivedData"` — the
 //       #422 fix for the measured ArchiveIntermediates wipe (without it a
 //       same-image restore recompiles the full set).
+//    A10 (SPM coherence): the cache step's SPM configuration is all-or-none
+//       coherent — the explicit `sourcepackages-directory`, the full
+//       `swiftpm-cache-key` `Package.resolved` expression and the
+//       `swiftpm-cache-restore-keys` `xcode27-spm-` value are either all
+//       present-and-exact (the wired arm) or all absent (the deleted arm),
+//       never the pre-#418 mixed state (key + restore-keys present,
+//       directory absent — the SPM half was inert while the DerivedData tar
+//       carried the checkouts). The `sourcepackages-directory` value is
+//       bound relationally to `deriveddata-directory` + `/SourcePackages`,
+//       and both SPM keys are duplicate-guarded (YAML is last-wins).
+//       Mutation reds: base mixed state, removed line, wrong path, renamed
+//       key, dropped `hashFiles`/`Package.resolved` term, restore-key
+//       suffix `xcode27-spm-debug-`, duplicate key, `deriveddata-directory`
+//       drift. (issue #418)
 //
 //  The `find | head -1 | while … done || true` guard is a measured deviation
 //  from the plan's verbatim probe block: under the runner's composite bash
@@ -377,6 +391,91 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         )
     }
 
+    /// A10: the cache step's SPM configuration is all-or-none coherent —
+    /// either all three SPM inputs are present and exact (the wired arm) or
+    /// all are absent (the deleted arm), never the pre-#418 mixed state in
+    /// which `swiftpm-cache-key` + `swiftpm-cache-restore-keys` were passed
+    /// but `sourcepackages-directory` was not, leaving the SPM half inert
+    /// while the DerivedData tar silently carried the checkouts (issue #418).
+    @Test
+    func testCacheStepSPMInputsAreAllOrNoneCoherent() throws {
+        let steps = try Self.compositeSteps()
+        let cache = steps[try Self.stepIndex(containing: "irgaly/xcode-cache", in: steps, label: "DerivedData cache")]
+
+        let directoryKey = "sourcepackages-directory:"
+        let keyKey = "swiftpm-cache-key:"
+        let restoreKeysKey = "swiftpm-cache-restore-keys:"
+        let directoryLine = "sourcepackages-directory: ${{ runner.temp }}/DerivedData/SourcePackages"
+        let keyLine = "swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}"
+        let restoreKeysValueLine = "xcode27-spm-"
+
+        let directoryCount = cache.text.components(separatedBy: directoryKey).count - 1
+        let keyCount = cache.text.components(separatedBy: keyKey).count - 1
+        let restoreKeysCount = cache.text.components(separatedBy: restoreKeysKey).count - 1
+
+        let allPresent = directoryCount == 1 && keyCount == 1 && restoreKeysCount == 1
+        let allAbsent = directoryCount == 0 && keyCount == 0 && restoreKeysCount == 0
+        #expect(
+            allPresent || allAbsent,
+            """
+            the cache step's SPM inputs must be all present-and-exact or all absent — \
+            a mixed state is the dead configuration #418 fixes (a computed SPM key with \
+            no sourcepackages-directory is never restored or saved); found \
+            sourcepackages-directory: \(directoryCount), swiftpm-cache-key: \(keyCount), \
+            swiftpm-cache-restore-keys: \(restoreKeysCount)
+            """
+        )
+
+        if allPresent {
+            #expect(
+                Self.hasLine(cache, equalTo: directoryLine),
+                "the wired arm must pass exactly `\(directoryLine)`; the action's implemented default is the `{deriveddata-directory}/*/SourcePackages` glob, which cannot match this repo's explicit -derivedDataPath layout, so a wrong or renamed value restores nothing while still counting as present (issue #418)"
+            )
+            #expect(
+                Self.hasLine(cache, equalTo: keyLine),
+                "the wired arm must keep the full `Package.resolved`-keyed `swiftpm-cache-key` expression exactly; a dropped `hashFiles(...)`/`Package.resolved` term (or a moved project path) would key the checkouts on a stale hash (issue #418)"
+            )
+            #expect(
+                Self.exactLineCount(cache, equalTo: restoreKeysValueLine) == 1,
+                "the `swiftpm-cache-restore-keys` block-scalar value must be exactly `\(restoreKeysValueLine)` once; the `|` key line is not the value, and a suffix such as `xcode27-spm-debug-` must red (issue #418)"
+            )
+
+            // The two absolute lines can drift apart in one edit and
+            // re-create #418's layout mismatch, so bind them relationally.
+            let derivedDataCount = cache.text.components(separatedBy: "deriveddata-directory:").count - 1
+            #expect(
+                derivedDataCount == 1,
+                "the cache step must carry exactly one `deriveddata-directory:` input (found \(derivedDataCount)); YAML is last-wins, so a duplicate would silently unanchor the SPM path (issue #418)"
+            )
+            if let derivedData = Self.colonValue(of: "deriveddata-directory", in: cache),
+               let sourcePackages = Self.colonValue(of: "sourcepackages-directory", in: cache) {
+                #expect(
+                    sourcePackages == derivedData + "/SourcePackages",
+                    "`sourcepackages-directory` must equal `deriveddata-directory` + `/SourcePackages` (found `\(sourcePackages)` vs `\(derivedData)`); an independent edit of either line must red (issue #418)"
+                )
+            } else {
+                Issue.record("could not parse `deriveddata-directory:`/`sourcepackages-directory:` from the cache step — re-derive this pin (issue #418)")
+            }
+        } else if allAbsent {
+            #expect(
+                directoryCount == 0,
+                "the deleted arm must leave no `sourcepackages-directory:` behind (found \(directoryCount)); the SPM config is either fully wired or fully removed (issue #418)"
+            )
+            #expect(
+                keyCount == 0,
+                "the deleted arm must remove `swiftpm-cache-key:` (found \(keyCount)); a leftover key is the inert half of the pre-#418 state (issue #418)"
+            )
+            #expect(
+                restoreKeysCount == 0,
+                "the deleted arm must remove `swiftpm-cache-restore-keys:` (found \(restoreKeysCount)); a leftover restore key is the inert half of the pre-#418 state (issue #418)"
+            )
+            #expect(
+                Self.exactLineCount(cache, equalTo: restoreKeysValueLine) == 0,
+                "the deleted arm must remove the `\(restoreKeysValueLine)` block-scalar value line too (issue #418)"
+            )
+        }
+    }
+
     // MARK: - Scanner
 
     private struct StepBlock {
@@ -389,6 +488,23 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     /// full-scalar bind a suffix rename (`…-ct`, `…-v2`) must fail.
     private static func hasLine(_ block: StepBlock, equalTo exact: String) -> Bool {
         block.lines.contains { $0.trimmingCharacters(in: .whitespaces) == exact }
+    }
+
+    /// The count of exact whole trimmed lines — hand-rolled so a block-scalar
+    /// value line can be duplicate-guarded too (`hasLine` is presence-only).
+    private static func exactLineCount(_ block: StepBlock, equalTo exact: String) -> Int {
+        block.lines.filter { $0.trimmingCharacters(in: .whitespaces) == exact }.count
+    }
+
+    /// The trimmed value after `key:` on the first line starting with that
+    /// key; nil when the key is absent. Used for the A10 relational bind.
+    private static func colonValue(of key: String, in block: StepBlock) -> String? {
+        for line in block.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix(key + ":") else { continue }
+            return String(trimmed.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+        }
+        return nil
     }
 
     private struct PinFailure: Error, CustomStringConvertible {
