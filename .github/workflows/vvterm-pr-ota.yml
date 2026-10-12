@@ -155,11 +155,37 @@ jobs:
           # the archive scratch inside the cached DerivedData root (the irgaly
           # cache saves `$RUNNER_TEMP/DerivedData`): the archive's object tree
           # AND its build-description/task store now live under the relocated,
-          # cached `Build/OTAIntermediates` and are restored. The recreated
-          # `BuildProductsPath` still re-materializes product files by Copy on
-          # every archive (51 `.swiftmodule` Copy tasks measured) — the #427
-          # residual. Keep -derivedDataPath and the default
-          # SYMROOT/BuildProductsPath.
+          # cached `Build/OTAIntermediates` and are restored.
+          #
+          # CONFIGURATION_BUILD_DIR (issue #427): the sibling
+          # `ArchiveIntermediates/VVTerm/BuildProductsPath` is wiped and
+          # recreated at the start of every archive invocation, and it is
+          # where the archive re-materializes the `.swiftmodule` copies that
+          # importers read (51 Copy tasks measured, including the 19 targets
+          # that import no in-package module). `builtin-copy` re-stamps each
+          # copied destination, so every importer's recorded input signature
+          # mismatches and 32 `SwiftCompile` tasks re-run on a same-image
+          # restore. Relocating the per-configuration product dir inside the
+          # cached root makes the copies land on restored, mtime-preserved
+          # files: measured toy runs 2/3 recompiled 0 `SwiftCompile` / 0 Copy
+          # / 0 Ld, and on the real app a same-image run recompiled
+          # 0 `CompileC` / 0 `SwiftCompile` and produced the same payload
+          # (43,655,104 B). The app symlink, bundles, appex, SPM and Metal
+          # targets all follow this per-configuration setting.
+          #
+          # DWARF_DSYM_FOLDER_PATH (issue #427): the archive stages
+          # `.xcarchive/dSYMs` only from the DEFAULT products path
+          # (`ArchiveIntermediates/VVTerm/BuildProductsPath/Release-iphoneos/`,
+          # regardless of DWARF_DSYM_FOLDER_PATH — measured: declaring it
+          # elsewhere leaves the `.xcarchive` dSYMs at 0 B), so
+          # CONFIGURATION_BUILD_DIR alone would drop ~208 MB of dSYMs from
+          # the published artifact. This setting puts the dSYM back at that
+          # default path while the module/bundle copies stay relocated; the
+          # dSYM is regenerated every archive exactly as pre-fix. Do not use
+          # SYMROOT (measured rc 70: the archive finalization needs the
+          # default products path) or BUILD_DIR (works, but is the wider
+          # knob; this per-configuration setting is the measured one). Keep
+          # -derivedDataPath.
           #
           # E2 sentinel (issue #422, diagnosis-only): prove the wipe on this
           # runner image by writing a sentinel and recording the scratch
@@ -179,6 +205,8 @@ jobs:
             -destination "generic/platform=iOS" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             OBJROOT="$RUNNER_TEMP/DerivedData/Build/OTAIntermediates" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/DerivedData/Build/OTAProducts/Release-iphoneos" \
+            DWARF_DSYM_FOLDER_PATH="$RUNNER_TEMP/DerivedData/Build/Intermediates.noindex/ArchiveIntermediates/VVTerm/BuildProductsPath/Release-iphoneos" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
