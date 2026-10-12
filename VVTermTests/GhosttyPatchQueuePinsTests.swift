@@ -126,7 +126,8 @@ struct GhosttyPatchQueuePinsTests {
                 unreadable.append(line)
                 continue
             }
-            paths.append(String(rest[..<separator.lowerBound]))
+            let pathStart = rest.index(rest.startIndex, offsetBy: "a/".count)
+            paths.append(String(rest[pathStart..<separator.lowerBound]))
         }
         return (paths, unreadable)
     }
