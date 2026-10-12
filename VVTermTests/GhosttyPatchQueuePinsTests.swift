@@ -152,9 +152,9 @@ struct GhosttyPatchQueuePinsTests {
             patch.range(of: "diff --git a/src/termio/Callback.zig b/src/termio/Callback.zig"),
             "the patch must carry src/termio/Callback.zig"
         )
-        let section = patch[callbackHeader.lowerBound...]
-        let nextFile = section.range(of: "diff --git ")?.lowerBound ?? section.endIndex
-        let sectionText = String(section[..<nextFile])
+        let remainder = patch[callbackHeader.upperBound...]
+        let nextFile = remainder.range(of: "diff --git ")?.lowerBound ?? remainder.endIndex
+        let sectionText = String(patch[callbackHeader.lowerBound..<nextFile])
         #expect(
             sectionText.contains("new file mode "),
             "src/termio/Callback.zig must be carried as a new file"
