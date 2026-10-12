@@ -382,14 +382,21 @@ the run uses the workflow definition from the dispatched ref). The checkout step
 `scripts/ci/ghostty-bump-pr.sh` come from that checkout. Validation runs dispatch from
 `main` with `force_rebuild=true, create_bump_pr=false`.
 
-Dispatch with the REST API and **real JSON booleans** — this now really skips the
-bump steps (the script sees the raw `false`). `gh workflow run -f
-create_bump_pr=false` stays unreliable at the CLI layer (gh drops/coerces the
-value; observed 2026-08-12):
+Dispatch with the REST API and **real JSON booleans** — the gate script then
+receives the raw `false` and resolves `enabled=false` (the end-to-end skip is
+accepted by a validation dispatch; the offline matrix is pinned by the required
+`build` job's selftest). `gh workflow run -f create_bump_pr=false` stays
+unreliable at the CLI layer (gh drops/coerces the value; observed 2026-08-12).
+`gh api --input` takes a *file* path (or `-` for stdin), never inline JSON — a
+literal `--input '{"ref":…}'` fails with `open {"ref":…}: no such file or
+directory` (gh 2.101) — so send the fields with `-f`/`-F` (`-F` types the
+value; the `inputs[…]` bracket form is required — a top-level `-F
+create_bump_pr=false` leaves the workflow input unset, so the default `true`
+applies and the bump steps still run):
 
 ```sh
 gh api -X POST repos/cad0p/vvterm/actions/workflows/ghostty-upstream-probe.yml/dispatches \
-  --input '{"ref":"main","inputs":{"force_rebuild":true,"create_bump_pr":false}}'
+  -f ref=main -F 'inputs[force_rebuild]=true' -F 'inputs[create_bump_pr]=false'
 ```
 
 ### Alarm drill (simulate patch drift)
