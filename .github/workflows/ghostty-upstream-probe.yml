@@ -183,6 +183,40 @@ jobs:
           fi
           echo "noop=false" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve bump-PR gate
+        id: bump-gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CREATE_BUMP_PR: ${{ inputs.create_bump_pr }}
+        run: |
+          set -euo pipefail
+          echo "resolve-bump-gate" > "$RUNNER_TEMP/ghostty-probe-step"
+          GATE="$(bash scripts/ci/ghostty-probe-bump-gate.sh "$EVENT_NAME" "$CREATE_BUMP_PR")"
+          case "$GATE" in
+            true|false) ;;
+            *) echo "::error::bump gate produced an invalid token: '$GATE'"; exit 1 ;;
+          esac
+          echo "bump-pr gate: enabled=$GATE (event=$EVENT_NAME input=$CREATE_BUMP_PR)"
+          echo "enabled=$GATE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify bump-PR gate output
+        # Runtime guard for the silent-weekly-stop class: the registered output
+        # must be a valid token, and a scheduled run must resolve to enabled=true.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          echo "verify-bump-gate" > "$RUNNER_TEMP/ghostty-probe-step"
+          REGISTERED='${{ steps.bump-gate.outputs.enabled }}'
+          echo "bump-gate.outputs.enabled='$REGISTERED'"
+          case "$REGISTERED" in
+            true|false) ;;
+            *) echo "::error::bump-gate output not registered (got '$REGISTERED')"; exit 1 ;;
+          esac
+          if [[ "$EVENT_NAME" == "schedule" && "$REGISTERED" != "true" ]]; then
+            echo "::error::scheduled run resolved the bump gate to '$REGISTERED' — the weekly bump would silently stop"; exit 1
+          fi
+
       - name: Build GhosttyKit @ ${{ steps.resolve-sha.outputs.resolved_sha }}
         if: ${{ steps.noop-gate.outputs.noop != 'true' }}
         run: |
@@ -229,23 +263,28 @@ jobs:
 
       - name: Create GitHub App token (vvterm-ghostty-bump)
         id: app-token
-        # Same gate as the bump step: schedule (''), string 'true', or real
-        # JSON boolean true (REST-API dispatch) must all enable the token.
-        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true' || inputs.create_bump_pr == true) }}
+        # Bump-PR gate (issue #435): the decision lives in the `Resolve bump-PR
+        # gate` step above (scripts/ci/ghostty-probe-bump-gate.sh). Do not
+        # re-inline a create_bump_pr comparison here — the old expression ran
+        # this step on a `false` validation dispatch because GitHub casts a
+        # boolean `false` equal to the empty string; the dispatch matrix is in
+        # scripts/patches/ghostty/README.md.
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && steps.bump-gate.outputs.enabled == 'true' }}
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.GHOSTTY_BUMP_CLIENT_ID }}
           private-key: ${{ secrets.GHOSTTY_BUMP_PRIVATE_KEY }}
 
       # NOTE: on `schedule` events the `inputs` context is EMPTY (dispatch
-      # defaults do not apply), so the gate must treat empty as true —
-      # otherwise the weekly auto-bump would silently never run. For manual
-      # validation runs pass create_bump_pr=false via the REST API with a
-      # REAL JSON boolean (gh workflow run -f create_bump_pr=false is
-      # unreliable — the input is dropped/coerced and the step runs).
+      # defaults do not apply), so the event — not the input — enables the
+      # weekly bump; the `Resolve bump-PR gate` step owns that decision
+      # (issue #435). A validation dispatch with create_bump_pr=false is now
+      # a real skip: the old `inputs.create_bump_pr == ''` arm matched a
+      # boolean `false` because GitHub compares mixed operand types as
+      # numbers. The dispatch matrix is in scripts/patches/ghostty/README.md.
       - name: Commit artifacts, push bump branch, create or reuse bump PR
         id: bump-pr
-        if: ${{ steps.noop-gate.outputs.noop != 'true' && (inputs.create_bump_pr == '' || inputs.create_bump_pr == 'true' || inputs.create_bump_pr == true) }}
+        if: ${{ steps.noop-gate.outputs.noop != 'true' && steps.bump-gate.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
