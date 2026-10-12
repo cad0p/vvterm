@@ -631,11 +631,14 @@ double-quoted operand; and a bare `$GITHUB` name the elided walk keeps.
 The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
 fold does not close: `-f` script bodies, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
-/ process-substitution script operands, the xargs wrapper/assignment/
-continuation spellings (`env xargs`, `FOO=1 xargs`, `nice xargs`,
-`command xargs`, `time xargs`, `xargs … < pf`, a trailing-`|` or
-backslash multi-line pipeline — the bare `… | xargs cp payload {}` form
-now refuses), the
+/ process-substitution script operands, the xargs spellings the carrier table does not
+resolve (`exec`/`ionice`/`chrt`/`taskset`, a long-option abbreviation, a
+grouped command position `(xargs …)`, `xargs … < pf`, an untraced
+`$`-word on a joined line, a nested assignment body — the measured
+wrapper/assignment/continuation spellings (`env xargs`, `FOO=1 xargs`,
+`nice xargs`, `command xargs`, `time xargs`, a trailing-`|` or backslash
+multi-line pipeline) now refuse since #350f, and the bare
+`… | xargs cp payload {}` form has refused since A13), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
@@ -672,10 +675,11 @@ a carrier whose command
 string is assembled at runtime
 (`eval "$cmd"`: the carrier is seen, but a string that never mentions the
 env file or a traced name is the inherited textual boundary); an argv
-operand fed on stdin behind a wrapper, an assignment prefix or a
-continuation (`env xargs`, `FOO=1 xargs`, `… |` newline `xargs`) sits
-outside the argv verb table (the bare `… | xargs cp payload {}` form
-refuses since A13);
+operand fed on stdin behind an unlisted wrapper (`exec xargs`), a
+long-option abbreviation or a grouped command position (`(xargs …)`)
+still sits outside the carrier table (the listed wrappers, assignment
+prefixes and `|`/backslash continuations refuse since #350f; the bare
+`… | xargs cp payload {}` form refuses since A13);
 other
 argv write verbs that need verb-specific semantics are closed by A12
 (sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
@@ -870,9 +874,16 @@ file, references a traced name, or carries a command substitution/
 backtick; the per-line site also refuses a `$`-bearing upstream word the
 extractor cannot resolve, while the substitution-body site (issue #350,
 item 2's `$(…)`-nested spelling) drops that word catch so the real-tree
-witness `name="$(echo "$raw" | xargs)"` stays accepted; the
-wrapper/assignment-prefix/trailing-`|` spellings stay accepted boundary
-pins (a new command-position mechanism, deferred), as does an
+witness `name="$(echo "$raw" | xargs)"` stays accepted; since #350f the
+effective command word is resolved through assignment prefixes and a
+fixture-bounded wrapper table (`env`/`nice`/`command`/`time`/`nohup`/
+`setsid`/`stdbuf`/`timeout`), an unparseable option after a recognized
+wrapper with an `xargs` word still unplaced refuses fail-closed, the two
+backslash joins and the trailing-`|` pipeline join feed the carrier with
+the sound predicates only, and `command -v`/`-V` stops the walk; the
+unlisted wrappers (`exec`/`ionice`/`chrt`/`taskset`), long-option
+abbreviations, the grouped command positions, the untraced `$`-word on a
+joined line and the
 assignment-wrapped nested form whose upstream is a bare command
 (`w=$(printenv "${x}${y}" | xargs -I{} cp payload {})`; the relaxed
 substitution-body site drops the `$`-word catch, so the bare upstream is
