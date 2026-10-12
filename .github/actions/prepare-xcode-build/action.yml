@@ -63,9 +63,25 @@ runs:
       # irgaly/xcode-cache is purpose-built for Xcode DerivedData caching.
       # It stores a sidecar `xcode-cache-mtime.json` mapping
       # {path, mtime, sha256} and re-applies mtimes via File.utime after
-      # restore (only when SHA-256 matches). It also handles the
-      # SourcePackages cache key separately. The SPM key is shared by every
-      # job and workflow.
+      # restore (only when SHA-256 matches).
+      #
+      # It caches SourcePackages as a separate entry only when
+      # `sourcepackages-directory` is set (issue #418). The action's default
+      # is the glob `{deriveddata-directory}/*/SourcePackages`, which cannot
+      # match this repo's explicit `-derivedDataPath $RUNNER_TEMP/DerivedData`
+      # layout (the checkouts live at `DerivedData/SourcePackages`, with no
+      # `<AppName>-<ID>` level), so the explicit input is required. Before it
+      # was wired the SPM key was computed but never restored or saved
+      # (measured: `sourcePackagesDirectory = null` and `swiftpm-restored =
+      # false` in build job 114094258174; zero `xcode27-spm-*` entries), and
+      # the DerivedData tar silently carried the checkouts.
+      #
+      # With the explicit input the DerivedData tar sheds SourcePackages and
+      # the `xcode27-spm-` entry carries the checkouts, keyed by the shared
+      # `Package.resolved` hash (every job and workflow, no arm prefix). A
+      # wired restore logs `swiftpm-restored = true`; the SPM half saves
+      # separately from DerivedData. The expected build/ota shared-key race
+      # logs `SourcePackages cache key exists, not saved` and still succeeds.
       #
       # Measured 2026-10-08 (issue #109): the mtime restore makes the
       # Debug/simulator `build` arm warm on a same-image restore (0 CompileC,
@@ -83,6 +99,7 @@ runs:
         key: ${{ inputs.deriveddata-key-prefix }}-${{ github.workflow }}-${{ github.sha }}
         restore-keys: ${{ inputs.deriveddata-restore-keys }}
         deriveddata-directory: ${{ runner.temp }}/DerivedData
+        sourcepackages-directory: ${{ runner.temp }}/DerivedData/SourcePackages
         swiftpm-cache-key: xcode27-spm-${{ hashFiles('VVTerm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
         swiftpm-cache-restore-keys: |
           xcode27-spm-
