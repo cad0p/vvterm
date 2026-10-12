@@ -349,7 +349,31 @@ restored 2026-08-14 (pi-napkin + vvterm):
 `code_quality`.
 
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
-(skip PR creation — useful for validation runs).
+(open or reuse the bump PR when the probe passes; `false` = validate only).
+
+**Dispatch-input matrix** (resolved by `scripts/ci/ghostty-probe-bump-gate.sh`
+from the workflow's `Resolve bump-PR gate` step; issue #435):
+
+| event | `create_bump_pr` | bump steps |
+| --- | --- | --- |
+| `schedule` (weekly) | absent — the `inputs` context is empty | **run** |
+| `workflow_dispatch` | `true` | **run** |
+| `workflow_dispatch` | `false` | **skip** (validation only) |
+| `workflow_dispatch` | omitted | run — GitHub applies the input default `true` (GitHub semantics, not a script-selftest case) |
+| `workflow_dispatch` | any other spelling (`1`, `True`, garbage) | skip (fail-closed) |
+| any other event | anything | skip (fail-closed) |
+
+The gate used to be an in-workflow expression over `inputs.create_bump_pr`;
+GitHub casts mixed comparison operands to numbers, so a real JSON boolean
+`false` equals the empty string (`false == ''` -> `0 == 0` -> true) and the
+`false` dispatch matched the `schedule` arm — measured 2026-10-12 (run
+`38216971222` created bump PR #434). The decision now lives in the shell script,
+where the required `build` job's selftest pins the whole matrix; the `schedule`
+arm is whitelisted by event, since dispatch defaults do not apply there.
+Sibling sweep: this was the only GitHub-expression comparison of a `boolean`
+input in the repo — `debug_test` in `vvterm-pr-ci.yml` is a string input
+compared to `''` as a deliberate empty sentinel, and `ios-testflight.yml`
+consumes its boolean inputs as shell strings.
 
 Dispatch `ref` restriction: the workflow file must exist on the **dispatched ref**
 (GitHub also requires it to exist on the default branch to be dispatchable at all, but
@@ -358,9 +382,10 @@ the run uses the workflow definition from the dispatched ref). The checkout step
 `scripts/ci/ghostty-bump-pr.sh` come from that checkout. Validation runs dispatch from
 `main` with `force_rebuild=true, create_bump_pr=false`.
 
-**Dispatch booleans**: use the REST API with real JSON booleans —
-`gh workflow run -f create_bump_pr=false` is unreliable (gh CLI drops/coerces the
-value and the step still runs; observed 2026-08-12):
+Dispatch with the REST API and **real JSON booleans** — this now really skips the
+bump steps (the script sees the raw `false`). `gh workflow run -f
+create_bump_pr=false` stays unreliable at the CLI layer (gh drops/coerces the
+value; observed 2026-08-12):
 
 ```sh
 gh api -X POST repos/cad0p/vvterm/actions/workflows/ghostty-upstream-probe.yml/dispatches \
