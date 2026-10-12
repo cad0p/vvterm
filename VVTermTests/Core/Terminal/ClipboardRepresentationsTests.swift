@@ -194,4 +194,21 @@ struct ClipboardRepresentationsTests {
             "a structurally invalid mime gets no UTType and falls back to itself"
         )
     }
+
+    // MARK: - iOS provider
+
+    #if os(iOS)
+    /// #431 iOS provider: `text/plain` serves the general pasteboard's string
+    /// as UTF-8 bytes; every other requested MIME is unservable. A file-URL
+    /// copy has no `.string` payload on iOS, so the opinionated file-path
+    /// representation stays macOS-only.
+    @Test
+    func iosProviderServesOnlyTextPlain() {
+        let payload = "vvterm-#431-ios-\(UUID().uuidString)"
+        Clipboard.copy(payload)
+        #expect(Clipboard.data(forMime: "text/plain") == Data(payload.utf8))
+        #expect(Clipboard.data(forMime: "text/uri-list") == nil)
+        #expect(Clipboard.data(forMime: "image/png") == nil)
+    }
+    #endif
 }
