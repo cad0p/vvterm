@@ -6451,6 +6451,11 @@ def _refuse_substitution_body_writes(
                 raise _run_id_unmodelled_write_refusal(
                     step, body, ("xargs", carrier, True)
                 )
+            carrier_unparsed = _xargs_unparsed_wrapper(inner_segment)
+            if carrier_unparsed is not None:
+                raise _run_id_xargs_unparsed_wrapper_refusal(
+                    step, body, carrier_unparsed[0], carrier_unparsed[1]
+                )
             _refuse_argv_write_targets(
                 inner_segment,
                 step,
@@ -6759,6 +6764,24 @@ def _run_id_continuation_bound_refusal(step: ArtifactStep, body: RunBody) -> Ref
         f"({_CONTINUATION_JOIN_MAX_LINES} lines), so a joined command's write targets "
         "cannot be extracted (refusing rather than guessing; split the chain into "
         "shorter logical lines)",
+    )
+
+
+def _run_id_xargs_unparsed_wrapper_refusal(
+    step: ArtifactStep, body: RunBody, wrapper: str, token: str
+) -> Refusal:
+    """Issue #350f: a recognized command wrapper meets an option the
+    modelled grammar cannot parse while an `xargs` word remains unplaced
+    (`env -S 'xargs …'`, `env -Z xargs`). The ambiguity may hide the
+    carrier, so the body refuses fail-closed. The diagnostic names the
+    wrapper and the unparsed token and does not claim `xargs` runs when the
+    walk could not prove it does."""
+    return Refusal(
+        step.run_id_line or step.uses_line,
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job runs "
+        f"`{wrapper}` with an option the extractor cannot parse (`{token}`) in a command "
+        "position that could carry the operand to `xargs` on stdin (refusing rather than "
+        "guessing)",
     )
 
 
@@ -7444,6 +7467,237 @@ def _run_id_unaccounted_occurrence_refusal(
     )
 
 
+# The command-position wrappers the xargs carrier resolves through (issue
+# #350f). A wrapper runs the next command word, so `env xargs …`,
+# `nice -n 5 xargs …` or a chained `nice -n 5 env xargs …` hides the
+# carrier `xargs` behind it. Membership is bounded by fixtures: every
+# member ships at least one reject fixture and every option form the table
+# keeps ships a fixture. `exec`/`ionice`/`chrt`/`taskset`, long-option
+# abbreviations and the grouped command positions (`(xargs …)`,
+# `{ xargs …; }`) stay named residuals.
+_COMMAND_WRAPPERS = frozenset(
+    {"env", "nice", "command", "time", "nohup", "setsid", "stdbuf", "timeout"}
+)
+# An `xargs` word inside a word token (`env -S 'xargs -I{} cp payload {}'`)
+# or a bare `xargs` operand; a `-`/`.`/`/`/word-character before it is part
+# of another name and does not count.
+_XARGS_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])xargs(?![A-Za-z0-9_])")
+
+
+def _consume_wrapper_options(
+    verb: str,
+    position: int,
+    segment: list[tuple[str, str, int, int]],
+) -> tuple[int, tuple[str, str] | tuple[str] | None]:
+    """Consume one recognized wrapper's modelled option grammar (issue
+    #350f). Returns `(cursor, outcome)`: `cursor` is the index of the next
+    token (the command candidate), `outcome` is None to continue the walk,
+    `("unparsed", token)` when an option the table cannot parse sits in an
+    option position, or `("query",)` for `command -v`/`-V` (a query does
+    not execute the operand). The grammar is bounded by fixtures: every
+    form the table keeps ships a reject fixture, and every spelling the
+    table lacks (a long-option abbreviation, an unlisted wrapper) stays a
+    named residual. `env -S`/`--split-string` is the command-in-string
+    spelling: it is refused fail-closed rather than parsed."""
+    cursor = position + 1
+    if verb == "nohup":
+        return (cursor, None)
+    while cursor < len(segment):
+        if segment[cursor][0] != "word":
+            return (cursor, None)
+        token = segment[cursor][1]
+        if verb == "env":
+            if token == "--":
+                return (cursor + 1, None)
+            if token in ("-i", "-0", "-v"):
+                cursor += 1
+                continue
+            if token == "-S" or token.startswith("--split-string") or (
+                token.startswith("-S") and len(token) > 2
+            ):
+                return (cursor, ("unparsed", token))
+            if token in ("-u", "-C", "-P"):
+                cursor += 2
+                continue
+            if token.startswith(("-u", "-C", "-P")) and len(token) > 2:
+                cursor += 1
+                continue
+            if token == "--unset":
+                cursor += 2
+                continue
+            if token.startswith("--unset="):
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "nice":
+            if token in ("-n", "--adjustment"):
+                cursor += 2
+                continue
+            if token.startswith("--adjustment=") or (
+                token.startswith("-n") and len(token) > 2
+            ):
+                cursor += 1
+                continue
+            if re.fullmatch(r"-\d+", token):
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "command":
+            if token in ("-v", "-V"):
+                return (cursor, ("query",))
+            if token == "-p":
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "time":
+            if token == "--":
+                return (cursor + 1, None)
+            if token in ("-p", "-v", "--verbose", "-a"):
+                cursor += 1
+                continue
+            if token == "-o":
+                cursor += 2
+                continue
+            if token.startswith("-o") and len(token) > 2:
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "setsid":
+            if token in ("-c", "--ctty", "-f", "--fork", "-w", "--wait"):
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "stdbuf":
+            if token in ("-i", "-o", "-e"):
+                cursor += 2
+                continue
+            if token.startswith(("-i", "-o", "-e")) and len(token) > 2:
+                cursor += 1
+                continue
+            if token.startswith(("--input=", "--output=", "--error=")):
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            return (cursor, None)
+        if verb == "timeout":
+            if token in ("-k", "-s", "--kill-after", "--signal"):
+                cursor += 2
+                continue
+            if token.startswith(("-k", "-s")) and len(token) > 2:
+                cursor += 1
+                continue
+            if token.startswith(("--kill-after=", "--signal=")):
+                cursor += 1
+                continue
+            if token in (
+                "--preserve-status",
+                "-f",
+                "--foreground",
+                "-v",
+                "--verbose",
+            ):
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                return (cursor, ("unparsed", token))
+            # The mandatory DURATION operand is consumed before the
+            # command candidate follows.
+            return (cursor + 1, None)
+        return (cursor, None)
+    return (cursor, None)
+
+
+def _effective_command_word(
+    segment: list[tuple[str, str, int, int]],
+) -> tuple[str, int, str] | tuple[str, int, str, str] | None:
+    """The command a segment executes, walking assignment prefixes and the
+    modelled wrapper table (issue #350f). Returns `("resolved", index,
+    name)` for a definite effective command word, `("unparsed", index,
+    wrapper, token)` when a recognized wrapper meets a word the table
+    cannot place where its command must sit, or None when the walk ends
+    without a command word. Used only by the xargs carrier site and its
+    sibling unparsed check: the argv write-target tables already scan every
+    operand word, so filtering them to the effective word could only drop
+    candidates."""
+    position = 0
+    pending_wrapper: str | None = None
+    while position < len(segment):
+        kind, text, _start, _end = segment[position]
+        if kind != "word":
+            return None
+        if _ASSIGNMENT_OPERAND_RE.match(text):
+            # `FOO=1 xargs …` / `env FOO=1 xargs …`: an assignment prefix
+            # (or an `env` assignment operand) is not the command word.
+            position += 1
+            continue
+        if pending_wrapper is not None and (
+            text.startswith("-") or "$" in text or "`" in text
+        ):
+            # After a wrapper, a `-…`/substitution-bearing word where the
+            # command must sit may expand to options or to a different
+            # command, so the walk cannot resolve a definite effective
+            # word. `command -v`/`-V` never reaches here (the query
+            # stopper resolves the walk to `command`).
+            return ("unparsed", position, pending_wrapper, text)
+        verb = text.rsplit("/", 1)[-1]
+        if verb not in _COMMAND_WRAPPERS:
+            return ("resolved", position, verb)
+        wrapper_index = position
+        cursor, outcome = _consume_wrapper_options(verb, position, segment)
+        if outcome is not None:
+            if outcome[0] == "unparsed":
+                return ("unparsed", position, verb, outcome[1])
+            # A `command -v`/`-V` query does not execute its operand, so the
+            # effective word is `command` and no carrier can hide.
+            return ("resolved", wrapper_index, verb)
+        position = cursor
+        pending_wrapper = verb
+    return None
+
+
+def _xargs_unparsed_wrapper(
+    segment: list[tuple[str, str, int, int]],
+) -> tuple[str, str] | None:
+    """The `(wrapper, token)` of a segment whose effective-command-word
+    walk met an option the table cannot parse while the segment still holds
+    an `xargs` word the walk could not place, or None (issue #350f). The
+    ambiguity can only hide a carrier when an `xargs` word remains: a clean
+    `env -Z sleep 1` is accepted. The refusal diagnostic names the wrapper
+    and the token and does not claim `xargs` runs."""
+    walk = _effective_command_word(segment)
+    if walk is None or walk[0] != "unparsed":
+        return None
+    _kind, index, wrapper, token = walk
+    for kind, text, _start, _end in segment[index:]:
+        if kind != "word":
+            continue
+        candidate = text
+        if wrapper == "env":
+            # `env -S 'xargs …'`/`-Sxargs …`/`--split-string=xargs …`: the
+            # command lives inside the option's string, so check the string
+            # itself (the first word enough for the carrier decision).
+            if candidate.startswith("-S"):
+                candidate = candidate[2:]
+            elif candidate.startswith("--split-string="):
+                candidate = candidate.split("=", 1)[1]
+        if candidate.rsplit("/", 1)[-1] == "xargs" or _XARGS_WORD_RE.search(
+            candidate
+        ):
+            return (wrapper, token)
+    return None
+
+
 def _xargs_upstream_carrier(
     line: str,
     segment: list[tuple[str, str, int, int]],
@@ -7456,14 +7710,17 @@ def _xargs_upstream_carrier(
     arrives on xargs' stdin; refuse when the upstream names the env file,
     references a traced name, carries a command substitution/backtick, or
     (at the per-line site) is a `$`-bearing word the extractor cannot
-    resolve. The substitution-body site passes
-    `require_unresolved_word_catch=False`: a body whose upstream merely
-    carries a benign `$raw` word is the real-tree witness the catch
+    resolve. The effective command word is resolved through assignment
+    prefixes and the wrapper table (issue #350f), so `… | env xargs …`
+    fires like the bare `… | xargs …` spelling. The substitution-body site
+    passes `require_unresolved_word_catch=False`: a body whose upstream
+    merely carries a benign `$raw` word is the real-tree witness the catch
     over-refuses, while a body carrying a nested `$(…)` still refuses
     through the substitution-spelling test."""
-    if not segment or segment[0][0] != "word":
+    walk = _effective_command_word(segment)
+    if walk is None or walk[0] != "resolved":
         return None
-    verb = segment[0][1].rsplit("/", 1)[-1]
+    _kind, _index, verb = walk
     if verb != "xargs":
         return None
     text = line[: segment[0][2]].strip()
@@ -7644,6 +7901,11 @@ def _refuse_github_env_run_id_write(
                 if xargs_carrier is not None:
                     raise _run_id_unmodelled_write_refusal(
                         step, body, ("xargs", xargs_carrier, True)
+                    )
+                xargs_unparsed = _xargs_unparsed_wrapper(segment)
+                if xargs_unparsed is not None:
+                    raise _run_id_xargs_unparsed_wrapper_refusal(
+                        step, body, xargs_unparsed[0], xargs_unparsed[1]
                     )
                 _scan_segment_substitutions(
                     segment,
