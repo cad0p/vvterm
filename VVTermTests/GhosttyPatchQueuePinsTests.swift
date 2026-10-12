@@ -23,6 +23,19 @@
 //  pin and the README's 19-path regeneration list in the same commit; that
 //  is the point — an accidental path (the demo app, the dep-URL swap,
 //  commented-out debug code) cannot slip back in silently.
+//
+//  MEASURED COUNTERFACTUALS (each pin red under a targeted mutation of a copied
+//  tree, run with `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`; the
+//  mutated tree needs only `scripts/patches/ghostty/custom-io.patch` and
+//  `scripts/patches/ghostty/BASE` — the same hook the other pin suites use):
+//    - drop the `set_write_callback: SetWriteCallback,` field → the fork-symbol
+//      pin reds.
+//    - delete the `pkg/macos/build.zig` section → the path-set pin reds
+//      (18 parsed paths vs the pinned 19).
+//    - drop `new file mode` from the Callback.zig section → the new-file pin
+//      reds (the fold-round-1 defect this battery exists to catch).
+//    - truncate `BASE` to 7 hex → the BASE-shape pin reds.
+//    - unmutated copy → all four green (control).
 
 import Foundation
 import Testing
@@ -97,6 +110,9 @@ struct GhosttyPatchQueuePinsTests {
     ]
 
     /// Every `diff --git a/<path> b/<path>` path in the patch, in order.
+    /// A header this parser cannot read (a quoted path, say) is skipped, but it
+    /// cannot pass silently: the caller compares the parsed list against the
+    /// exact pinned list, so a skipped header makes the counts differ and reds.
     private static func patchPaths(in text: String) -> [String] {
         var paths: [String] = []
         for line in text.components(separatedBy: "\n") where line.hasPrefix("diff --git a/") {

@@ -633,7 +633,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// must answer `UNSUPPORTED` directly, never complete the request, and never
     /// touch the pasteboard. The request is seeded with a `text/plain` mime and
     /// a readable clipboard so a servable path would complete; the core destroys
-    /// its own state on the non-started result (`apprt/embedded.zig:789-792`),
+    /// its own state on the non-started result (`apprt/embedded.zig:804-805`),
     /// which is why the embedder must make no C call here.
     @Test
     func readClipboardOnADeadContextReturnsUnsupported() async throws {
@@ -1191,7 +1191,7 @@ struct GhosttySurfaceCallbackRoutingTests {
     /// request kind (including the kitty and list kinds added by the new core)
     /// is denied without a prompt. The callback is deliberately not invoked
     /// with a synthetic `state`: the core allocates that state itself
-    /// (`apprt/embedded.zig:734-770`) and a test-supplied pointer would be a
+    /// (`apprt/embedded.zig:741-805`) and a test-supplied pointer would be a
     /// nil deref or a wrong-allocator free.
     @Test
     func onlyPasteRequestsRequireUserPrompt() {
@@ -1201,6 +1201,26 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ) == false)
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE) == false)
         #expect(ClipboardConfirmationPolicy.requiresUserPrompt(GHOSTTY_CLIPBOARD_REQUEST_LIST) == false)
+    }
+
+    /// #376: a `.list` read (the mode-5522 kitty paste) advertises the
+    /// pasteboard's MIME listing through `Clipboard.availableMimeTypes()`
+    /// without reading any pasteboard data. A text pasteboard must report the
+    /// canonical `text/plain` the core asks for, and the payload must still be
+    /// intact afterwards (the listing never loads the clipboard).
+    @Test
+    func clipboardAvailableMimeTypesListTextWithoutReadingPayload() {
+        let seed = "vvterm-#376-listing-\(UUID().uuidString)"
+        Clipboard.copy(seed)
+        let mimes = Clipboard.availableMimeTypes()
+        #expect(
+            mimes.contains("text/plain"),
+            "a text pasteboard must advertise text/plain; found \(mimes)"
+        )
+        #expect(
+            Clipboard.readString() == seed,
+            "the listing must leave the payload intact (metadata only)"
+        )
     }
 
     /// #327 copy: the prompt body is neutral, never contains the payload, and

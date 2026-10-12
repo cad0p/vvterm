@@ -85,8 +85,10 @@
 //    P-D  revert the iOS write callback to `passUnretained(self)` →
 //         `callbackContext.userdata` count 0 / `passUnretained(self)` present.
 //    P-E  route the paste-branch resolve through a renamed helper (the scan is
-//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` and the
-//         prompt-branch terminal sites fail `precedingRoutes > 0`.
+//         exact-token: `fromOpaque(` must appear) → `routes.count → 1` reds
+//         P-E (`:465`) and P-H3 (`:835`) and drops P-B's census to 4/5. The
+//         `precedingRoutes > 0` ordering check still passes — it is not that
+//         mutation's discriminator (re-measured 2026-10-12, fold round 1).
 //    P-F  inline `"Paste Unsafe Text?"` in the iOS presenter → the iOS
 //         literal-absence assertion fails.
 //    P-G  delete `, liveView.surface?.unsafeCValue == surface` from the
