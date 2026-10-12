@@ -634,11 +634,17 @@ fold does not close: `-f` script bodies, interpreters outside the inline-program
 / process-substitution script operands, the xargs spellings the carrier table does not
 resolve (`exec`/`ionice`/`chrt`/`taskset`, a long-option abbreviation, a
 grouped command position `(xargs …)`, `xargs … < pf`, an untraced
-`$`-word on a joined line, a nested assignment body — the measured
+`$`-word on a joined line — including the indirect expansion `${!v}` — a
+nested assignment body, and a split string assembled at runtime
+(`env -S "$CMD …"`) — the measured
 wrapper/assignment/continuation spellings (`env xargs`, `FOO=1 xargs`,
 `nice xargs`, `command xargs`, `time xargs`, a trailing-`|` or backslash
 multi-line pipeline) now refuse since #350f, and the bare
-`… | xargs cp payload {}` form has refused since A13), the
+`… | xargs cp payload {}` form has refused since A13; the #350f fold
+round 1 additionally refuses the split-string quote decoding, the
+multi-hop pipe chain, the redirection-prefixed command position, the
+quote-close-then-pipe ordering, the substitution and compound-keyword
+command positions, and the unlisted valid long option fail-closed), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
@@ -677,9 +683,14 @@ string is assembled at runtime
 env file or a traced name is the inherited textual boundary); an argv
 operand fed on stdin behind an unlisted wrapper (`exec xargs`), a
 long-option abbreviation or a grouped command position (`(xargs …)`)
-still sits outside the carrier table (the listed wrappers, assignment
-prefixes and `|`/backslash continuations refuse since #350f; the bare
-`… | xargs cp payload {}` form refuses since A13);
+still sits outside the carrier table, and a split string assembled at
+runtime (`env -S "$CMD …"`; measured FLIP with `CMD=xargs`) is invisible
+to the literal word test; a valid unlisted long option of a listed
+wrapper (`env --ignore-environment`/`--chdir=DIR`/`--null`) refuses
+fail-closed rather than being parsed (the listed wrappers, assignment
+prefixes, redirection prefixes, quote-close pipes, multi-hop chains,
+substitution/compound positions and `|`/backslash continuations refuse
+since #350f; the bare `… | xargs cp payload {}` form refuses since A13);
 other
 argv write verbs that need verb-specific semantics are closed by A12
 (sed `-i`/`--in-place` (and its abbreviations)/`w` targets,
@@ -875,12 +886,17 @@ backtick; the per-line site also refuses a `$`-bearing upstream word the
 extractor cannot resolve, while the substitution-body site (issue #350,
 item 2's `$(…)`-nested spelling) drops that word catch so the real-tree
 witness `name="$(echo "$raw" | xargs)"` stays accepted; since #350f the
-effective command word is resolved through assignment prefixes and a
-fixture-bounded wrapper table (`env`/`nice`/`command`/`time`/`nohup`/
-`setsid`/`stdbuf`/`timeout`), an unparseable option after a recognized
-wrapper with an `xargs` word still unplaced refuses fail-closed, the two
-backslash joins and the trailing-`|` pipeline join feed the carrier with
-the sound predicates only, and `command -v`/`-V` stops the walk; the
+effective command word is resolved through assignment prefixes, the
+redirection prefixes and a fixture-bounded wrapper table (`env`/`nice`/
+`command`/`time`/`nohup`/`setsid`/`stdbuf`/`timeout`), an unparseable
+option after a recognized wrapper with an `xargs` word still unplaced
+refuses fail-closed (the split string's quotes are removed first, so
+`env -S 'x"args" …'` refuses), the two backslash joins and the
+trailing-`|` pipeline join feed the carrier with the sound predicates
+only, the pipe join walks multi-hop chains and reconstructs a
+quote-continuation logical line, and a substitution or compound-keyword
+command position carrying an `xargs` word refuses; `command -v`/`-V`
+stops the walk; the
 unlisted wrappers (`exec`/`ionice`/`chrt`/`taskset`), long-option
 abbreviations, the grouped command positions, the untraced `$`-word on a
 joined line and the
@@ -1075,8 +1091,23 @@ at 16, 64 and 64-pending-at-EOF lines), every one
 The former boundary item (`chain|dd|n8` closed, `n9+` open) is closed:
 `n9..n64` now join and are caught by the existing write detection, and a
 longer chain is refused fail-closed, not analysed; the remediation for an
-author is to split the chain into shorter logical lines.longer chain is refused fail-closed, not analysed; the remediation for an
 author is to split the chain into shorter logical lines.
+
+#350f fold round 1 (the closure-holes fold) closes the measured
+runtime-FLIP spellings adjacent to the #350f families: GNU `env -S`'s
+shell-style quote decoding (`env -S 'x"args" …'`), the multi-hop pipe
+chain (`… |` newline `cat |` newline `xargs …`), the redirection-prefixed
+command position (`> /dev/null xargs …`, `2> … xargs …`, `2>&1 xargs …`,
+`&> … xargs …`, `<&0 xargs …`), the pipe after a multiline quote closes on
+its line (`"pad` newline `" |` newline `xargs …`), the substitution
+command position (`$(echo xargs …)`), the compound-keyword command
+position (`if true; then xargs …; fi`, `for i in 1; do xargs …; done`),
+and the unlisted valid long option (`env --ignore-environment xargs …`,
+refused fail-closed). Both over-refusal controls are pinned
+(`env -S 'echo xargs'`, the blank-inflated pipe chain beyond the bound).
+Named residual: a split string assembled at runtime (`env -S "$CMD …"`)
+stays accepted and runtime-FLIPs (pinned by
+`accept-runid-github-env-write-xargs-env-split-string-variable`).
 
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
@@ -7595,7 +7626,8 @@ def _run_id_unaccounted_occurrence_refusal(
 # member ships at least one reject fixture and every option form the table
 # keeps ships a fixture. `exec`/`ionice`/`chrt`/`taskset`, long-option
 # abbreviations and the grouped command positions (`(xargs …)`,
-# `{ xargs …; }`) stay named residuals.
+# `{ xargs …; }`) stay named residuals, as does a split string assembled
+# at runtime (`env -S "$CMD …"`).
 _COMMAND_WRAPPERS = frozenset(
     {"env", "nice", "command", "time", "nohup", "setsid", "stdbuf", "timeout"}
 )
@@ -8541,9 +8573,10 @@ def _refuse_github_env_run_id_write(
             # `require_unresolved_word_catch=False` (sound predicates only)
             # because a joined upstream carrying a benign `$` word is the
             # same over-refusal class the catch already produces on a
-            # physical line, and the real-tree witness is a `find "$DIR" |
-            # xargs` join. Additive with the per-line call above, which
-            # keeps the catch.
+            # physical line, and the real-tree shape is a `find "$DIR" |
+            # xargs` join (`scripts/ci/check-isolated-deinit-census.sh`)
+            # that never reaches the carrier (no env-file mention).
+            # Additive with the per-line call above, which keeps the catch.
             for joined_text in (
                 _joined_continuation_text(lines, index),
                 _bash_joined_continuation_text(
