@@ -33,7 +33,7 @@ onto the upstream commit recorded in `BASE`**, plus the **iOS full-build restora
 - `src/Surface.zig` — `use_custom_io` config plumbing (IO-init branching)
 - `include/ghostty.h` — the 4 C symbols the app compiles against
 - `pkg/macos/iosurface/iosurface.zig`, `src/renderer/Metal.zig`, `src/renderer/metal/IOSurfaceLayer.zig`, `src/font/shaper/coretext.zig` — iOS renderer fixes the app relies on (row-bytes alignment, iOS present path, CFReleaseThread disabled on iOS)
-- `src/build/GhosttyXCFramework.zig`, `src/build/MetallibStep.zig`, `src/build/Config.zig`, `pkg/macos/iosurface/iosurface.zig`, `macos/build.nu`, `HACKING.md`, `nix/devShell.nix` — **iOS build restoration**: upstream commit `7a171895d` ("build: stop building Ghostty.xcframework for iOS", 2026-08-12) deleted the iOS/iOS-simulator slices from the xcframework, the MetallibStep iOS branch, and `osVersionMin(.ios)`. VVTerm needs all three slices, so the patch carries the reverse of that commit. If a future upstream build refactor conflicts here, the probe alarms — re-reverse `7a171895d` or hand-merge
+- `src/build/GhosttyXCFramework.zig`, `src/build/MetallibStep.zig`, `src/build/Config.zig`, `pkg/macos/build.zig`, `pkg/macos/iosurface/iosurface.zig`, `macos/build.nu`, `HACKING.md`, `nix/devShell.nix` — **iOS build restoration**: upstream commit `7a171895d` ("build: stop building Ghostty.xcframework for iOS", 2026-08-12) deleted the iOS/iOS-simulator slices from the xcframework, the MetallibStep iOS branch, and `osVersionMin(.ios)`. VVTerm needs all three slices, so the patch carries the reverse of that commit plus the `-fblocks` flag the restored iOS slices need after upstream moved `pkg/macos/build.zig` to `translate_c.addImportToModule` (the old code passed `-fblocks` unconditionally). If a future upstream build refactor conflicts here, the probe alarms — re-reverse `7a171895d` or hand-merge
 
 Excluded deliberately (do not re-add):
 
@@ -80,7 +80,6 @@ cd gv
 git checkout <new-upstream-main-sha>
 git apply --3way /path/to/custom-io.patch   # most hunks apply cleanly
 git add -A                                  # stage cleanly-applied files
-git checkout -- build.zig.zon macos/        # re-exclude demo app + dep URL swap
 ```
 
 Hand-merge the known conflict spots:
@@ -101,23 +100,42 @@ Hand-merge the known conflict spots:
    in `src/termio/backend.zig` and `src/termio/Thread.zig` and check every arm.
 4. **libghostty C API signature drift (app-side)** — when the probe build succeeds but the
    unit suite fails to compile, upstream changed a C API the app compiles against.
-   Known: `ghostty_runtime_read_clipboard_cb` returns `bool` since ~2026-08-12 (was `void`);
-   `VVTerm/GhosttyTerminal/Ghostty.App.swift`'s `readClipboard` returns `Bool` (false when
-   the clipboard can't be read, so paste bindings fall through), and the three vendored
-   `Vendor/libghostty/{,ios/,ios-simulator/}include/ghostty.h` typedefs are kept in sync
-   (the app targets the new API on main even before a bump merges; the old lib ignores the
-   return value — ABI-safe).
+   Known: the Kitty-clipboard series redesigned the runtime clipboard contract
+   (`read_clipboard_cb` now returns a `ghostty_clipboard_read_result_e` and takes
+   `mimes`/`mimes_len`/`list`; `confirm_read_clipboard_cb` takes a
+   `ghostty_clipboard_confirm_s*`; `complete_clipboard_request` takes a
+   `ghostty_clipboard_complete_s*`; new `deny_clipboard_request`;
+   `ghostty_clipboard_content_s` gained `len`). VVTerm ported the app to that contract
+   (`VVTerm/GhosttyTerminal/Ghostty.App.swift`), and the three vendored
+   `Vendor/libghostty/{,ios/,ios-simulator/}include/` header trees are kept in sync
+   (the app targets the new API on main even before a bump merges; the old lib fails to
+   link on the new-only symbols — the probe's `unit-suite`/bump `build` is the oracle).
+5. **`src/termio/message.zig`** — upstream keeps adding payloads/consts to the
+   `Message` union (e.g. `KittyClipboardGrant`). Zig rejects declarations between
+   container fields, so the fork's `set_write_callback: SetWriteCallback,` field must sit
+   after the last upstream field (`write_alloc`) and before the first declaration —
+   never after a `pub const`.
+6. **`pkg/macos/build.zig`** — the restored iOS slices need `-fblocks` on the
+   `translate_c.addImportToModule` call (`.extra_args = &.{"-fblocks"}`): upstream's
+   refactor dropped the old unconditional `macos_c.run.addArg("-fblocks")`, and Aro does
+   not enable blocks for every Darwin target, so the translate-c step otherwise fails
+   on the CoreGraphics headers (`blocks are not enabled`).
 
 Then:
 
 ```sh
-git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/iosurface/iosurface.zig \
+git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/build.zig pkg/macos/iosurface/iosurface.zig \
   src/Surface.zig src/apprt/embedded.zig src/font/shaper/coretext.zig src/renderer/Metal.zig \
   src/renderer/metal/IOSurfaceLayer.zig src/termio.zig src/termio/Callback.zig \
   src/termio/Thread.zig src/termio/backend.zig src/termio/message.zig \
   src/build/Config.zig src/build/GhosttyXCFramework.zig src/build/MetallibStep.zig \
   HACKING.md macos/build.nu nix/devShell.nix \
   > scripts/patches/ghostty/custom-io.patch
+```
+
+The list is the **19-path set** (18 fork files + `pkg/macos/build.zig`);
+`pkg/macos/build.zig` carries only the iOS `-fblocks` restoration, so a future rebase
+must keep that hunk when upstream's translate-c call changes again.
 echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
 
 **Regeneration gotcha**: `src/termio/Callback.zig` is a NEW file (not in upstream) —
@@ -334,9 +352,12 @@ restored 2026-08-14 (pi-napkin + vvterm):
 Manual dispatch inputs: `force_rebuild` (skip the no-op gate), `create_bump_pr`
 (skip PR creation — useful for validation runs).
 
-Dispatch `ref` restriction: the workflow file must exist on `main` to be dispatched
-at all (GitHub's dispatch API resolves the workflow against the default branch).
-Validation runs dispatch from `main` with `force_rebuild=true, create_bump_pr=false`.
+Dispatch `ref` restriction: the workflow file must exist on the **dispatched ref**
+(GitHub also requires it to exist on the default branch to be dispatchable at all, but
+the run uses the workflow definition from the dispatched ref). The checkout step has no
+`ref:`, so it defaults to `github.ref` — the dispatch ref — and `scripts/build.sh` /
+`scripts/ci/ghostty-bump-pr.sh` come from that checkout. Validation runs dispatch from
+`main` with `force_rebuild=true, create_bump_pr=false`.
 
 **Dispatch booleans**: use the REST API with real JSON booleans —
 `gh workflow run -f create_bump_pr=false` is unreliable (gh CLI drops/coerces the
