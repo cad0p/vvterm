@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 897
-    private static let expectedBaseVerdictCases = 466
+    private static let expectedManifestCases = 922
+    private static let expectedBaseVerdictCases = 491
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1145,6 +1145,36 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-shell-delegation-sourced-cd.yml",
         "reject-shell-delegation-sourced-cd-nested.yml",
         "reject-shell-delegation-cd-deferred-function-split.yml",
+        // #350f fold round 1 (F1-F7): the split-string quote decoding,
+        // the multi-hop chain, the redirection-prefixed positions, the
+        // quote-close pipe, the substitution/compound command positions,
+        // the two over-refusal pins, the unlisted-long-option pin, the
+        // `$CMD` split-string residual accept and the benign controls.
+        "reject-runid-github-env-write-xargs-env-split-string-quote-double.yml",
+        "reject-runid-github-env-write-xargs-env-split-string-quote-single.yml",
+        "accept-runid-github-env-write-xargs-env-split-string-variable.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-multihop.yml",
+        "reject-runid-github-env-write-xargs-multiline-pipe-multihop-env.yml",
+        "accept-runid-github-env-write-xargs-multiline-pipe-multihop-literal.yml",
+        "reject-runid-github-env-write-xargs-redirection-prefixed.yml",
+        "reject-runid-github-env-write-xargs-redirection-fd-prefixed.yml",
+        "reject-runid-github-env-write-xargs-redirection-fd-dup.yml",
+        "reject-runid-github-env-write-xargs-redirection-amp.yml",
+        "reject-runid-github-env-write-xargs-redirection-stdin-dup.yml",
+        "reject-runid-github-env-write-xargs-redirection-sameline.yml",
+        "accept-runid-github-env-write-xargs-redirection-prefixed-literal.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-close-pipe.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-close-pipe-single.yml",
+        "reject-runid-github-env-write-xargs-multiline-quote-close-pipe-ansic.yml",
+        "reject-runid-github-env-write-xargs-substitution-command-position.yml",
+        "reject-runid-github-env-write-xargs-substitution-command-position-direct.yml",
+        "accept-runid-github-env-write-xargs-substitution-command-position-literal.yml",
+        "reject-runid-github-env-write-xargs-compound-then.yml",
+        "reject-runid-github-env-write-xargs-compound-do.yml",
+        "accept-runid-github-env-write-xargs-compound-literal.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-env-split-string-noncommand.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-multiline-pipe-bound.yml",
+        "reject-runid-github-env-write-xargs-env-unlisted-long-option.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).
