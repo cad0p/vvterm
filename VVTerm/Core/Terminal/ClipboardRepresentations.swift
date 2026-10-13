@@ -102,12 +102,26 @@ enum ClipboardURIList {
     }
 }
 
-/// Upstream's path escaping (`Ghostty.Shell.escape`).
+/// Upstream's path escaping (`Ghostty.Shell.escape`), with one deliberate
+/// local divergence: `escapeCharacters` also escapes CR. The divergence is
+/// recorded on the set itself and tracked by #442 for the core-side gap.
 enum ClipboardPathEscape {
-    /// The escape set in upstream's written order, `\` first. `\n` is not in
-    /// the set by design: newline safety is owned by the core's unsafe-paste
-    /// check and the #327 confirmation prompt, not by the escape.
-    static let escapeCharacters = "\\ ()[]{}<>\"'`!#$&;|*?\t"
+    /// The escape set in upstream's written order, `\` first — upstream's 22
+    /// characters plus a local CR, 23 in total. `\` stays first because the
+    /// single pass depends on it iterating before every character it inserts.
+    ///
+    /// `\n` is not in the set by design: newline safety is owned by the
+    /// core's unsafe-paste check and the #327 confirmation prompt, not by the
+    /// escape. CR is, deliberately: the core's `isSafe`/`isSafeWith` does not
+    /// treat CR as unsafe (unlike `\n`), and the app has no pre-paste hook to
+    /// rely on — `confirm_read_clipboard` fires only after `UnsafePaste` or
+    /// `UnauthorizedPaste` — so the app-side lever is the representation it
+    /// composes. `\`+CR neutralizes the line break: it is read as a line
+    /// continuation, or as readline's accept-line burning a trailing
+    /// backslash. Residual: the pasted word is the CR-less path, and only the
+    /// user's Enter submits it. The same gap for arbitrary text pastes is
+    /// tracked by #442.
+    static let escapeCharacters = "\\ ()[]{}<>\"'`!#$&;|*?\t\r"
 
     /// Single pass over the escape set in written order: every occurrence of
     /// each character becomes a backslash plus that character. Because `\`
