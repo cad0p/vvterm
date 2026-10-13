@@ -181,11 +181,12 @@ private struct PhaseChainGateOverlay: View {
         if coordinator.state == .awaitingApproval {
             Button("Release Bootstrap Approval") {
                 // #444 A3: state-gated so the counter is tap-specific. The
-                // overlay's own rendering gate leaves a sub-frame window in
-                // which a delivered-but-late action could still run after the
+                // mock checks its deadline only at the loop condition after
+                // each 50 ms park sleep, so a delivered-but-late action can
+                // still observe `.awaitingApproval` for up to ~50 ms past the
                 // mock's 30 s self-release; re-checking the state at action
-                // time closes that arm (the residual window is recorded in
-                // the #444 walk).
+                // time closes the post-state-write arm, and the residual is
+                // bounded by that cadence (recorded in the #444 walk).
                 if coordinator.state == .awaitingApproval, coordinator.releaseApproval() {
                     gateReleases += 1
                 }
