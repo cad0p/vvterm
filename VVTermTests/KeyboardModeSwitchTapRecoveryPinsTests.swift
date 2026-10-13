@@ -25,21 +25,28 @@
 //        `coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()`
 //        — zero `isHittable` reads, zero bare `element.tap()`/`button.tap()`;
 //    P2  the retry is marker-keyed, ordered and bounded: the attempt loop is
-//        the literal `for attempt in 1...3`, and the anchors appear in order
+//        the literal `for attempt in 1...3`, the anchors appear in order
 //        (marker capture before the coordinate tap -> marker-change predicate
-//        -> bounded surface wait -> terminal assertion); the helper parses
-//        exactly one boundary-safe `harnessMode=` prefix;
+//        -> bounded surface wait -> terminal assertion), the helper parses
+//        exactly one boundary-safe `harnessMode=` prefix, the marker-change
+//        predicate rejects a captured `unknown` baseline, the changed-marker
+//        branch keeps the surface wait (`if surface.waitForExistence … {
+//        return }` else `break` into the terminal assertion), and the helper
+//        body holds exactly one `return`;
 //    P3  the helper keeps exactly one terminal assertion and its message
 //        carries `markerBefore=`, `markerAfter=`, `frame=` and `exists=`
 //        (no `isHittable` token);
-//    P4  the keyboard harness emits `harnessMode=` in BOTH `diagnostics =`
-//        assignments (`showsTerminal ? "terminal" : "other"` derivation), and
-//        the split harness emits it zero times;
+//    P4  the keyboard harness emits `harnessMode=` and the swallow witness
+//        `swallowedModeTap=` in BOTH `diagnostics =` assignments
+//        (`showsTerminal ? "terminal" : "other"` derivation), and the split
+//        harness emits neither;
 //    P5  the swallow launch literal appears exactly once per file (the
-//        `launchKeyboardHarness` writer and the harness reader),
-//        `testKeyboardIsScopedToTerminalSurface` launches with it, and the
-//        harness file's first effective line is the `#if os(iOS) && DEBUG`
-//        gate.
+//        `launchKeyboardHarness` writer and the harness reader), the writer
+//        appends it under the direct `if swallowsFirstModeTap` guard, the
+//        two mode buttons both `guard consumeModeTap()`, and
+//        `testKeyboardIsScopedToTerminalSurface` launches with the literal
+//        and asserts the `swallowedModeTap=true` witness; the harness file's
+//        first effective line stays the `#if os(iOS) && DEBUG` gate.
 //
 //  All assertions are SLICE-scoped: the helper body is brace-matched, the
 //  harness marker is scoped to `TerminalKeyboardUITestHarness`'s
@@ -59,16 +66,24 @@
 //  code+pin edit (inherent to update-on-purpose pins — the bound `3` and the
 //  field tokens are update-on-purpose); the marker derivation is pinned as
 //  the exact `showsTerminal ? "terminal" : "other"` spelling, so an
-//  equivalent re-expression reds rather than silently diverging; and a
-//  `func` spelling the brace matcher cannot follow (e.g. braces inside the
-//  body's string literals) reds as a missing slice rather than passing.
+//  equivalent re-expression reds rather than silently diverging; the
+//  first-wins marker parse over the whole label could alias a future
+//  `selText=` value that spells the literal token (unreachable today — the
+//  recovery's callers never select text); the split-harness zero-token check
+//  is bounded by the next `struct`, so a marker added in an extension of the
+//  split harness placed after it would escape; and a `func` spelling the
+//  brace matcher cannot follow (e.g. braces inside the body's string
+//  literals) reds as a missing or oversized slice rather than passing.
 //
-//  This is the EIGHTH copy of the `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT`
-//  source-scan idiom; #450 tracks the shared-scanner extraction. The #444
-//  note's "re-evaluate at the eighth" trigger is discharged by an explicit
-//  decision to defer again: the #441 plan §4 specifies a self-contained pin
-//  suite, and a shared scanner would refactor six landed pin suites inside a
-//  flake fix. Recorded as a residual on the PR.
+//  This is one more copy of the `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT`
+//  source-scan idiom (the #450 census lists 7; this worktree carries 33
+//  `VVTermTests` files with the `VVTERM_PINS_SOURCE_ROOT` + `repositoryRoot()`
+//  shape, 24 with `strippingComments` and 20 with the `VVTerm.xcodeproj`
+//  walk), so the ordinal framing is dropped; #450 tracks the shared-scanner
+//  extraction. The #444 note's "re-evaluate at the eighth" trigger is
+//  discharged by an explicit decision to defer again: the #441 plan §4
+//  specifies a self-contained pin suite, and a shared scanner would refactor
+//  six landed pin suites inside a flake fix. Recorded as a residual on the PR.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as
@@ -90,6 +105,7 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
 
     private static let helperName = "tapModeSwitchAndWaitForSurface"
     private static let markerToken = "harnessMode="
+    private static let witnessToken = "swallowedModeTap="
     private static let coordinateTapToken =
         "coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()"
     private static let swallowToken = "--vvterm-ui-test-mode-buttons-swallow-first-tap"
@@ -153,6 +169,27 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
             Self.count(of: "waitForHarnessModeChange(from: markerBefore", in: body) == 1,
             "the retry must be keyed on exactly one marker-change predicate (issue #441)"
         )
+        #expect(
+            !body.contains("_ = surface.waitForExistence"),
+            "the changed-marker branch must not discard the bounded surface wait (`_ = surface.waitForExistence`) and return — that returns green with the surface unverified (issue #441)"
+        )
+        #expect(
+            body.contains("if surface.waitForExistence(timeout: timeout) { return } break"),
+            "the changed-marker branch must keep the surface wait: `if surface.waitForExistence(timeout: timeout) { return }` when it appeared, else `break` into the terminal assertion (issue #441)"
+        )
+        let returns = Self.count(of: "return", in: body)
+        #expect(
+            returns == 1,
+            "the helper body must contain exactly one `return` (the landed-switch early return) — found \(returns); the changed-marker fallback must not add a second success path (issue #441)"
+        )
+        let predicateBody = try Self.waitForHarnessModeChangeBody()
+        #expect(
+            Self.count(
+                of: "guard previous != \"unknown\" else { return false }",
+                in: predicateBody
+            ) == 1,
+            "the marker-change predicate must reject a captured `unknown` baseline (exactly one `guard previous != \"unknown\" else { return false }`) — otherwise a lost tap whose marker was unreadable reads as landed and skips the retry (issue #441)"
+        )
         let readerBody = try Self.readerBody()
         #expect(
             Self.count(of: "hasPrefix(\"\(Self.markerToken)\")", in: readerBody) == 1,
@@ -204,6 +241,11 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
             derived == assignments,
             "every marker emission must be derived from `showsTerminal` (found \(derived) of `\(derivation)` for \(assignments) assignments) (issue #441)"
         )
+        let witnessMarkers = Self.count(of: Self.witnessToken, in: refreshBody)
+        #expect(
+            witnessMarkers == assignments,
+            "every `diagnostics =` assignment in the keyboard harness must emit `\(Self.witnessToken)` — found \(witnessMarkers) for \(assignments) assignments; the witness is what makes the swallow control self-proving (issue #441)"
+        )
         let segments = refreshBody.components(separatedBy: "diagnostics =").dropFirst()
         for segment in segments {
             #expect(
@@ -212,9 +254,16 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
             )
         }
         let splitSlice = try Self.splitHarnessSlice(in: source)
+        // Boundary: the split slice ends at the next `struct`, so a marker
+        // added in an extension of the split harness placed after that struct
+        // would escape these zero-token checks (issue #441).
         #expect(
             !splitSlice.contains(Self.markerToken),
             "the split harness must not emit `\(Self.markerToken)` — the marker is the keyboard harness' observable only (issue #441)"
+        )
+        #expect(
+            !splitSlice.contains(Self.witnessToken),
+            "the split harness must not emit `\(Self.witnessToken)` — the swallow witness is the keyboard harness' observable only (issue #441)"
         )
     }
 
@@ -232,6 +281,12 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
             launcherBody?.contains(Self.swallowLiteral) == true,
             "the swallow launch literal must live in `launchKeyboardHarness` (issue #441)"
         )
+        let launcherNeedle =
+            "if swallowsFirstModeTap { app.launchArguments.append(\(Self.swallowLiteral)) }"
+        #expect(
+            launcherBody?.contains(launcherNeedle) == true,
+            "the swallow literal must be appended under the direct `if swallowsFirstModeTap` guard — an inverted, negated or indirect condition silently disables the only deterministic retry coverage (issue #441)"
+        )
         let testBody = Self.functionBody(
             named: "testKeyboardIsScopedToTerminalSurface",
             in: uiSource
@@ -239,6 +294,10 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
         #expect(
             testBody?.contains("launchKeyboardHarness(swallowsFirstModeTap: true)") == true,
             "`testKeyboardIsScopedToTerminalSurface` must launch with the swallow control — without it the retry + marker + coordinate-tap path has no deterministic CI coverage (issue #441)"
+        )
+        #expect(
+            testBody?.contains("\(Self.witnessToken)true") == true,
+            "`testKeyboardIsScopedToTerminalSurface` must assert the runtime witness `\(Self.witnessToken)true` — without it a launch-argument delivery failure silently degrades to the normal path with a green test (issue #441)"
         )
 
         let harnessSource = try Self.normalizedSource(Self.harnessPath)
@@ -250,6 +309,11 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
         #expect(
             keyboardSlice.contains(Self.swallowLiteral),
             "the swallow reader must live in `TerminalKeyboardUITestHarness` (issue #441)"
+        )
+        let consumeGuards = Self.count(of: "guard consumeModeTap() else { return }", in: keyboardSlice)
+        #expect(
+            consumeGuards == 2,
+            "the two mode buttons (Terminal/Other) must both call `guard consumeModeTap() else { return }` — found \(consumeGuards); removing either disables the deterministic swallow coverage (issue #441)"
         )
         let firstLine = try Self.firstEffectiveLine(of: Self.harnessPath)
         #expect(
@@ -277,6 +341,18 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
         guard let body = functionBody(named: "harnessMode", in: source) else {
             throw PinFailure(
                 "could not extract the `harnessMode` reader body from \(uiTestsPath) — re-derive this pin (issue #441)"
+            )
+        }
+        return body
+    }
+
+    /// The body of the `waitForHarnessModeChange` predicate that owns the
+    /// `unknown`-baseline guard (issue #441).
+    private static func waitForHarnessModeChangeBody() throws -> String {
+        let source = try normalizedSource(uiTestsPath)
+        guard let body = functionBody(named: "waitForHarnessModeChange", in: source) else {
+            throw PinFailure(
+                "could not extract the `waitForHarnessModeChange` predicate body from \(uiTestsPath) — re-derive this pin (issue #441)"
             )
         }
         return body
