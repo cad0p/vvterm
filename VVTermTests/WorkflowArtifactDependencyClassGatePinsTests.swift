@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 968
-    private static let expectedBaseVerdictCases = 531
+    private static let expectedManifestCases = 985
+    private static let expectedBaseVerdictCases = 542
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1229,6 +1229,26 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "accept-runid-github-env-write-xargs-substitution-command-word.yml",
         "accept-runid-github-env-write-xargs-locale-quoted-command-word.yml",
         "reject-runid-github-env-write-xargs-redirection-fd-input.yml",
+        // #350f fold round 3: the redirection/fd-prefix family closed
+        // structurally (here-string `<<<`, spaced `<<-`, the unresolved-
+        // command backstop) plus its benign twins.
+        "reject-runid-github-env-write-xargs-redirection-herestring-fd2.yml",
+        "reject-runid-github-env-write-xargs-redirection-herestring-fd3.yml",
+        "reject-runid-github-env-write-xargs-redirection-herestring-brace-fd.yml",
+        "reject-runid-github-env-write-xargs-redirection-herestring-join.yml",
+        "reject-runid-github-env-write-xargs-redirection-herestring-chain-hop.yml",
+        "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd2.yml",
+        "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd3.yml",
+        "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-brace-fd.yml",
+        "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-join.yml",
+        "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-chain-hop.yml",
+        "reject-runid-github-env-write-xargs-redirection-unresolved-command.yml",
+        "accept-runid-github-env-write-xargs-redirection-herestring-literal.yml",
+        "accept-runid-github-env-write-xargs-redirection-herestring-non-xargs-command.yml",
+        "accept-runid-github-env-write-xargs-redirection-heredoc-spaced-literal.yml",
+        "accept-runid-github-env-write-xargs-redirection-stdin-replaced-herestring.yml",
+        "accept-runid-github-env-write-xargs-redirection-stdin-replaced-heredoc.yml",
+        "accept-runid-github-env-write-xargs-redirection-definite-command-word.yml",
     ]
 
     /// Issue #399: the delegated-script fixtures (`extra_files` sources).

@@ -9125,4 +9125,189 @@ CASES = [
         "diagnostics": [
         ]
     },
+    # ------------------------------------------------------------------
+    # #350f fold round 3: the redirection/fd-prefix family (here-string
+    # `<<<`, spaced `<<-`, the structural unresolved-command backstop).
+    # ------------------------------------------------------------------
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-herestring-fd2",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-fd2.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-fd2.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-herestring-fd3",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-fd3.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-fd3.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-herestring-brace-fd",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-brace-fd.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-brace-fd.yml:26: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-herestring-join",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-join.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-join.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-herestring-chain-hop",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-chain-hop.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-herestring-chain-hop.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd2",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd2.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd2.yml:29: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd3",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd3.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-fd3.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-brace-fd",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-brace-fd.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-brace-fd.yml:27: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-join",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-join.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-join.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-chain-hop",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-chain-hop.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-chain-hop.yml:28: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-xargs-redirection-unresolved-command",
+        "files": [
+            "reject-runid-github-env-write-xargs-redirection-unresolved-command.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-xargs-redirection-unresolved-command.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job carries an `xargs` word (`xargs`) in a command position the extractor cannot resolve (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-herestring-literal",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-herestring-literal.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-herestring-non-xargs-command",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-herestring-non-xargs-command.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-heredoc-spaced-literal",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-heredoc-spaced-literal.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-stdin-replaced-herestring",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-stdin-replaced-herestring.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-stdin-replaced-heredoc",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-stdin-replaced-heredoc.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-xargs-redirection-definite-command-word",
+        "files": [
+            "accept-runid-github-env-write-xargs-redirection-definite-command-word.yml"
+        ],
+        "exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
 ]
