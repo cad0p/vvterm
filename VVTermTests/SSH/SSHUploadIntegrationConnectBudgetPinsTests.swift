@@ -692,12 +692,6 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
 
     // MARK: - Fixtures
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     /// The repository root, derived by walking up from this file's location
     /// (`VVTermTests/SSH/SSHUploadIntegrationConnectBudgetPinsTests.swift`)
     /// until `VVTerm.xcodeproj` is found.

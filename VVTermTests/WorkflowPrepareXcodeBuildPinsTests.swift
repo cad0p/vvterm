@@ -742,12 +742,6 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         return nil
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     /// The one step containing `needle`, or a fail-closed `PinFailure`.
     /// Content signatures (not step names) identify steps, so a benign rename
     /// of a step stays green; a deleted or duplicated step reds.

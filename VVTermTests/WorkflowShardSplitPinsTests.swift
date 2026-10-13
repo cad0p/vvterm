@@ -1376,12 +1376,6 @@ struct WorkflowShardSplitPinsTests {
 
     // MARK: - Filesystem / shared idiom
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     private static func workflowSource(_ relativePath: String) throws -> String {
         let url = try repositoryRoot().appendingPathComponent(relativePath)
         do {

@@ -162,12 +162,6 @@ struct WorkflowArtifactDependencyPinsTests {
         var text: String { lines.joined(separator: "\n") }
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     private static func workflowSource() throws -> String {
         let url = try repositoryRoot().appendingPathComponent(workflowPath)
         do {

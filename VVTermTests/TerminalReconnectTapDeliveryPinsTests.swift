@@ -618,9 +618,4 @@ struct TerminalReconnectTapDeliveryPinsTests {
         return result
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
 }

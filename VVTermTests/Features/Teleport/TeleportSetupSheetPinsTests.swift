@@ -46,11 +46,6 @@ import Testing
 @MainActor
 struct TeleportSetupSheetPinsTests {
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-        init(_ description: String) { self.description = description }
-    }
-
     // MARK: - Paths
 
     private static let sidebarPath = "VVTerm/Features/Servers/UI/Sidebar/ServerSidebarView.swift"

@@ -558,12 +558,6 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         return lines[start..<end].joined(separator: "\n")
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     private static func fixtureData(_ name: String) throws -> Data {
         let url = try repositoryRoot()
             .appendingPathComponent(fixturesDirectory)

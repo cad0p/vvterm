@@ -1873,12 +1873,6 @@ struct WorkflowXcodebuildFlagPinsTests {
         }
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     /// Slices one top-level job block out of a workflow by its exact
     /// `  <name>:` key line (indent 2). Fail-closed text heuristic: a quoted
     /// or flow-style spelling, a duplicate job key, or a missing block throws

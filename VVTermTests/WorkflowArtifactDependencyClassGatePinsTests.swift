@@ -1728,12 +1728,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         var text: String { lines.joined(separator: "\n") }
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     private static func workflowSource() throws -> String {
         try source(workflowPath)
     }
