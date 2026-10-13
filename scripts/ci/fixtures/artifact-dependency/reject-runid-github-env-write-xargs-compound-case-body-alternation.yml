@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the `x|y)` pattern alternation splits the pattern list at
+# the `|` token, so the leading segments are rejoined until the
+# terminator; the body carrier refuses (issue #350f fold round 4;
+# base ACCEPT, runtime FLIP).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" | case x in x|y) xargs -I{} cp payload {};; esac
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

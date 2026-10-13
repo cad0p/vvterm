@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 986
-    private static let expectedBaseVerdictCases = 543
+    private static let expectedManifestCases = 1013
+    private static let expectedBaseVerdictCases = 570
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1172,6 +1172,46 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-xargs-compound-then.yml",
         "reject-runid-github-env-write-xargs-compound-do.yml",
         "accept-runid-github-env-write-xargs-compound-literal.yml",
+        // #350f fold round 4: the compound-condition command position
+        // (`if`/`while`/`until` conditions the pipe feeds, with the
+        // wrapper, negation, redirection, substitution and pipe-hop
+        // spellings), the two named pipe-hop over-refusal pins, and the
+        // three benign twins (literal upstream, a definite non-carrier
+        // condition command, and the here-string target the backstop no
+        // longer reads as a command position).
+        "reject-runid-github-env-write-xargs-compound-condition-if.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-while.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-until.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-env.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-env-until.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-bang-env.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-herestring.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-dup.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-cmdsub.yml",
+        "reject-runid-github-env-write-xargs-compound-condition-hop.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-pipe-hop-non-passthrough.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-pipe-hop-quoted-middle.yml",
+        "accept-runid-github-env-write-xargs-compound-condition-literal.yml",
+        "accept-runid-github-env-write-xargs-compound-condition-non-xargs.yml",
+        "accept-runid-github-env-write-xargs-redirection-herestring-target.yml",
+        // #350f fold round 4, second block: the nested command-position
+        // substitutions in compound bodies/continuations (`then`/`elif`/
+        // `do $(xargs …)`), the `case` pattern-body command position
+        // (`x)`, `(x)`, `x|y)`, the `;;`-separated later branch, and the
+        // `$(xargs …)` body), and the two named residual pins
+        // (argument-position substitution, multiline compound body).
+        "reject-runid-github-env-write-xargs-compound-body-cmdsub-then.yml",
+        "reject-runid-github-env-write-xargs-compound-body-cmdsub-elif.yml",
+        "reject-runid-github-env-write-xargs-compound-body-cmdsub-do.yml",
+        "accept-runid-github-env-write-xargs-compound-body-cmdsub-non-xargs.yml",
+        "reject-runid-github-env-write-xargs-compound-case-body.yml",
+        "reject-runid-github-env-write-xargs-compound-case-body-hop.yml",
+        "reject-runid-github-env-write-xargs-compound-case-body-cmdsub.yml",
+        "reject-runid-github-env-write-xargs-compound-case-body-alternation.yml",
+        "reject-runid-github-env-write-xargs-compound-case-body-branch.yml",
+        "accept-runid-github-env-write-xargs-compound-case-body-non-xargs.yml",
+        "accept-runid-github-env-write-xargs-substitution-argument-position.yml",
+        "accept-runid-github-env-write-xargs-compound-multiline-body.yml",
         "reject-overrefusal-runid-github-env-write-xargs-env-split-string-noncommand.yml",
         "reject-overrefusal-runid-github-env-write-xargs-multiline-pipe-bound.yml",
         "reject-runid-github-env-write-xargs-env-unlisted-long-option.yml",
