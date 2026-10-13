@@ -30,10 +30,10 @@
 //    2. `axWaitBudget` is the only `TimeInterval` constant and its literal is
 //       30; no helper call carries a `budget:` token except the five
 //       enumerated non-carrier probe sites, each keyed on its frozen
-//       `(identifier, reason)` pair at the pre-existing 5 s (the plan §5
-//       property 2 resolution of the §3 A1 scope rule), and a helper's own
-//       `budget:` tokens are its signature plus `tapControl`'s delegated
-//       existence wait;
+//       `(helper, identifier, reason)` triple in the test body that owns it,
+//       at the pre-existing 5 s (the plan §5 property 2 resolution of the §3
+//       A1 scope rule), and a helper's own `budget:` tokens are its signature
+//       plus `tapControl`'s delegated existence wait;
 //    3. per wait helper: the deadline is textually bound to `budget`, the
 //       query is fresh INSIDE the loop, the pause is a `RunLoop` run (any
 //       value — 0.1 → 0.25 is an accepted variant), there is no
@@ -51,14 +51,20 @@
 //       child of the sheet `ZStack` (not inside `PhaseChainGateOverlay`),
 //       unconditionally.
 //
-//  SLICE RULE (plan §5 v4, CL-4): class-scope funcs anchor on
-//  `(?m)^    .*\bfunc\s+(\w+)` — EVERY class-indent line carrying a `func`
-//  keyword is collected, so `private static func`, `static private func`,
-//  `fileprivate func`, same-line `@MainActor private func` and any other
-//  modifier/attribute spelling are all caught; the extracted name multiset
-//  must equal the frozen helper ∪ test set, so an unrecognized spelling or
-//  an extra `func` reds closed rather than being skipped (closure lens CF-2
-//  folded the prior ordered-modifier regex). Test bodies on
+//  SLICE RULE (plan §5 v4, CL-4; closure re-check CG-1): funcs anchor on
+//  `(?m)^.*\bfunc\s+(\w+)` — EVERY line carrying a `func` keyword is
+//  collected at any indentation (column 0 and tabs included), so
+//  `private static func`, `static private func`, `fileprivate func`,
+//  same-line `@MainActor private func` and any other modifier/attribute
+//  spelling are all caught; the extracted name multiset must equal the
+//  frozen helper ∪ test set, so an unrecognized spelling or an extra `func`
+//  reds closed rather than being skipped (closure lens CF-2 folded the prior
+//  ordered-modifier regex; the <4-space/tab escape is closed by closure
+//  re-check CG-1). The wider net also scans string contents, so any `func <word>`
+//  token on a scanned line — a `"func ghost"` decoy or the token inside an
+//  `XCTAssert`/`XCTFail` message — is collected and reds the name-set
+//  reconcile; that over-collection is the fail-closed direction and is
+//  documented in the defeat list (closure re-check CG-3). Test bodies on
 //  `(?m)^    func (test\w+)\(`; a slice terminates at the EARLIEST of the
 //  next func anchor, the next test-body anchor, or the column-0 `}`. The v3
 //  rule (next helper or `}`) swallowed all three test bodies into the last
@@ -72,8 +78,14 @@
 //  string-literal decoy that satisfies a token check (the budget readers
 //  normalize whitespace around the label and colon — `budget\s*:`,
 //  `budget\s*:\s*([0-9.]+)` — but do not skip string literals, so a reason
-//  string spelling `budget: 5` reds the frozen pair/multiset checks rather
-//  than passing them; closure lens CF-1); the query receiver/type
+//  string spelling `budget: 5` reds the frozen triple/multiset checks rather
+//  than passing them; closure lens CF-1); the fail-closed over-collection
+//  surface: any `func <word>` token on a scanned line, INCLUDING inside a
+//  string literal at any indent, is collected as a class-scope func and reds
+//  the name-set reconcile (the cost of the broadened any-indent anchor;
+//  closure re-check CG-3) — a future edit that spells the token
+//  `func <word>` in an assertion message reds for a non-declaration, which is
+//  safe but noisy; the query receiver/type
 //  is unpinned (`app.buttons[…]` and
 //  `app.descendants(matching: .any)[…]` both satisfy the in-loop
 //  `[identifier]` check — the shard-3 class run is the oracle; impl lens 2
@@ -145,25 +157,49 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     /// The five frozen non-carrier probe call sites, each passing the
     /// pre-existing 5 s (plan §5 property 2 / §3 A1; CL-2). The multiset is
-    /// frozen as a secondary bound; the per-site binding below (probeBindings)
-    /// is what makes a compensating carrier↔probe budget move red (impl
-    /// lens 2 T2-1).
+    /// frozen as a secondary bound; the per-site binding below (probeBindings
+    /// plus probeBindingsPerTest) is what makes a compensating carrier↔probe
+    /// budget move, a reason-swap move or a probe relocation red (impl lens 2
+    /// T2-1; closure lens CF-3; closure re-check CG-2).
     private static let probeBudgetLiterals = ["5", "5", "5", "5", "5"]
 
-    /// The five frozen probe call sites, keyed on their `(identifier, reason)`
-    /// pair. The three A3 `gateReleases` probes share one pair; the
-    /// header-label and the bootstrapBegins probes have their own. A helper
-    /// call that carries any `budget:` token must carry `budget: 5` AND match
-    /// one of these pairs; the only other legal shape is a call with no
-    /// `budget:` token at all. Pair keying closes the reason-swap arm (a
-    /// carrier gains a probe reason while the real probe loses its budget)
-    /// that the reason-only binding accepted (closure lens CF-3).
+    /// The five frozen probe call sites, keyed on their
+    /// `(helper, identifier, reason)` triple. The three A3 `gateReleases`
+    /// probes share one triple; the header-label and the bootstrapBegins
+    /// probes have their own. A helper call that carries any `budget:` token
+    /// must carry `budget: 5` AND match one of these triples; the only other
+    /// legal shape is a call with no `budget:` token at all. Triple keying
+    /// closes the reason-swap arm (a carrier gains a probe reason while the
+    /// real probe loses its budget; closure lens CF-3) and the carrier-
+    /// adoption arm (a carrier takes a probe's whole triple; closure re-check
+    /// CG-2); `probeBindingsPerTest` additionally binds each triple to the
+    /// test body that owns it (the relocation arm).
     private static let probeBindings = [
-        "Self.bootstrapHeaderIdentifier|bootstrap header must read 'Approve in Safari'",
-        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
-        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
-        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
-        "Self.bootstrapBeginsIdentifier|bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+        "waitForLabel|Self.bootstrapHeaderIdentifier|bootstrap header must read 'Approve in Safari'",
+        "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "waitForLabel|Self.bootstrapBeginsIdentifier|bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+    ]
+
+    /// The same five triples partitioned by owning test body (indexed like
+    /// `testNames`): test 1 carries the header label + the A3 gateReleases
+    /// probe, test 2 the A3 probe + bootstrapBegins, test 3 the A3 probe. A
+    /// budget-carrying call must match its owning body's frozen sub-multiset,
+    /// so a probe relocated to another test reds even when the flat triple
+    /// multiset and the token count still match (closure re-check CG-2).
+    private static let probeBindingsPerTest = [
+        [
+            "waitForLabel|Self.bootstrapHeaderIdentifier|bootstrap header must read 'Approve in Safari'",
+            "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        ],
+        [
+            "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+            "waitForLabel|Self.bootstrapBeginsIdentifier|bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+        ],
+        [
+            "waitForLabel|Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        ],
     ]
 
     /// `budget:` token counts per helper slice: the signature default and,
@@ -231,33 +267,51 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
             budgetLiterals.sorted() == Self.probeBudgetLiterals.sorted(),
             "the secondary literal multiset must stay the five frozen 5 s probes — found \(budgetLiterals.sorted()) (issue #444)"
         )
-        // Per-site binding (impl lens 2 T2-1, fail-closed): every helper call
-        // either carries `budget: 5` with an enumerated probe reason, or
-        // carries no `budget:` token at all.
-        let helperCalls = Self.helperCallArguments(in: testBodyText)
-        let budgetCalls = helperCalls.filter(Self.containsBudgetToken)
-        #expect(
-            budgetCalls.count == Self.probeBudgetLiterals.count,
-            "exactly \(Self.probeBudgetLiterals.count) helper calls may pass a `budget:` argument (the enumerated non-carrier probes) — found \(budgetCalls.count) budget-carrying calls (issue #444)"
-        )
-        var boundPairs: [String] = []
-        for call in budgetCalls {
+        // Per-site binding (impl lens 2 T2-1, closure lens CF-3, closure
+        // re-check CG-2; fail-closed): every helper call either carries
+        // `budget: 5` with an enumerated probe `(helper, identifier, reason)`
+        // triple owned by the test body that makes it, or carries no
+        // `budget:` token at all. The triple includes the helper-call name,
+        // and `probeBindingsPerTest` binds it to the owning test body, so a
+        // carrier cannot adopt a probe triple and a probe cannot be relocated
+        // to another test while the token count and literal multiset match.
+        var boundTriples: [String] = []
+        var budgetCallCount = 0
+        for (testIndex, testBody) in slices.testBodies.enumerated() {
+            var perTestTriples: [String] = []
+            for (helper, call) in Self.helperCallArguments(in: testBody) where Self.containsBudgetToken(call) {
+                budgetCallCount += 1
+                #expect(
+                    Self.budgetLiterals(in: call).contains("5"),
+                    "a call-site `budget:` must be the frozen 5 s probe literal (`budget: 5`, whitespace-insensitive) — found `\(call)` (issue #444)"
+                )
+                let identifier = Self.identifierArgument(in: call)
+                let reason = Self.reasonArgument(in: call)
+                let triple = (identifier != nil && reason != nil) ? "\(helper)|\(identifier!)|\(reason!)" : nil
+                if let triple {
+                    perTestTriples.append(triple)
+                    boundTriples.append(triple)
+                }
+                #expect(
+                    triple.map { Self.probeBindings.contains($0) } == true,
+                    "a budget-carrying helper call must be one of the five enumerated non-carrier probes, keyed on its `(helper, identifier, reason)` triple; a compensating carrier↔probe budget move, a reason-swap move or a carrier adopting a probe triple reds here even when the token count and literal multiset still match — found triple \(triple ?? "<missing>") in `\(call)` (test body \(testIndex + 1)) (impl lens 2 T2-1 / closure lens CF-3 / closure re-check CG-2) (issue #444)"
+                )
+            }
+            let frozenTriples = testIndex < Self.probeBindingsPerTest.count
+                ? Self.probeBindingsPerTest[testIndex]
+                : []
             #expect(
-                Self.budgetLiterals(in: call).contains("5"),
-                "a call-site `budget:` must be the frozen 5 s probe literal (`budget: 5`, whitespace-insensitive) — found `\(call)` (issue #444)"
-            )
-            let identifier = Self.identifierArgument(in: call)
-            let reason = Self.reasonArgument(in: call)
-            let binding = (identifier != nil && reason != nil) ? "\(identifier!)|\(reason!)" : nil
-            if let binding { boundPairs.append(binding) }
-            #expect(
-                binding.map { Self.probeBindings.contains($0) } == true,
-                "a budget-carrying helper call must be one of the five enumerated non-carrier probes, keyed on its `(identifier, reason)` pair; a compensating carrier↔probe budget move or a reason-swap move reds here even when the token count and literal multiset still match — found pair \(binding ?? "<missing>") in `\(call)` (impl lens 2 T2-1 / closure lens CF-3) (issue #444)"
+                perTestTriples.sorted() == frozenTriples.sorted(),
+                "test body \(testIndex + 1) must carry exactly its frozen budget-carrying probe triples (per-test site binding; a probe relocated to another test reds even when the flat multiset matches) — found \(perTestTriples.sorted()) (closure re-check CG-2) (issue #444)"
             )
         }
         #expect(
-            boundPairs.sorted() == Self.probeBindings.sorted(),
-            "the five budget-carrying helper calls must be exactly the frozen `(identifier, reason)` probe multiset (3× gateReleases, 1× header label, 1× bootstrapBegins) — found \(boundPairs.sorted()) (closure lens CF-3) (issue #444)"
+            budgetCallCount == Self.probeBudgetLiterals.count,
+            "exactly \(Self.probeBudgetLiterals.count) helper calls may pass a `budget:` argument (the enumerated non-carrier probes) — found \(budgetCallCount) budget-carrying calls (issue #444)"
+        )
+        #expect(
+            boundTriples.sorted() == Self.probeBindings.sorted(),
+            "the five budget-carrying helper calls must be exactly the frozen `(helper, identifier, reason)` probe multiset (3× gateReleases, 1× header label, 1× bootstrapBegins) — found \(boundTriples.sorted()) (closure lens CF-3 / closure re-check CG-2) (issue #444)"
         )
 
         for name in Self.helperNames {
@@ -558,16 +612,19 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
         let raw = Self.strippingComments(try Self.source(Self.classPath))
-        // Modifier-agnostic class-scope func anchors (impl lens 2 T2-4,
-        // closure lens CF-2): EVERY class-indent line carrying a `func`
-        // keyword is collected — `static private func`, `fileprivate func`
-        // and same-line `@MainActor private func` included — and the
-        // extracted name multiset must equal the frozen helper ∪ test set
-        // (fail closed on over-collection), so an unrecognized spelling reds
-        // rather than being skipped; a helper after the last test can no
-        // longer hide inside the last test body's slice.
+        // Modifier-agnostic, any-indent func anchors (impl lens 2 T2-4,
+        // closure lens CF-2, closure re-check CG-1): EVERY line carrying a
+        // `func` keyword is collected — `static private func`, `fileprivate
+        // func`, same-line `@MainActor private func`, a column-0 or
+        // tab-indented helper included — and the extracted name multiset must
+        // equal the frozen helper ∪ test set (fail closed on over-collection),
+        // so an unrecognized spelling reds rather than being skipped; a
+        // helper after the last test can no longer hide inside the last test
+        // body's slice. The wider net also collects a `func <word>` token
+        // inside a string literal (CG-3): fail-closed, and the reconcile
+        // names it.
         let funcs = try anchors(
-            pattern: #"(?m)^    .*\bfunc\s+(\w+)"#,
+            pattern: #"(?m)^.*\bfunc\s+(\w+)"#,
             in: raw
         )
         let closers = try anchors(pattern: #"(?m)^(\})"#, in: raw)
@@ -679,14 +736,16 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     }
 
     /// Extract every `tapControl(`, `waitForElement(` or `waitForLabel(` call
-    /// expression (name + balanced argument list) from a slice text. String
-    /// literals are skipped, so a `)` inside a `reason:` string does not close
-    /// the call early; this is what binds a `budget:` token to the call site
-    /// that carries it (impl lens 2 T2-1).
-    private static func helperCallArguments(in text: String) -> [String] {
+    /// expression (helper name + balanced argument list) from a slice text.
+    /// String literals are skipped, so a `)` inside a `reason:` string does not
+    /// close the call early; this is what binds a `budget:` token to the call
+    /// site that carries it (impl lens 2 T2-1). The helper name travels with
+    /// the call so the probe binding can be keyed on the
+    /// `(helper, identifier, reason)` triple (closure re-check CG-2).
+    private static func helperCallArguments(in text: String) -> [(helper: String, call: String)] {
         let names = ["tapControl", "waitForElement", "waitForLabel"]
         let characters = Array(text)
-        var calls: [String] = []
+        var calls: [(helper: String, call: String)] = []
         var index = 0
         while index < characters.count {
             var matched = false
@@ -717,7 +776,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
                     }
                     cursor += 1
                 }
-                calls.append(String(characters[index..<cursor]))
+                calls.append((helper: name, call: String(characters[index..<cursor])))
                 index = cursor
                 matched = true
                 break
