@@ -402,13 +402,24 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
             raw.range(of: "ZStack(alignment: .bottom)", range: sheetRange.upperBound..<raw.endIndex),
             "the sheet closure's `ZStack(alignment: .bottom)` could not be located (issue #444)"
         )
-        let identifierRange = try #require(
-            raw.range(of: Self.gateReleasesIdentifier, range: zstackRange.upperBound..<raw.endIndex),
-            "the gateReleases label must be a direct child of the sheet ZStack (after the ZStack, before any struct) (issue #444)"
-        )
         let overlayRange = try #require(
             raw.range(of: "private struct PhaseChainGateOverlay"),
             "`PhaseChainGateOverlay` could not be located — re-derive this pin (issue #444)"
+        )
+        // The label's own declaration: the identifier belongs to the
+        // gateReleases Text's modifier chain, and the element is not wrapped
+        // in an `if` (always rendered, not state-gated).
+        let labelTextRange = try #require(
+            raw.range(of: #"Text("gateReleases: \(gateReleases)")"#),
+            "the gateReleases `Text` declaration could not be located (issue #444)"
+        )
+        #expect(
+            labelTextRange.lowerBound > zstackRange.upperBound,
+            "the gateReleases `Text` must be inside the sheet closure's ZStack (issue #444)"
+        )
+        let identifierRange = try #require(
+            raw.range(of: Self.gateReleasesIdentifier, range: labelTextRange.upperBound..<raw.endIndex),
+            "the gateReleases identifier must follow its `Text` declaration (issue #444)"
         )
         #expect(
             identifierRange.lowerBound < overlayRange.lowerBound,
@@ -418,18 +429,6 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         #expect(
             !overlaySlice.contains(#"Text("gateReleases:"#),
             "`PhaseChainGateOverlay` must not own the gateReleases label (issue #444)"
-        )
-
-        // The label's own declaration: the identifier belongs to the
-        // gateReleases Text's modifier chain, and the element is not wrapped
-        // in an `if` (always rendered, not state-gated).
-        let labelTextRange = try #require(
-            raw.range(of: #"Text("gateReleases: \(gateReleases)")"#),
-            "the gateReleases `Text` declaration could not be located (issue #444)"
-        )
-        #expect(
-            labelTextRange.lowerBound < identifierRange.lowerBound,
-            "the `gateReleases` identifier must belong to the `Text(\"gateReleases: \\(gateReleases)\")` element (issue #444)"
         )
         let between = String(raw[labelTextRange.upperBound..<identifierRange.lowerBound])
         #expect(
