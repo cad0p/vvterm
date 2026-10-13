@@ -6628,6 +6628,11 @@ def _refuse_substitution_body_writes(
                 raise _run_id_xargs_unparsed_wrapper_refusal(
                     step, body, carrier_unparsed[0], carrier_unparsed[1]
                 )
+            carrier_unresolved = _xargs_unresolved_command(inner_segment)
+            if carrier_unresolved is not None:
+                raise _run_id_xargs_unresolved_command_refusal(
+                    step, body, carrier_unresolved
+                )
             _refuse_argv_write_targets(
                 inner_segment,
                 step,
@@ -6969,6 +6974,23 @@ def _run_id_xargs_unparsed_wrapper_refusal(
         f"`{wrapper}` with an option the extractor cannot parse (`{token}`) and an "
         "`xargs` word in a position the walk cannot resolve (refusing rather than "
         "guessing)",
+    )
+
+
+def _run_id_xargs_unresolved_command_refusal(
+    step: ArtifactStep, body: RunBody, token: str
+) -> Refusal:
+    """Issue #350f fold round 3: the walk could not resolve any command
+    word for a segment that carries an `xargs` word, so whether `xargs` is
+    the command bash runs (and so whether the pipeline can carry the
+    operand to it on stdin) cannot be proven. The diagnostic claims only
+    the unresolved-position ambiguity, like the unparsed-wrapper
+    factory; it does not claim the command word is `xargs`."""
+    return Refusal(
+        step.run_id_line or step.uses_line,
+        f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job carries "
+        f"an `xargs` word (`{token}`) in a command position the extractor cannot resolve "
+        "(refusing rather than guessing)",
     )
 
 
@@ -7710,25 +7732,86 @@ def _env_split_string_spelling(token: str) -> bool:
     return False
 
 
+def _fd_prefix_word(text: str) -> bool:
+    """A word that can name a redirection fd: a bare numeric word (`2`,
+    `3`, `10`) or bash's dynamic-fd `{name}` form (issue #350f fold round
+    3)."""
+    if text.isascii() and text.isdigit() and len(text) > 0:
+        return True
+    return _FD_PREFIX_BRACE_RE.fullmatch(text) is not None
+
+
+def _unconsumed_fd_prefix(
+    segment: list[tuple[str, str, int, int]], position: int
+) -> bool:
+    """True when `segment[position]` is an fd-prefix word adjacent to a
+    redirect operator the consumer could not place (issue #350f fold round
+    3). The word then names a redirection, not a command, so the walk
+    behind an unmodelled operator spelling has no definite command word;
+    a spaced `2 > file` is a command word (`2`) with a stdout redirect and
+    does not match the adjacency rule."""
+    kind, text, _start, end = segment[position]
+    if kind != "word" or not _fd_prefix_word(text):
+        return False
+    if position + 1 >= len(segment):
+        return False
+    nxt = segment[position + 1]
+    return nxt[0] == "op" and nxt[1] in _REDIRECT_OPS and end == nxt[2]
+
+
 def _redirection_prefix_end(
     segment: list[tuple[str, str, int, int]], op_index: int, fd: int | None
-) -> int | None:
-    """The index just past one leading redirection at `segment[op_index]`
-    and its target, or None when it must not be consumed (issue #350f fold
-    round 1, F3). A stdin redirection (`<`/`<<`/`<>` with no fd prefix or
-    fd 0) takes the carrier's own stdin away from the pipeline, so the walk
+) -> tuple[int | None, bool]:
+    """One leading redirection at `segment[op_index]` and its target:
+    `(index_just_past, False)` when it is consumed, `(None, False)` when it
+    must not be consumed (issue #350f fold round 1, F3), and
+    `(None, True)` when it is a recognized stdin-taking redirection. A
+    stdin redirection (`<`/`<<`/`<<<`/`<>` with no fd prefix or fd 0)
+    takes the carrier's own stdin away from the pipeline, so the walk
     stops there rather than claiming the pipe feeds the command — except
     `<&0`/`<&0-`, which duplicates fd 0 from itself and keeps the
     pipeline's feed. A non-stdin fd redirect leaves the pipeline feed
     intact. `n>&m`/`n<&m` duplication/closure has no file target and
     consumes its trailing word (the duplicated fd or file target, never
-    the command)."""
+    the command). The `<<<` here-string and the `<<-` operator arrive as
+    operator-token pairs (`<<` + `<`; `<<` + the adjacent `-` word), so
+    each is consumed as one redirection whose target is the here-string
+    token / heredoc delimiter word (fold round 3: closing the family
+    structurally, not operator by operator)."""
     op_kind, op_text, _op_start, op_end = segment[op_index]
     if op_kind != "op" or op_text not in _REDIRECT_OPS:
-        return None
+        return (None, False)
     if op_index + 1 >= len(segment):
-        return None
-    nxt = segment[op_index + 1]
+        return (None, False)
+    next_index = op_index + 1
+    nxt = segment[next_index]
+    if op_text == "<<":
+        if nxt[0] == "op" and nxt[1] == "<" and op_end == nxt[2]:
+            # `<<<`: the tokenizer pairs the first two characters of the
+            # three-character operator. The here-string's target is the
+            # word after the pair, and the here-string replaces fd 0
+            # exactly like `<<`.
+            if fd == 0 or fd is None:
+                return (None, True)
+            if next_index + 1 >= len(segment):
+                return (None, False)
+            target = segment[next_index + 1]
+            if target[0] != "word":
+                return (None, False)
+            return (next_index + 2, False)
+        if nxt[0] == "word" and nxt[1] == "-" and op_end == nxt[2]:
+            # `<<-` (fold round 3): the `-` is part of the operator (its
+            # tab-stripping flag), not the delimiter, so the delimiter is
+            # the word after it. The attached `<<-EOF` spelling is one
+            # `-EOF` word and takes the generic path below.
+            if fd == 0 or fd is None:
+                return (None, True)
+            if next_index + 1 >= len(segment):
+                return (None, False)
+            target = segment[next_index + 1]
+            if target[0] != "word":
+                return (None, False)
+            return (next_index + 2, False)
     duplicated = nxt[0] == "op" and nxt[1] == "&" and op_end == nxt[2]
     if duplicated:
         target_index = op_index + 2
@@ -7742,69 +7825,69 @@ def _redirection_prefix_end(
             # pipeline's own fd 0 from itself, so that spelling is
             # consumed; every other target replaces the feed.
             if op_text == "<" and target in ("0", "0-"):
-                return target_index + 1
-            return None
+                return (target_index + 1, False)
+            return (None, True)
         # A duplicated/closed non-stdin fd (or stdout/stderr) leaves the
         # pipeline stdin alone; the trailing word is the duplicated fd or
         # the file target, never the command.
-        return target_index + (1 if target is not None else 0)
+        return (target_index + (1 if target is not None else 0), False)
     if fd == 0 or (fd is None and op_text in ("<", "<<", "<>")):
         # An operator that replaces fd 0 takes the pipeline feed away.
-        return None
+        return (None, True)
     if nxt[0] == "word":
-        return op_index + 2
-    return None
-
+        return (op_index + 2, False)
+    return (None, False)
 
 
 def _consume_leading_redirections(
     segment: list[tuple[str, str, int, int]], position: int
-) -> int | None:
+) -> tuple[int, bool, bool]:
     """Consume the leading redirection prefixes of a command position
     (`> /dev/null xargs …`, `2>… xargs …`, `2>&1 xargs …`, `&> … xargs …`,
-    `{fd}> … xargs …`) and return the index of the first token after them,
-    or None when the token at `position` does not start a consumable
-    redirection (issue #350f fold round 1, F3; fold round 2, C2). The
-    fd-prefix word must be adjacent to its operator (`2>` is one
-    redirection; `sleep 0.1 & > x` is not: the `&` separator already split
-    the segment); the bash dynamic-fd `{name}` form shares that adjacency
-    rule, so `{fd} > file` stays a command word rather than a fd prefix."""
+    `{fd}> … xargs …`, `2<<< … xargs …`) and return
+    `(cursor, consumed, stdin_stop)`: `cursor` is the index of the first
+    token after the consumed prefixes (or `position` when none was
+    consumed), `consumed` whether at least one redirection was placed, and
+    `stdin_stop` whether the walk stopped at a recognized stdin-taking
+    redirection whose feed the pipeline loses (issue #350f fold round 1,
+    F3; fold round 2, C2; fold round 3). The fd-prefix word must be
+    adjacent to its operator (`2>` is one redirection; `sleep 0.1 & > x`
+    is not: the `&` separator already split the segment); the bash
+    dynamic-fd `{name}` form shares that adjacency rule, so `{fd} > file`
+    stays a command word rather than a fd prefix."""
     cursor = position
     consumed = False
+    stdin_stop = False
     while cursor < len(segment):
         kind, text, _start, end = segment[cursor]
         fd: int | None = None
         op_index = cursor
-        if kind == "word" and text.isascii() and text.isdigit() and len(text) > 0:
+        if kind == "word" and _fd_prefix_word(text):
+            # A numeric fd or bash's dynamic-fd allocation
+            # `{name}>`/`{name}<>`/`{name}>>` (fold round 2, C2; fold round
+            # 3 makes the two spellings one fd-spec path): the word must be
+            # adjacent to its operator exactly like the numeric form
+            # (`{fd} > file` is a command word, not a fd prefix). The
+            # allocated fd is above 10, so it is never the pipeline's
+            # stdin; the `<>` read-write form is likewise non-stdin.
             if cursor + 1 >= len(segment):
                 break
             nxt = segment[cursor + 1]
             if nxt[0] != "op" or nxt[1] not in _REDIRECT_OPS or end != nxt[2]:
                 break
-            fd = int(text)
-            op_index = cursor + 1
-        elif kind == "word" and _FD_PREFIX_BRACE_RE.fullmatch(text):
-            # Bash's dynamic-fd allocation `{name}>`/`{name}<>`/`{name}>>`
-            # (fold round 2, C2): the brace word must be adjacent to its
-            # operator exactly like the numeric form (`{fd} > file` is a
-            # command word, not a fd prefix). The allocated fd is above 10,
-            # so it is never the pipeline's stdin; the `<>` read-write form
-            # is likewise non-stdin.
-            if cursor + 1 >= len(segment):
-                break
-            nxt = segment[cursor + 1]
-            if nxt[0] != "op" or nxt[1] not in _REDIRECT_OPS or end != nxt[2]:
-                break
-            fd = -1
+            fd = int(text) if text.isdigit() else -1
             op_index = cursor + 1
         elif kind != "op" or text not in _REDIRECT_OPS:
             break
-        after = _redirection_prefix_end(segment, op_index, fd)
+        after, stdin_taken = _redirection_prefix_end(segment, op_index, fd)
+        if stdin_taken:
+            stdin_stop = True
+            break
         if after is None:
             break
         cursor = after
         consumed = True
-    return cursor if consumed else None
+    return (cursor, consumed, stdin_stop)
 
 
 def _consume_wrapper_options(
@@ -7952,14 +8035,17 @@ def _consume_wrapper_options(
 
 def _effective_command_word(
     segment: list[tuple[str, str, int, int]],
-) -> tuple[str, int, str] | tuple[str, int, str, str] | None:
+) -> tuple[str, int, str] | tuple[str, int, str, str] | tuple[str] | None:
     """The command a segment executes, walking assignment prefixes, the
     redirection prefixes and the modelled wrapper table (issue #350f; fold
     round 1 F3/F6; fold round 2 H decodes `$'…'` ANSI-C literals first).
     Returns `("resolved", index, name)` for a definite
     effective command word, `("unparsed", index, wrapper, token)` when a
     recognized wrapper meets a word the table cannot place where its
-    command must sit, or None when the walk ends without a command word.
+    command must sit, `("stdin",)` when a recognized stdin-taking
+    redirection stops the walk before any command word (the pipeline
+    cannot feed the command), or None when the walk ends without a
+    command word.
     Bash expands `$'…'` before the command runs, and the tokenizer keeps
     the literal verbatim, so each word is ANSI-C-decoded (`$'env'` is the
     wrapper `env`, `$'xargs'` the carrier, `x$'\141'rgs` is `xargs`,
@@ -7971,8 +8057,15 @@ def _effective_command_word(
     position = 0
     pending_wrapper: str | None = None
     while position < len(segment):
-        redirect_end = _consume_leading_redirections(segment, position)
-        if redirect_end is not None:
+        redirect_end, consumed, stdin_stop = _consume_leading_redirections(
+            segment, position
+        )
+        if stdin_stop:
+            # A recognized stdin-taking redirection replaces the pipeline
+            # feed before any command word, so no carrier can receive the
+            # operand on stdin (fold round 3).
+            return ("stdin",)
+        if consumed:
             # `> /dev/null xargs …` / `2>&1 xargs …`: a stdout-side
             # redirection does not touch the pipeline's stdin, so the
             # command word is resolved past it (fold round 1, F3).
@@ -7980,6 +8073,13 @@ def _effective_command_word(
             continue
         kind, text, _start, _end = segment[position]
         if kind != "word":
+            return None
+        if _unconsumed_fd_prefix(segment, position):
+            # An fd spec (`2`/`3`/`{fd}`) adjacent to a redirect operator
+            # the consumer could not place is a redirection prefix, not a
+            # command word; the real command word sits behind an
+            # unmodelled operator spelling, so no definite word is
+            # resolved (fold round 3).
             return None
         # Bash decodes `$'…'` ANSI-C literals before the command runs, so
         # `$'env'`/`$'xargs'`/`x$'\141'rgs`/`$'FOO=1'` are the words they
@@ -8062,6 +8162,40 @@ def _xargs_unparsed_wrapper(
             candidate
         ):
             return (wrapper, token)
+    return None
+
+
+def _xargs_unresolved_command(
+    segment: list[tuple[str, str, int, int]],
+) -> str | None:
+    """The first unplaced `xargs` word of a segment whose
+    effective-command-word walk cannot resolve any command word, or None
+    (issue #350f fold round 3). The structural backstop for the
+    redirection/fd-prefix family: an operator spelling the consumer does
+    not model (or syntax the walk stops on) leaves the walk unresolved,
+    and an `xargs` word in the segment may then be the real command word
+    while the pipeline still feeds its stdin. A walk that resolves a
+    definite command word (`echo xargs > file`) or that stops at a
+    recognized stdin-taking redirection (the pipeline feed is gone) does
+    not fire; the word test decodes `$'…'` ANSI-C literals exactly like
+    `_xargs_unparsed_wrapper`."""
+    walk = _effective_command_word(segment)
+    if walk is not None:
+        # A resolved command word (xargs or not), an unparsed wrapper
+        # option (the sibling refusal) and a stdin-taking redirection are
+        # all definite outcomes the backstop must not override.
+        return None
+    for kind, text, _start, _end in segment:
+        if kind != "word":
+            continue
+        candidate = _shell_decode_ansi_c(text)
+        # Only a word that IS an `xargs` command (a literal, an ANSI-C
+        # spelling, or a path) can become the command word; an `xargs`
+        # inside a `$(…)`/backtick word is a nested substitution the
+        # substitution scanner already walks with its own upstream, so the
+        # backstop must not claim it from the outer position.
+        if candidate.rsplit("/", 1)[-1] == "xargs":
+            return candidate
     return None
 
 
@@ -8542,6 +8676,11 @@ def _refuse_github_env_run_id_write(
                     raise _run_id_xargs_unparsed_wrapper_refusal(
                         step, body, xargs_unparsed[0], xargs_unparsed[1]
                     )
+                xargs_unresolved = _xargs_unresolved_command(segment)
+                if xargs_unresolved is not None:
+                    raise _run_id_xargs_unresolved_command_refusal(
+                        step, body, xargs_unresolved
+                    )
                 _scan_segment_substitutions(
                     segment,
                     step,
@@ -8791,6 +8930,11 @@ def _refuse_github_env_run_id_write(
                     if joined_unparsed is not None:
                         raise _run_id_xargs_unparsed_wrapper_refusal(
                             step, body, joined_unparsed[0], joined_unparsed[1]
+                        )
+                    joined_unresolved = _xargs_unresolved_command(joined_segment)
+                    if joined_unresolved is not None:
+                        raise _run_id_xargs_unresolved_command_refusal(
+                            step, body, joined_unresolved
                         )
             # Issue #350f, mechanism B.2: the trailing-`|` pipeline join.
             # Bash continues the pipeline on the next non-blank,
