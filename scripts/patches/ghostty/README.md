@@ -35,6 +35,19 @@ onto the upstream commit recorded in `BASE`**, plus the **iOS full-build restora
 - `pkg/macos/iosurface/iosurface.zig`, `src/renderer/Metal.zig`, `src/renderer/metal/IOSurfaceLayer.zig`, `src/font/shaper/coretext.zig` — iOS renderer fixes the app relies on (row-bytes alignment, iOS present path, CFReleaseThread disabled on iOS)
 - `src/build/GhosttyXCFramework.zig`, `src/build/MetallibStep.zig`, `src/build/Config.zig`, `pkg/macos/build.zig`, `pkg/macos/iosurface/iosurface.zig`, `macos/build.nu`, `HACKING.md`, `nix/devShell.nix` — **iOS build restoration**: upstream commit `7a171895d` ("build: stop building Ghostty.xcframework for iOS", 2026-08-12) deleted the iOS/iOS-simulator slices from the xcframework, the MetallibStep iOS branch, and `osVersionMin(.ios)`. VVTerm needs all three slices, so the patch carries the reverse of that commit plus the `-fblocks` flag the restored iOS slices need after upstream moved `pkg/macos/build.zig` to `translate_c.addImportToModule` (the old code passed `-fblocks` unconditionally). If a future upstream build refactor conflicts here, the probe alarms — re-reverse `7a171895d` or hand-merge
 
+`paste-safety-cr.patch` — the #442 core paste-safety fix. `input.paste.isSafe`
+now rejects carriage returns (a CR submits the current line in raw readline, and
+`ICRNL` maps it to a newline in canonical mode), with zig test rows for CR
+alone, CR in a payload, CRLF, and the bracketed-arm invariance. Four contract
+surfaces that would otherwise document CR as safe are updated:
+`include/ghostty/vt/paste.h` (`ghostty_paste_is_safe`'s unsafe-byte list and
+`ghostty_terminal_paste`'s refusal rule), `src/terminal/paste.zig` (module doc),
+`src/config/Config.zig` (`clipboard-paste-protection`), and `src/Surface.zig`
+(`CompleteClipboard.confirmed`). The unbracketed-only behavior change is
+deliberate: `isSafeWith(..., .bracketed = true)` still returns true for CR
+(bracketed pastes are framed and trusted by default), and the xterm-parity strip
+list is unchanged.
+
 Excluded deliberately (do not re-add):
 
 - `macos/Sources/App/iOS/iOSApp.swift`, `macos/Sources/Ghostty/Ghostty.App.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView.swift`, `macos/Sources/Ghostty/Surface View/SurfaceView_UIKit.swift` — the fork's macOS demo app; not compiled by the libghostty build (`-Demit-macos-app=false`)
@@ -48,7 +61,7 @@ of the *committed* vendored build. The weekly probe updates both together.
 ## Rebuilding locally
 
 ```sh
-./scripts/build.sh ghostty          # clones upstream @ BASE, applies custom-io.patch + inline patches
+./scripts/build.sh ghostty          # clones upstream @ BASE, applies the patch queue + inline patches
 GHOSTTY_REF=<sha> ./scripts/build.sh ghostty   # build against a different upstream ref
 VVTERM_STRICT_BUILD=1 ./scripts/build.sh ghostty  # hard-fail if the ref differs from the vendored VERSION
 ```
@@ -121,7 +134,7 @@ Hand-merge the known conflict spots:
    not enable blocks for every Darwin target, so the translate-c step otherwise fails
    on the CoreGraphics headers (`blocks are not enabled`).
 
-Then:
+Then regenerate the patch queue in order — `custom-io.patch` first:
 
 ```sh
 git diff <new-upstream-main-sha> -- include/ghostty.h pkg/macos/build.zig pkg/macos/iosurface/iosurface.zig \
@@ -137,6 +150,27 @@ echo <new-upstream-main-sha> > scripts/patches/ghostty/BASE
 The list is the **19-path set** (18 fork files + `pkg/macos/build.zig`);
 `pkg/macos/build.zig` carries only the iOS `-fblocks` restoration, so a future rebase
 must keep that hunk when upstream's translate-c call changes again.
+
+The second patch is diffed against the **custom-io-applied** tree so it applies
+on top of the queue. custom-io also edits `src/Surface.zig`, so the diff must be
+taken against a staged/committed custom-io baseline — the
+`git diff <new-upstream-main-sha> -- …` form would otherwise fold custom-io's
+own `src/Surface.zig` hunks into this patch (measured: 82 changed lines instead
+of the 4-line doc hunk):
+
+```sh
+git apply scripts/patches/ghostty/custom-io.patch   # if not already applied
+git add -A                                          # diff baseline = the custom-io tree
+# ... apply the CR changes to the five files ...
+git diff -- src/input/paste.zig src/terminal/paste.zig src/Surface.zig \
+  include/ghostty/vt/paste.h src/config/Config.zig \
+  > scripts/patches/ghostty/paste-safety-cr.patch
+```
+
+When only one patch drifts, regenerate only that one: `custom-io.patch` is the
+**19-path set** above; `paste-safety-cr.patch` is the **5-path set** in the last
+command (`src/input/paste.zig`, `src/terminal/paste.zig`, `src/Surface.zig`,
+`include/ghostty/vt/paste.h`, `src/config/Config.zig`).
 
 **Regeneration gotcha**: `src/termio/Callback.zig` is a NEW file (not in upstream) —
 `git apply` leaves it untracked and `git diff` silently skips untracked files, so a
@@ -162,8 +196,12 @@ zig build -Dapp-runtime=none -Demit-exe=false -Demit-docs=false -Demit-webdata=f
 
 ```sh
 git apply --check scripts/patches/ghostty/custom-io.patch   # on a pristine <new> checkout
+git apply scripts/patches/ghostty/custom-io.patch           # the second patch is checked on top
+git apply --check scripts/patches/ghostty/paste-safety-cr.patch
 grep -E 'ghostty_surface_write_fn|use_custom_io|ghostty_surface_feed_data|ghostty_surface_set_write_callback' scripts/patches/ghostty/custom-io.patch  # all 4
+grep 'indexOf(u8, data, "\r")' scripts/patches/ghostty/paste-safety-cr.patch  # the CR predicate
 grep '^diff --git' scripts/patches/ghostty/custom-io.patch   # no build.zig.zon / macos/ / generic.zig
+grep '^diff --git' scripts/patches/ghostty/paste-safety-cr.patch   # the 5-path set
 ./scripts/build.sh ghostty                                    # full build (macOS machine)
 ```
 

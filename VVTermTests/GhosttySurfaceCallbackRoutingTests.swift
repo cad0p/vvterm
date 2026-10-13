@@ -920,6 +920,139 @@ struct GhosttySurfaceCallbackRoutingTests {
         #endif
     }
 
+    /// #442 acceptance (allow): a non-bracketed paste carrying CR (and no LF)
+    /// must be treated as unsafe — the confirmation seam is consulted exactly
+    /// once and the allowed payload reaches the terminal byte-preserved.
+    ///
+    /// NON-BRACKETED PRECONDITION, stated for the record: the core asks
+    /// `isSafeWith` only on the non-bracketed arm (or when
+    /// `clipboard_paste_bracketed_safe=false`); with that config defaulting to
+    /// true, a bracketed paste reports safe before `isSafe` is reached. This
+    /// unit harness never enables mode 2004, and neither does the app runtime
+    /// (no `2004` in `VVTerm/GhosttyTerminal/`; only the iOS UI-test harness
+    /// feeds `\u{1B}[?2004h` in `TerminalKeyboardUITestHarness+iOS.swift`), so
+    /// this oracle exercises the non-bracketed arm. The LF case
+    /// `unsafePasteAllowedCompletesOnceWithTheCREncodedPayload` is the positive
+    /// control that the seam is consulted today.
+    @Test
+    func unsafeCarriageReturnPasteConsultsTheConfirmationSeamOnce() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-cr")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#442-cr-\(UUID().uuidString)\r"
+        Clipboard.copy(payload)
+        // First assertion: there is no clipboard seam fallback (the payload
+        // source is the static C callback `Ghostty.App.readClipboard`), so a
+        // pasteboard that normalized CR must block the test rather than
+        // masquerade as a core failure.
+        #expect(Clipboard.readString() == payload, "the CR payload must round-trip byte-exactly through the pasteboard")
+        #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { request in
+            seamConsultations.noteInvocation()
+            #expect(request.payload == payload, "the seam must receive the copied CR payload")
+            #expect(request.lineCount == 2, "the trailing CR must count as a line break")
+            return true
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        // A non-bracketed paste converts only `\n` to `\r`, so the CR payload
+        // reaches the terminal byte-identically.
+        let delivered = await Self.waitUntil(timeout: 5.0) {
+            collector.combinedString.contains(payload)
+        }
+        #expect(delivered, "an allowed CR paste must reach the terminal CR-preserved")
+        #expect(seamConsultations.invocationCount == 1, "the confirmation seam must be consulted exactly once")
+        #if DEBUG
+        let completions = GhosttyClipboardConfirmDebug.completions
+        #expect(completions.count == 1, "the request must be completed exactly once")
+        #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(completions.first?.byteLength == payload.utf8.count)
+        #expect(completions.first?.confirmed == true)
+        #expect(completions.first?.denied == false, "an allowed completion must not be recorded as a denial")
+        #expect(GhosttyClipboardConfirmDebug.callbackKinds == [GHOSTTY_CLIPBOARD_REQUEST_PASTE])
+        #endif
+    }
+
+    /// #442 acceptance (deny): a CR-bearing paste the user denies must deny the
+    /// request exactly once and write nothing — the LF deny contract on the
+    /// byte class #442 made unsafe.
+    @Test
+    func unsafeCarriageReturnPasteDeniedWritesNothing() async throws {
+        let app = Ghostty.App()
+        defer { app.cleanup() }
+        let appHandle = try #require(app.app)
+        let terminal = Self.makeTerminal(app: app, appHandle: appHandle, paneId: "clipboard-confirm-cr-deny")
+        defer { terminal.cleanup() }
+
+        let surface = try #require(terminal.surface)
+        _ = try #require(surface.unsafeCValue)
+        #expect(surface.callbackContext.resolve() === terminal, "positive control: the context must resolve the live view")
+
+        let collector = WriteCollector()
+        terminal.writeCallback = { collector.append($0) }
+        terminal.setupWriteCallback()
+        terminal.acceptsTerminalInput = true
+
+        #if DEBUG
+        GhosttyClipboardConfirmDebug.reset()
+        #endif
+
+        let payload = "vvterm-#442-cr-deny-\(UUID().uuidString)\r"
+        Clipboard.copy(payload)
+        #expect(Clipboard.readString() == payload, "the CR payload must round-trip byte-exactly through the pasteboard")
+        #expect(collector.combinedString.isEmpty, "positive control: the collector must be empty before the paste")
+
+        let seamConsultations = InvocationSpy()
+        terminal.clipboardConfirmationDecision = { _ in
+            seamConsultations.noteInvocation()
+            return false
+        }
+
+        let handled = surface.perform(action: "paste_from_clipboard")
+        #expect(handled, "the live paste binding must report true")
+
+        #if DEBUG
+        let completed = await Self.waitUntil(timeout: 5.0) {
+            GhosttyClipboardConfirmDebug.completions.count == 1
+        }
+        #expect(completed, "the denied request must be completed")
+        #expect(
+            seamConsultations.invocationCount == 1,
+            "the seam must be consulted exactly once (asserted before the no-write claim)"
+        )
+        let completions = GhosttyClipboardConfirmDebug.completions
+        #expect(completions.count == 1, "the request must be received exactly once")
+        #expect(completions.first?.kind == GHOSTTY_CLIPBOARD_REQUEST_PASTE)
+        #expect(completions.first?.byteLength == 0, "the deny form records an empty payload")
+        #expect(completions.first?.confirmed == true)
+        #expect(completions.first?.denied == true, "the user deny must be recorded as a denial")
+        #endif
+
+        let wrote = await Self.waitUntil(timeout: 0.5) { !collector.combinedString.isEmpty }
+        #expect(wrote == false, "a denied CR paste must write nothing to the terminal")
+        #expect(collector.combinedString.isEmpty)
+    }
+
     /// #327 acceptance (deny): an unsafe paste the user denies must deny the
     /// request exactly once (empty byte length, `denied == true`), write
     /// nothing, and consult the seam exactly once — asserted before the
@@ -1252,6 +1385,11 @@ struct GhosttySurfaceCallbackRoutingTests {
         #expect(ClipboardConfirmationRequest.promptTitle == "Paste Unsafe Text?")
         #expect(ClipboardConfirmationRequest.lineCount(for: "one") == 1)
         #expect(request.lineCount == 3)
+        // #442: CR is a line break too, and CRLF counts once.
+        #expect(ClipboardConfirmationRequest.lineCount(for: "a\rb\rc") == 3)
+        #expect(ClipboardConfirmationRequest.lineCount(for: "a\r\nb") == 2)
+        #expect(ClipboardConfirmationRequest.lineCount(for: "a\rb") == 2)
+        #expect(ClipboardConfirmationRequest.lineCount(for: "a\nb\nc") == 3)
         #expect(request.promptBody.contains("newlines or control characters"))
         #expect(request.promptBody.contains("3 lines"))
         #expect(!request.promptBody.contains("secret"), "the prompt body must never carry payload content")

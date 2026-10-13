@@ -1,0 +1,124 @@
+diff --git a/include/ghostty/vt/paste.h b/include/ghostty/vt/paste.h
+index 4ba21a9..7737d13 100644
+--- a/include/ghostty/vt/paste.h
++++ b/include/ghostty/vt/paste.h
+@@ -42,9 +42,9 @@
+  * may be invoked several times for a single paste; the pieces must be
+  * written to the pty in order.
+  *
+- * Text that could inject commands (a newline when unbracketed, or the
+- * bracketed paste terminator when bracketed) is refused with
+- * GHOSTTY_REJECTED and nothing written unless GhosttyPaste::allow_unsafe
++ * Text that could inject commands (a newline or carriage return when
++ * unbracketed, or the bracketed paste terminator when bracketed) is refused
++ * with GHOSTTY_REJECTED and nothing written unless GhosttyPaste::allow_unsafe
+  * is set. The usual flow is to call once, confirm with the user on
+  * GHOSTTY_REJECTED, and call again with `allow_unsafe` set. Each call
+  * reads the text at most once and buffers it whole while the rule is
+@@ -194,6 +194,7 @@ GHOSTTY_API GhosttyResult ghostty_terminal_paste(
+  *
+  * Data is considered unsafe if it contains:
+  * - Newlines (`\n`) which can inject commands
++ * - Carriage returns (`\r`) which submit the current line
+  * - The bracketed paste end sequence (`\x1b[201~`) which can be used
+  *   to exit bracketed paste mode and inject commands
+  *
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 344aa56..3f319b2 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -5964,8 +5964,8 @@ pub const CompleteClipboard = struct {
+     ///
+     ///   - For "regular" pasting this means that unsafe pastes are
+     ///     allowed. Unsafe data is defined as data that contains
+-    ///     newlines, though this definition may change later to detect
+-    ///     other scenarios.
++    ///     newlines or carriage returns, though this definition may change
++    ///     later to detect other scenarios.
+     ///
+     ///   - For OSC 52 and Kitty clipboard protocol reads and writes no
+     ///     prompt is shown to the user when this is true.
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 859bf46..fd6d8cf 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -2492,7 +2492,7 @@ keybind: Keybinds = .{},
+ 
+ /// Require confirmation before pasting text that appears unsafe. This helps
+ /// prevent a "copy/paste attack" where a user may accidentally execute unsafe
+-/// commands by pasting text with newlines.
++/// commands by pasting text with newlines or carriage returns.
+ @"clipboard-paste-protection": bool = true,
+ 
+ /// If true, bracketed pastes will be considered safe. By default, bracketed
+diff --git a/src/input/paste.zig b/src/input/paste.zig
+index 60a4fdd..a47a7ce 100644
+--- a/src/input/paste.zig
++++ b/src/input/paste.zig
+@@ -164,6 +164,9 @@ pub fn encodeWriter(
+ /// unsafe if it contains any of the following:
+ ///
+ /// - `\n`: Newlines can be used to inject commands.
++/// - `\r`: Carriage returns submit the current line in common line editors
++///   (readline's `accept-line`) and are mapped to newlines by `ICRNL` in
++///   canonical mode, so they can also be used to inject commands.
+ /// - `\x1b[201~`: This is the end of a bracketed paste. This cane be used
+ ///   to exit a bracketed paste and inject commands.
+ ///
+@@ -174,6 +177,7 @@ pub fn encodeWriter(
+ /// acting strangely.
+ pub fn isSafe(data: []const u8) bool {
+     return std.mem.indexOf(u8, data, "\n") == null and
++        std.mem.indexOf(u8, data, "\r") == null and
+         std.mem.indexOf(u8, data, "\x1b[201~") == null;
+ }
+ 
+@@ -198,21 +202,27 @@ test isSafe {
+     try testing.expect(isSafe("hello"));
+     try testing.expect(!isSafe("hello\n"));
+     try testing.expect(!isSafe("hello\nworld"));
++    try testing.expect(!isSafe("hello\r"));
++    try testing.expect(!isSafe("hello\rworld"));
++    try testing.expect(!isSafe("hello\r\nworld"));
+     try testing.expect(!isSafe("he\x1b[201~llo"));
+ }
+ 
+ test isSafeWith {
+     const testing = std.testing;
+ 
+-    // Bracketed: newlines are fine, the frame terminator is not.
++    // Bracketed: newlines and carriage returns are fine, the frame
++    // terminator is not.
+     try testing.expect(isSafeWith("hello", .{ .bracketed = true }));
+     try testing.expect(isSafeWith("hello\nworld", .{ .bracketed = true }));
++    try testing.expect(isSafeWith("hello\rworld", .{ .bracketed = true }));
+     try testing.expect(!isSafeWith("he\x1b[201~llo", .{ .bracketed = true }));
+     try testing.expect(!isSafeWith("hello\n\x1b[201~", .{ .bracketed = true }));
+ 
+     // Unbracketed: the conservative rule.
+     try testing.expect(isSafeWith("hello", .{ .bracketed = false }));
+     try testing.expect(!isSafeWith("hello\nworld", .{ .bracketed = false }));
++    try testing.expect(!isSafeWith("hello\rworld", .{ .bracketed = false }));
+     try testing.expect(!isSafeWith("he\x1b[201~llo", .{ .bracketed = false }));
+ }
+ 
+diff --git a/src/terminal/paste.zig b/src/terminal/paste.zig
+index 05e088e..5fccb54 100644
+--- a/src/terminal/paste.zig
++++ b/src/terminal/paste.zig
+@@ -154,10 +154,11 @@ pub const Error = Allocator.Error ||
+ ///
+ /// The safety rule for a text paste (`input.paste.isSafeWith`): a
+ /// bracketed paste is unsafe only if it contains the bracket terminator
+-/// (CSI 201~); an unbracketed paste is unsafe if it contains a newline
+-/// or the terminator. Embedders wanting a stricter rule check
+-/// `input.paste.isSafe` themselves before calling. A paste event never
+-/// puts the data on the input stream, so the rule doesn't apply to it.
++/// (CSI 201~); an unbracketed paste is unsafe if it contains a newline,
++/// a carriage return, or the terminator. Embedders wanting a stricter
++/// rule check `input.paste.isSafe` themselves before calling. A paste
++/// event never puts the data on the input stream, so the rule doesn't
++/// apply to it.
+ ///
+ /// The contents are read at most once per call and buffered whole, so
+ /// the source needs no stability across reads. Nothing reaches the

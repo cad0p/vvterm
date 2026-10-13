@@ -42,9 +42,9 @@
  * may be invoked several times for a single paste; the pieces must be
  * written to the pty in order.
  *
- * Text that could inject commands (a newline when unbracketed, or the
- * bracketed paste terminator when bracketed) is refused with
- * GHOSTTY_REJECTED and nothing written unless GhosttyPaste::allow_unsafe
+ * Text that could inject commands (a newline or carriage return when
+ * unbracketed, or the bracketed paste terminator when bracketed) is refused
+ * with GHOSTTY_REJECTED and nothing written unless GhosttyPaste::allow_unsafe
  * is set. The usual flow is to call once, confirm with the user on
  * GHOSTTY_REJECTED, and call again with `allow_unsafe` set. Each call
  * reads the text at most once and buffers it whole while the rule is
@@ -194,6 +194,7 @@ GHOSTTY_API GhosttyResult ghostty_terminal_paste(
  *
  * Data is considered unsafe if it contains:
  * - Newlines (`\n`) which can inject commands
+ * - Carriage returns (`\r`) which submit the current line
  * - The bracketed paste end sequence (`\x1b[201~`) which can be used
  *   to exit bracketed paste mode and inject commands
  *
