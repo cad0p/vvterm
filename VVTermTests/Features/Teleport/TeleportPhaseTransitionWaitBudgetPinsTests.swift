@@ -23,12 +23,16 @@
 //  `ServerNavigationUITestsWaitBudgetPinsTests` idiom).
 //
 //  WHAT IS PINNED (7 properties; the #444 plan §5 list):
-//    1. class-scoped: no `isHittable`, no `XCTNSPredicateExpectation`;
+//    1. class-scoped: no `isHittable` path and no custom value predicate
+//       (`XCTNSPredicateExpectation`); XCTest's own predicate-backed
+//       `waitForExistence`/`waitForNonExistence` remain in use for the
+//       non-carrier probes;
 //    2. `axWaitBudget` is the only `TimeInterval` constant and its literal is
-//       30; the only call-site `budget:` arguments are the five frozen
-//       non-carrier probes at their pre-existing 5 s (the A1 corrected scope
-//       rule), and a helper's own `budget:` tokens are its signature plus
-//       `tapControl`'s delegated existence wait;
+//       30; no helper call carries a `budget:` token except the five
+//       enumerated non-carrier probe sites, each bound to its `reason:`
+//       string at the pre-existing 5 s (the plan §5 property 2 resolution of
+//       the §3 A1 scope rule), and a helper's own `budget:` tokens are its
+//       signature plus `tapControl`'s delegated existence wait;
 //    3. per wait helper: the deadline is textually bound to `budget`, the
 //       query is fresh INSIDE the loop, the pause is a `RunLoop` run (any
 //       value — 0.1 → 0.25 is an accepted variant), there is no
@@ -36,8 +40,9 @@
 //       interval is the settle (3, tapControl) plus the poll pause;
 //    4. per wait helper: the exact normalized `XCTFail` call carries every
 //       unconditional payload key (and only those);
-//    5. every `.tap()` is on a `coordinate(withNormalizedOffset:` chain and
-//       `exists` immediately precedes every `.frame` read;
+//    5. every `.tap()` is on a `coordinate(withNormalizedOffset:` chain, and
+//       every `.frame` read has an `exists` token on the same or the previous
+//       non-empty line (a token-level guard, not an element binder);
 //    6. the three scheduled `func test…` names are present exactly once each
 //       and the test-body anchor count is 3 (a 4th `func test` reds);
 //    7. the harness A3 observable: the exact state-gated action expression,
@@ -45,36 +50,47 @@
 //       child of the sheet `ZStack` (not inside `PhaseChainGateOverlay`),
 //       unconditionally.
 //
-//  SLICE RULE (plan §5 v4, CL-4): helpers anchor on
-//  `(?m)^    private func (\w+)`, test bodies on `(?m)^    func (test\w+)\(`;
-//  a slice terminates at the EARLIEST of the next helper anchor, the next
-//  test-body anchor, or the column-0 `}`. The v3 rule (next helper or `}`)
-//  swallowed all three test bodies into the last helper's slice, so any
-//  `contains` property could be satisfied by test-body content; the
-//  purity check (`func test` / `XCTAssert` inside a helper slice) and the
-//  terminator close that. Fail closed if the helper set, the test set, the
-//  all-`func` reconciliation or the anchor count drifts.
+//  SLICE RULE (plan §5 v4, CL-4): class-scope funcs anchor on the
+//  modifier-agnostic
+//  `(?m)^    (?:@[^\n]*\n\s*)?(?:private\s+)?(?:static\s+)?func (\w+)`,
+//  test bodies on `(?m)^    func (test\w+)\(`; a slice terminates at the
+//  EARLIEST of the next func anchor, the next test-body anchor, or the
+//  column-0 `}`. The v3 rule (next helper or `}`) swallowed all three test
+//  bodies into the last helper's slice, so any `contains` property could be
+//  satisfied by test-body content; the purity check (`func test` /
+//  `XCTAssert` inside a helper slice) and the terminator close that. Fail
+//  closed if the helper set, the test set or the all-`func` reconciliation
+//  drifts (a `private static func` — or any attributed or otherwise
+//  modifier-qualified helper — is caught by the name-set freeze; impl lens 2
+//  T2-4).
 //
 //  FORMATTING HEURISTIC, NOT A PROOF. These pins parse Swift as text. Honest
 //  defeat list: a computed-key re-expression (`String("isHittable")`,
 //  reflection, KVC) or an `XCTWaiter` re-expression of the recorded read; a
-//  string-literal decoy that satisfies a token check; the runtime snapshot
-//  freshness no source pin can see; the exists-guarded `.frame`/`.label`
-//  reads that remain racy at runtime (#444 §8); a payload branch reachable
-//  only at runtime; a coherent code+pin edit (inherent to update-on-purpose
-//  pins); and, for property 6, the `WorkflowShardSplitPinsTests` overlap
-//  (that suite is the scheduling authority).
+//  string-literal decoy that satisfies a token check; the query receiver/type
+//  is unpinned (`app.buttons[…]` and
+//  `app.descendants(matching: .any)[…]` both satisfy the in-loop
+//  `[identifier]` check — the shard-3 class run is the oracle; impl lens 2
+//  T2-6); the runtime snapshot freshness no source pin can see; the
+//  exists-guarded `.frame`/`.label` reads that remain racy at runtime
+//  (#444 §8); a payload branch reachable only at runtime; a coherent
+//  code+pin edit (inherent to update-on-purpose pins); and, for property 6,
+//  the `WorkflowShardSplitPinsTests` overlap (that suite is the scheduling
+//  authority).
 //
 //  THIS IS THE SEVENTH COPY of the `repositoryRoot()` +
 //  `VVTERM_PINS_SOURCE_ROOT` source-scan idiom (after
 //  `ServerNavigationUITestsWaitBudgetPinsTests`,
 //  `TerminalKeyboardCoordinatorPinsTests`,
-//  `TeleportCredentialPairPinsTests` and the workflow pin family).
+//  `TeleportCredentialPairPinsTests` and the workflow pin family). The
+//  extraction debt is tracked in #450.
 //  Extraction is DELIBERATELY DEFERRED: this pin's per-helper slice scanner
 //  (anchor sets, earliest-of-three terminator, numeric allowlists) is
-//  scanner-local, and refactoring six pin suites would be an unrelated risk
-//  on a flake fix. Re-evaluate when a sixth Swift-source pin needs the same
-//  scanner, or when this file passes ~400 lines.
+//  scanner-local, and refactoring the sibling pin suites would be an
+//  unrelated risk on a flake fix. The 738-line size at landing is
+//  consciously accepted for this flake fix; re-evaluate when an eighth
+//  Swift-source pin needs the same scanner — a second copy would carry a
+//  second mutation battery and should share the scanner (impl lens 3 B3-7).
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as
@@ -120,9 +136,22 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     private static let pollingHelpers = ["waitForElement", "waitForLabel"]
 
     /// The five frozen non-carrier probe call sites, each passing the
-    /// pre-existing 5 s (A1 corrected scope; CL-2). The multiset is frozen so
-    /// a carrier site that starts passing a budget reds.
+    /// pre-existing 5 s (plan §5 property 2 / §3 A1; CL-2). The multiset is
+    /// frozen as a secondary bound; the per-site binding below (probeReasons)
+    /// is what makes a compensating carrier↔probe budget move red (impl
+    /// lens 2 T2-1).
     private static let probeBudgetLiterals = ["5", "5", "5", "5", "5"]
+
+    /// The `reason:` strings of the five frozen probe sites. The three A3
+    /// `gateReleases` probes share one reason; the header-label and the
+    /// bootstrapBegins probes have their own. A helper call that carries any
+    /// `budget:` token must carry `budget: 5` AND one of these reasons; the
+    /// only other legal shape is a call with no `budget:` token at all.
+    private static let probeReasons = [
+        "bootstrap header must read 'Approve in Safari'",
+        "the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+    ]
 
     /// `budget:` token counts per helper slice: the signature default and,
     /// for `tapControl`, the delegated existence wait.
@@ -176,14 +205,38 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         let testBodyText = slices.testBodies.joined(separator: "\n")
         let budgetTokens = testBodyText.components(separatedBy: "budget:").count - 1
         let budgetLiterals = Self.budgetLiterals(in: testBodyText)
+        // Secondary invariants: the token count and the literal multiset.
+        // They cannot see WHICH call site carries each 5 (impl lens 2 T2-1: a
+        // carrier↔probe compensating move keeps both green), so the per-call
+        // binding below is the primary assertion.
         #expect(
             budgetTokens == Self.probeBudgetLiterals.count,
-            "exactly \(Self.probeBudgetLiterals.count) call-site `budget:` arguments are allowed (the non-carrier probes); a carrier site that passes a budget reds — found \(budgetTokens) `budget:` tokens (issue #444)"
+            "exactly \(Self.probeBudgetLiterals.count) call-site `budget:` arguments are allowed (the enumerated non-carrier probes); a carrier site that starts passing a budget reds — found \(budgetTokens) `budget:` tokens (issue #444)"
         )
         #expect(
             budgetLiterals.sorted() == Self.probeBudgetLiterals.sorted(),
-            "the only call-site `budget:` arguments must be the five frozen 5 s non-carrier probes — found \(budgetLiterals.sorted()) (issue #444)"
+            "the secondary literal multiset must stay the five frozen 5 s probes — found \(budgetLiterals.sorted()) (issue #444)"
         )
+        // Per-site binding (impl lens 2 T2-1, fail-closed): every helper call
+        // either carries `budget: 5` with an enumerated probe reason, or
+        // carries no `budget:` token at all.
+        let helperCalls = Self.helperCallArguments(in: testBodyText)
+        let budgetCalls = helperCalls.filter { $0.contains("budget:") }
+        #expect(
+            budgetCalls.count == Self.probeBudgetLiterals.count,
+            "exactly \(Self.probeBudgetLiterals.count) helper calls may pass a `budget:` argument (the enumerated non-carrier probes) — found \(budgetCalls.count) budget-carrying calls (issue #444)"
+        )
+        for call in budgetCalls {
+            #expect(
+                call.contains("budget: 5"),
+                "a call-site `budget:` must be the frozen 5 s probe literal (`budget: 5`) — found `\(call)` (issue #444)"
+            )
+            let reason = Self.reasonArgument(in: call)
+            #expect(
+                reason.map { Self.probeReasons.contains($0) } == true,
+                "a budget-carrying helper call must be one of the five enumerated non-carrier probes, bound to its `reason:` string; a compensating carrier↔probe budget move reds here even when the token count and literal multiset still match — found reason \(reason ?? "<missing>") in `\(call)` (impl lens 2 T2-1) (issue #444)"
+            )
+        }
 
         for name in Self.helperNames {
             let body = slices.helperBodies[name] ?? ""
@@ -303,6 +356,9 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
                 body.range(of: "XCTFail("),
                 "\(name) must assert internally via `XCTFail` (issue #444)"
             )
+            // Secondary position check (impl lens 2 T2-9): the exact-call
+            // assertion above is the payload binder; this loop only requires
+            // each key to appear after the first `XCTFail(` in the slice.
             let keys = name == "waitForLabel" ? sharedKeys + labelKeys : sharedKeys
             for key in keys {
                 let keyRange = try #require(
@@ -311,7 +367,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
                 )
                 #expect(
                     keyRange.lowerBound > failRange.lowerBound,
-                    "\(name): `\(key)` must be inside the `XCTFail` payload, not a pre-payload token (issue #444)"
+                    "\(name): `\(key)` must appear after the `XCTFail(` call (the exact-call check above is the payload binder) (issue #444)"
                 )
             }
         }
@@ -335,6 +391,9 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
                 }
             }
             if line.contains(".frame") {
+                // Token-level guard (impl lens 2 T2-9): an `exists` on the
+                // same or the previous non-empty line; the exact element is
+                // not bound here.
                 let guarded = line.contains(".exists") || previousNonEmpty.contains(".exists")
                 if !guarded {
                     frameViolations.append(line.trimmingCharacters(in: .whitespaces))
@@ -354,7 +413,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         )
         #expect(
             frameViolations.isEmpty,
-            "every `.frame` read must be immediately preceded by an `exists` guard — found \(frameViolations) (issue #444)"
+            "every `.frame` read must have an `exists` token on the same or the previous non-empty line (a text-level guard; the exact element is not bound — impl lens 2 T2-9) — found \(frameViolations) (issue #444)"
         )
     }
 
@@ -477,26 +536,34 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
         let raw = Self.strippingComments(try Self.source(Self.classPath))
-        let helpers = try anchors(pattern: #"(?m)^    private func (\w+)"#, in: raw)
-        let tests = try anchors(pattern: #"(?m)^    func (test\w+)\("#, in: raw)
+        // Modifier-agnostic class-scope func anchors (impl lens 2 T2-4): a
+        // `private static func`, an attributed helper or any other qualified
+        // declaration is caught by the name-set freeze, and a helper after
+        // the last test can no longer hide inside the last test body's slice.
+        let funcs = try anchors(
+            pattern: #"(?m)^    (?:@[^\n]*\n\s*)?(?:private\s+)?(?:static\s+)?func (\w+)"#,
+            in: raw
+        )
         let closers = try anchors(pattern: #"(?m)^(\})"#, in: raw)
 
+        let allFuncNames = funcs.map(\.name)
+        guard allFuncNames.sorted() == (helperNames + testNames).sorted() else {
+            throw PinFailure(
+                "a `func` outside the frozen helper/test sets is at class scope: \(allFuncNames) — a modifier-qualified helper (`static`, attributed) or a 4th `func test…` reds the anchor-set freeze (issue #444)"
+            )
+        }
+        let helpers = funcs.filter { helperNames.contains($0.name) }
+        let tests = funcs.filter { testNames.contains($0.name) }
         let helperOrder = helpers.map(\.name)
         guard helperOrder == helperNames else {
             throw PinFailure(
-                "the class's `private func` set changed: expected \(helperNames), found \(helperOrder) — a new/removed/renamed helper is a pin update (issue #444)"
+                "the class's helper set changed: expected \(helperNames), found \(helperOrder) — a new/removed/renamed helper is a pin update (issue #444)"
             )
         }
         let testOrder = tests.map(\.name)
         guard testOrder == testNames else {
             throw PinFailure(
                 "the class's `func test…` set changed: expected \(testNames), found \(testOrder) — the 3 scheduled names are frozen (issue #444)"
-            )
-        }
-        let allFuncs = try anchors(pattern: #"(?m)^    (?:private )?func (\w+)"#, in: raw).map(\.name)
-        guard allFuncs.sorted() == (helperNames + testNames).sorted() else {
-            throw PinFailure(
-                "a `func` outside the frozen helper/test sets is at class scope: \(allFuncs) — a non-private helper or a 4th `func test…` reds the anchor-set freeze (issue #444)"
             )
         }
 
@@ -561,6 +628,66 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     private static func budgetLiterals(in source: String) -> [String] {
         matches(pattern: #"budget: ([0-9.]+)"#, in: source)
+    }
+
+    /// Extract every `tapControl(`, `waitForElement(` or `waitForLabel(` call
+    /// expression (name + balanced argument list) from a slice text. String
+    /// literals are skipped, so a `)` inside a `reason:` string does not close
+    /// the call early; this is what binds a `budget:` token to the call site
+    /// that carries it (impl lens 2 T2-1).
+    private static func helperCallArguments(in text: String) -> [String] {
+        let names = ["tapControl", "waitForElement", "waitForLabel"]
+        let characters = Array(text)
+        var calls: [String] = []
+        var index = 0
+        while index < characters.count {
+            var matched = false
+            for name in names {
+                let needle = Array(name + "(")
+                guard index + needle.count <= characters.count else { continue }
+                guard Array(characters[index..<(index + needle.count)]) == needle else { continue }
+                var depth = 1
+                var cursor = index + needle.count
+                var inString = false
+                var escaped = false
+                while cursor < characters.count, depth > 0 {
+                    let character = characters[cursor]
+                    if inString {
+                        if escaped {
+                            escaped = false
+                        } else if character == "\\" {
+                            escaped = true
+                        } else if character == "\"" {
+                            inString = false
+                        }
+                    } else if character == "\"" {
+                        inString = true
+                    } else if character == "(" {
+                        depth += 1
+                    } else if character == ")" {
+                        depth -= 1
+                    }
+                    cursor += 1
+                }
+                calls.append(String(characters[index..<cursor]))
+                index = cursor
+                matched = true
+                break
+            }
+            if !matched {
+                index += 1
+            }
+        }
+        return calls
+    }
+
+    /// The `reason: "…"` string inside a helper call's argument list, if any.
+    private static func reasonArgument(in call: String) -> String? {
+        let marker = "reason: \""
+        guard let markerRange = call.range(of: marker) else { return nil }
+        let remainder = call[markerRange.upperBound...]
+        guard let end = remainder.firstIndex(of: "\"") else { return nil }
+        return String(remainder[..<end])
     }
 
     /// Numeric literals in `addingTimeInterval(<literal>)` positions.
