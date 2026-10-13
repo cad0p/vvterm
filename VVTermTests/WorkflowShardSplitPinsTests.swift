@@ -690,7 +690,7 @@ struct WorkflowShardSplitPinsTests {
     /// returned UNATTRIBUTED and fails assertion 7 closed; `extension
     /// XCTestCase` is never a test class.
     private static func declaredUITestMethods() throws -> DeclarationScan {
-        let directory = try repositoryRoot().appendingPathComponent(uiTestsDirectory)
+        let directory = try PinScan.repositoryRoot().appendingPathComponent(uiTestsDirectory)
         let files = try swiftFiles(under: directory)
 
         var declarationsByFile: [String: [TypeDeclaration]] = [:]
@@ -1045,7 +1045,7 @@ struct WorkflowShardSplitPinsTests {
     }
 
     private static func allowlistFixture() throws -> AllowlistFixture {
-        let url = try repositoryRoot().appendingPathComponent(allowlistPath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(allowlistPath)
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -1265,7 +1265,7 @@ struct WorkflowShardSplitPinsTests {
     }
 
     private static func fixture() throws -> Fixture {
-        let url = try repositoryRoot().appendingPathComponent(fixturePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(fixturePath)
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -1309,7 +1309,7 @@ struct WorkflowShardSplitPinsTests {
     /// `VVTermUITests/`, strip comments, and return the class body (from the
     /// declaration to the next top-level `final class`, or EOF).
     private static func classBody(className: String, cache: inout [String: String]) throws -> String {
-        let directory = try repositoryRoot().appendingPathComponent(uiTestsDirectory)
+        let directory = try PinScan.repositoryRoot().appendingPathComponent(uiTestsDirectory)
         for file in try swiftFiles(under: directory) {
             let source: String
             if let cached = cache[file.path] {
@@ -1377,33 +1377,12 @@ struct WorkflowShardSplitPinsTests {
     // MARK: - Filesystem / shared idiom
 
     private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
             throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
         }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the workflow/fixture mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
     }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment

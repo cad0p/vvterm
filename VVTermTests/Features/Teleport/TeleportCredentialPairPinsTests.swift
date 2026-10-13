@@ -31,23 +31,9 @@ struct TeleportCredentialPairPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/Features/Teleport/TeleportCredentialPairPinsTests.swift`).
-    private func repositoryRoot() -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // TeleportCredentialPairPinsTests.swift
-            .deletingLastPathComponent()  // Teleport/
-            .deletingLastPathComponent()  // Features/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

@@ -92,17 +92,9 @@ final class GhosttyProcessEnvironmentTripwireTests: XCTestCase {
     // MARK: - Helpers
 
     private func ghosttyAppSource() throws -> String {
-        let sourceURL = repositoryRoot()
+        let sourceURL = try PinScan.repositoryRoot()
             .appendingPathComponent("VVTerm/GhosttyTerminal/Ghostty.App.swift")
         return try String(contentsOf: sourceURL, encoding: .utf8)
-    }
-
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/GhosttyProcessEnvironmentTripwireTests.swift`).
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // GhosttyProcessEnvironmentTripwireTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
     }
 
     /// The line range of a function body, located by naive brace counting from

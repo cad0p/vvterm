@@ -873,33 +873,12 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     }
 
     private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
             throw PinFailure("could not read \(relativePath) at \(url.path): \(error) — re-derive this pin (issue #109)")
         }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the composite action and/or the OTA workflow mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin (issue #109)"
-        )
     }
 
     /// Cuts one YAML/bash-style trailing comment from a single line: a `#`

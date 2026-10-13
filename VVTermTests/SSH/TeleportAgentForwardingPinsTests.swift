@@ -28,22 +28,9 @@ import TeleportCore
 @MainActor
 struct TeleportAgentForwardingPinsTests {
 
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated /tmp tree to prove the pins fail there. Never set in CI.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // TeleportAgentForwardingPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

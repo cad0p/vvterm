@@ -626,31 +626,9 @@ struct TerminalSessionsIsolatedDeinitPinsTests {
     // Deliberately duplicated per pin suite (the #280 pattern): the suites must
     // stay independently revertable, so they share no test-target helper file.
 
-    private static func repositoryRoot() -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with markers mutated. The measured-working form is
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported into
-        // xcodebuild's own environment (the `TEST_RUNNER_` prefix is consumed by
-        // the test runner and forwarded without it).
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        return url
-    }
-
     private static func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

@@ -22,15 +22,6 @@ import XCTest
 @MainActor
 final class TeleportRedactionTests: XCTestCase {
 
-    /// The repository root, derived from this file's location.
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // TeleportRedactionTests.swift
-            .deletingLastPathComponent()  // Teleport/
-            .deletingLastPathComponent()  // Features/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     /// Every line in `relativeDirectory` (recursively, `.swift` files only)
     /// that contains at least one of `needles`, each prefixed with its
     /// repo-relative path so a failure names the exact site. Walking the tree
@@ -44,7 +35,7 @@ final class TeleportRedactionTests: XCTestCase {
         under relativeDirectory: String,
         matching needles: [String]
     ) throws -> [String] {
-        let root = repositoryRoot().appendingPathComponent(relativeDirectory)
+        let root = try PinScan.repositoryRoot().appendingPathComponent(relativeDirectory)
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],

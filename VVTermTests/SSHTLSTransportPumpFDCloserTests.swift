@@ -109,7 +109,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         ]
         for relativePath in relativePaths {
             let source = try String(
-                contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+                contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
                 encoding: .utf8
             )
             let rawPumpCloses = source
@@ -471,7 +471,6 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         }
     }
 
-
     /// The nearest preceding declaration-shaped `func name(` line for a call
     /// site (line index based). Only a line whose preamble before `func` is
     /// empty or modifier-shaped (identifiers, `@` attributes, whitespace) can
@@ -700,19 +699,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// The proxy transport source (the closer's declaration + the proxy pump).
     private func proxySource() throws -> String {
         try String(
-            contentsOf: repositoryRoot()
+            contentsOf: PinScan.repositoryRoot()
                 .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift"),
             encoding: .utf8
         )
     }
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSHTLSTransportPumpFDCloserTests.swift`).
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHTLSTransportPumpFDCloserTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
-    }
 }
 
 #endif // canImport(Network)

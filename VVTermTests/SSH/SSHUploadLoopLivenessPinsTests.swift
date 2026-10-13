@@ -95,28 +95,9 @@ struct SSHUploadLoopLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSH/SSHUploadLoopLivenessPinsTests.swift`).
-    private static func repositoryRoot() -> URL {
-        // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated tree to prove the pins fail there. Never set in CI. The
-        // `TEST_RUNNER_` form reaches the test process under `xcodebuild
-        // test` (measured and documented in the merged #288/#290 pin suites);
-        // a plain env var is inert, and `test-without-building -xctestrun`
-        // does not strip the prefix.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHUploadLoopLivenessPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private static func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: Self.repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

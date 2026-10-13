@@ -49,32 +49,9 @@ struct SSHExecGateLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSH/SSHExecGateLivenessPinsTests.swift`).
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated tree to prove the pins fail there. Never set in CI. NOTE:
-        // the variable must actually reach the test process. Measured on this
-        // runner (2026-09-28, iOS Simulator destination): a plain env var is
-        // inert (a mutated root → all pins green), while exporting
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` into
-        // xcodebuild's own environment reaches the test process (the mutated
-        // pin goes red at its assert); the same token passed as a
-        // command-line build setting did not reach it here. So use the
-        // `TEST_RUNNER_` env form, or hand-mutate the worktree and restore it.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHExecGateLivenessPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

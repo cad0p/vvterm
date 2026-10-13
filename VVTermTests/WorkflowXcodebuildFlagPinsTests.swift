@@ -1862,7 +1862,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     }
 
     private static func listFiles(in directory: String, extensions: Set<String>) throws -> [String] {
-        let url = try repositoryRoot().appendingPathComponent(directory)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(directory)
         do {
             return try FileManager.default
                 .contentsOfDirectory(atPath: url.path)
@@ -2047,33 +2047,12 @@ struct WorkflowXcodebuildFlagPinsTests {
     }
 
     private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
             throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
         }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with a workflow and/or script mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
     }
 
     /// Returns the dedented value of the `run: |` literal block scalar that

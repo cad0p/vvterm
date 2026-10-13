@@ -216,31 +216,12 @@ struct TeleportSetupSheetPinsTests {
     }
 
     private func strippedSource(at relativePath: String) throws -> String {
-        let url = try Self.repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return Self.strippingComments(try String(contentsOf: url, encoding: .utf8))
         } catch {
             throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
         }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
     }
 
     /// A Swift comment-stripped copy of `source`: `//` and `/* … */` comments

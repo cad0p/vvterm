@@ -559,7 +559,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     }
 
     private static func fixtureData(_ name: String) throws -> Data {
-        let url = try repositoryRoot()
+        let url = try PinScan.repositoryRoot()
             .appendingPathComponent(fixturesDirectory)
             .appendingPathComponent(name)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -573,7 +573,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     }
 
     private static func swiftSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
@@ -592,27 +592,6 @@ struct GhosttyGeneratedConfigFixturePinsTests {
 
     // MARK: - Repository root + shared comment-stripping idiom
     // (copied verbatim from WorkflowShardSplitPinsTests.swift until the shared helper extraction lands)
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the workflow/fixture mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
     /// (at line start or preceded by whitespace, outside a quoted scalar)

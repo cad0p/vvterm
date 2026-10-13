@@ -156,31 +156,9 @@ struct StatsIsolatedDeinitPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/Features/Stats/StatsIsolatedDeinitReleaseTests.swift`).
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of
-        // the source with a marker removed to prove the pin fails there.
-        // NOTE: the variable must actually reach the test process. The
-        // measured-working form is
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported
-        // into xcodebuild's own environment (the `TEST_RUNNER_` prefix is
-        // consumed by the test runner and forwarded without it); a plain
-        // `VVTERM_PINS_SOURCE_ROOT` is inert here.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // StatsIsolatedDeinitReleaseTests.swift
-            .deletingLastPathComponent()  // Stats/
-            .deletingLastPathComponent()  // Features/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }

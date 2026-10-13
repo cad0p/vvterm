@@ -124,28 +124,9 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/GhosttySurfaceUserdataLifetimePinsTests.swift`).
-    ///
-    /// Counterfactual hook: the mutation runs point this at a mutated tree to
-    /// prove the pins fail there. Never set in CI. As with the other pin
-    /// suites, the variable must reach the test process as
-    /// `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` in xcodebuild's environment (a
-    /// plain env var is inert); alternatively hand-mutate the worktree and
-    /// restore it.
-    private func repositoryRoot() -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // GhosttySurfaceUserdataLifetimePinsTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func source(_ relativePath: String) throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
             encoding: .utf8
         )
     }
@@ -169,7 +150,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// surface userdata must never be unwrapped as the view again.
     @Test
     func testPANoSurfaceUserdataHoldsARawViewCast() throws {
-        let scanRoot = repositoryRoot().appendingPathComponent("VVTerm")
+        let scanRoot = try PinScan.repositoryRoot().appendingPathComponent("VVTerm")
         var files: [URL] = []
         if let enumerator = FileManager.default.enumerator(
             at: scanRoot,

@@ -692,32 +692,8 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived by walking up from this file's location
-    /// (`VVTermTests/SSH/SSHUploadIntegrationConnectBudgetPinsTests.swift`)
-    /// until `VVTerm.xcodeproj` is found.
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source tree with a mutation applied. Never set in CI.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin (issue #356)"
-        )
-    }
-
     private static func source(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
