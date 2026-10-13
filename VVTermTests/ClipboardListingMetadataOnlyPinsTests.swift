@@ -156,7 +156,7 @@ struct ClipboardListingMetadataOnlyPinsTests {
 
     @Test
     func testA3ExactlyTwoListingDefinitionsOnePerPlatformRegion() throws {
-        let source = Self.strippingComments(try Self.source(Self.clipboardPath))
+        let source = Self.strippingComments(try PinScan.source(Self.clipboardPath))
         let total = Self.occurrences(of: Self.listingDefinition, in: source)
         #expect(
             total == 2,
@@ -207,7 +207,7 @@ struct ClipboardListingMetadataOnlyPinsTests {
     // MARK: - Source helpers
 
     private static func listingBody(for arm: PlatformArm) throws -> String {
-        let source = Self.strippingComments(try Self.source(Self.clipboardPath))
+        let source = Self.strippingComments(try PinScan.source(Self.clipboardPath))
         let region = try Self.platformRegion(arm, in: source)
         let bodies = Self.bracedBodies(after: Self.listingDefinition, in: region)
         guard bodies.count == 1 else {
@@ -219,7 +219,7 @@ struct ClipboardListingMetadataOnlyPinsTests {
     }
 
     private static func readCallbackBody() throws -> String {
-        let source = Self.strippingComments(try Self.source(Self.ghosttyAppPath))
+        let source = Self.strippingComments(try PinScan.source(Self.ghosttyAppPath))
         let bodies = Self.bracedBodies(after: Self.readCallbackDefinition, in: source)
         guard bodies.count == 1 else {
             throw PinFailure(
@@ -297,15 +297,6 @@ struct ClipboardListingMetadataOnlyPinsTests {
 
     private static func occurrences(of token: String, in text: String) -> Int {
         text.components(separatedBy: token).count - 1
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     /// A comment-stripped copy of `source`: characters inside `//` line

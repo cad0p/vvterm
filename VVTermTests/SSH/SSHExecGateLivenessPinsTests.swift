@@ -49,13 +49,6 @@ struct SSHExecGateLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -269,7 +262,7 @@ struct SSHExecGateLivenessPinsTests {
     /// re-check `isActive` before its `libssh2_channel_open_ex` re-entry.
     @Test
     func testEnsureExecChannelReadyGatesTheOuterChannelOpenOnIsActive() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
 
         let anchor = try #require(
@@ -309,7 +302,7 @@ struct SSHExecGateLivenessPinsTests {
     /// `ensureExecChannelReady`'s channel open.
     @Test
     func testExecuteOuterBranchGatesTheExecPathOnIsActive() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
 
         let anchor = try #require(

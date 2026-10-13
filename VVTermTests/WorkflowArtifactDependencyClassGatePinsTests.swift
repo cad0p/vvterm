@@ -1336,7 +1336,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             FileManager.default.fileExists(atPath: scriptURL.path),
             "the artifact-dependency gate must exist at \(Self.scriptPath) (issue #316)"
         )
-        let script = try Self.source(Self.scriptPath)
+        let script = try PinScan.source(Self.scriptPath)
         #expect(
             script.hasPrefix("#!/usr/bin/env python3\n# SPDX-License-Identifier: MIT"),
             "\(Self.scriptPath) must keep its shebang and its `# SPDX-License-Identifier: MIT` header on the first two lines (scripts/ci/check-license-headers.sh is the first step of the required build job)"
@@ -1352,7 +1352,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             fixturesExist,
             "the fixture directory must exist at \(Self.fixturesDirectory) (issue #316)"
         )
-        let manifest = try Self.source(Self.manifestPath)
+        let manifest = try PinScan.source(Self.manifestPath)
         #expect(
             manifest.hasPrefix("# SPDX-License-Identifier: MIT"),
             "\(Self.manifestPath) must carry the SPDX header"
@@ -1367,7 +1367,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testBuildJobRunsTheGateAfterLicenseHeadersWithTheExactStep() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "build", in: stripped)
 
@@ -1474,7 +1474,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testWorkflowJobBlocksParseInTheCanonicalShape() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
@@ -1499,8 +1499,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     @Test
     func testFixtureInventoryCoversTheRequiredCases() throws {
         let root = try PinScan.repositoryRoot()
-        let manifest = try Self.source(Self.manifestPath)
-        let script = try Self.source(Self.scriptPath)
+        let manifest = try PinScan.source(Self.manifestPath)
+        let script = try PinScan.source(Self.scriptPath)
 
         for fixture in Self.requiredFixtures {
             let url = root.appendingPathComponent(Self.fixturesDirectory).appendingPathComponent(fixture)
@@ -1557,7 +1557,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             )
             #expect(
                 manifest.contains(fixture),
-                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` source (issue #399)"
+                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` PinScan.source(issue #399)"
             )
         }
 
@@ -1613,7 +1613,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testGateDiagnosticContractIsPresentAsCode() throws {
-        let script = Self.strippingPythonComments(try Self.source(Self.scriptPath))
+        let script = Self.strippingPythonComments(try PinScan.source(Self.scriptPath))
 
         // The rule diagnostic (plan §4.4): the manifest asserts these exact
         // strings, so they must exist as executable text, not prose.
@@ -1726,19 +1726,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         let lines: [String]
 
         var text: String { lines.joined(separator: "\n") }
-    }
-
-    private static func workflowSource() throws -> String {
-        try source(workflowPath)
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     // MARK: - Workflow parsing

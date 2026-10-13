@@ -866,19 +866,10 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     }
 
     private static func commentCutLines(of relativePath: String) throws -> [String] {
-        let source = try workflowSource(relativePath)
+        let source = try PinScan.source(relativePath)
         return Self.strippingYAMLComments(source)
             .components(separatedBy: "\n")
             .map(Self.cuttingLineComment)
-    }
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error) — re-derive this pin (issue #109)")
-        }
     }
 
     /// Cuts one YAML/bash-style trailing comment from a single line: a `#`

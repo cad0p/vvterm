@@ -86,7 +86,7 @@ struct TerminalKeyboardCoordinatorPinsTests {
 
     @Test
     func presentationVerificationSitesObserveThePassInsteadOfSleeping() throws {
-        let source = try source(
+        let source = try PinScan.source(
             "VVTermTests/Features/TerminalSessions/TerminalKeyboardCoordinatorTests.swift"
         )
 
@@ -125,10 +125,4 @@ struct TerminalKeyboardCoordinatorPinsTests {
     // Deliberately duplicated per pin suite (the #280 pattern): the suites must
     // stay independently revertable, so they share no test-target helper file.
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
 }

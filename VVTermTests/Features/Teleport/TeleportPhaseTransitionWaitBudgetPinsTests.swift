@@ -235,7 +235,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property1NoHittabilityReadAndNoPredicateExpectation() throws {
-        let normalized = Self.collapse(try Self.strippingComments(Self.source(Self.classPath)))
+        let normalized = Self.collapse(try Self.strippingComments(PinScan.source(Self.classPath)))
         #expect(
             !normalized.contains("isHittable"),
             "the class must not read `isHittable`: the #444 I1 record lives inside the getter's `hitPoint:` path — re-derive this pin (issue #444)"
@@ -460,7 +460,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property5EveryTapIsACoordinateTapAndEveryFrameReadIsGuarded() throws {
-        let raw = try Self.strippingComments(Self.source(Self.classPath))
+        let raw = try Self.strippingComments(PinScan.source(Self.classPath))
         let lines = raw.components(separatedBy: "\n")
         var tapCount = 0
         var tapViolations: [String] = []
@@ -519,7 +519,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property7TheGateReleaseObservableIsStateGatedAndAlwaysRendered() throws {
-        let raw = try Self.strippingComments(Self.source(Self.harnessPath))
+        let raw = try Self.strippingComments(PinScan.source(Self.harnessPath))
         let normalized = Self.collapse(raw)
 
         #expect(
@@ -618,7 +618,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// body, or the column-0 `}`. Fail closed on any drift, and on a helper
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
-        let raw = Self.strippingComments(try Self.source(Self.classPath))
+        let raw = Self.strippingComments(try PinScan.source(Self.classPath))
         // Modifier-agnostic, any-indent func anchors (impl lens 2 T2-4,
         // closure lens CF-2, closure re-check CG-1): EVERY line carrying a
         // `func` keyword is collected — `static private func`, `fileprivate
@@ -840,15 +840,6 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     // Deliberately duplicated per pin suite (the #280 pattern): the suites
     // must stay independently revertable, so they share no test-target helper
     // file.
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
 
     /// A comment-stripped copy of `source`: characters inside `//` line
     /// comments and nested `/* … */` block comments become spaces; newlines

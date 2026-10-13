@@ -445,7 +445,7 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
     }
 
     private static func firstEffectiveLine(of relativePath: String) throws -> String {
-        let raw = try source(relativePath)
+        let raw = try PinScan.source(relativePath)
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty {
@@ -456,21 +456,12 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
     }
 
     private static func normalizedSource(_ relativePath: String) throws -> String {
-        let stripped = Self.strippingComments(try Self.source(relativePath))
+        let stripped = Self.strippingComments(try PinScan.source(relativePath))
         return stripped.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
             options: .regularExpression
         )
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     /// A comment-stripped copy of `source`: characters inside `//` line

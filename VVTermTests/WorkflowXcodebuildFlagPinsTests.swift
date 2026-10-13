@@ -279,7 +279,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// the job it exists for silently disappeared.
     @Test
     func testTheDebugTestJobInvokesXcodebuildWithAnAcceptedDiagnosticValue() throws {
-        let source = try Self.workflowSource(".github/workflows/vvterm-pr-ci.yml")
+        let source = try PinScan.source(".github/workflows/vvterm-pr-ci.yml")
         let stripped = Self.strippingYAMLComments(source)
         let lines = stripped.components(separatedBy: "\n")
 
@@ -319,8 +319,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheUITestStepDelegatesToTheScriptAndStaysSmall() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let scriptPath = "scripts/ci/run-ui-tests.sh"
-        let workflow = try Self.workflowSource(workflowPath)
-        let script = try Self.workflowSource(scriptPath)
+        let workflow = try PinScan.source(workflowPath)
+        let script = try PinScan.source(scriptPath)
 
         // Exactly one `Run UI tests (` step, and it is a `run: |` block scalar.
         let nameLines = workflow.components(separatedBy: "\n").enumerated()
@@ -574,7 +574,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheUnitTestsJobRunsThePrebuiltBundleAndGuardsTheCounts() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let guardPath = "scripts/ci/assert-unit-tests-ran.sh"
-        let workflow = try Self.workflowSource(workflowPath)
+        let workflow = try PinScan.source(workflowPath)
         let jobLines = try Self.jobBlock(named: "unit-tests", in: workflow)
         let jobText = jobLines.joined(separator: "\n")
 
@@ -766,7 +766,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // 4. The script carries the count-floor predicates on its running
         // `grep -E` lines — a bare presence check anywhere (the error message
         // echoes the same literal) is not the predicate that executes.
-        let guardSource = try Self.workflowSource(guardPath)
+        let guardSource = try PinScan.source(guardPath)
         let strippedGuard = Self.strippingYAMLComments(guardSource)
         let guardScriptLines = strippedGuard.components(separatedBy: "\n")
         let xctestPredicateLines = guardScriptLines.filter {
@@ -823,7 +823,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheBuildArchiveTarsOnlyTheRuntimeProducts() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let stepName = "Archive build products"
-        let workflow = try Self.workflowSource(workflowPath)
+        let workflow = try PinScan.source(workflowPath)
 
         // The step must stay unique and stay a `run: |` literal block scalar,
         // so A1–A3 read the body GitHub actually runs.
@@ -1010,8 +1010,8 @@ struct WorkflowXcodebuildFlagPinsTests {
         let workflowPath = ".github/workflows/ghostty-upstream-probe.yml"
         let scriptPath = "scripts/ci/ghostty-bump-pr.sh"
         let stepName = "Commit artifacts, push bump branch, create or reuse bump PR"
-        let workflow = try Self.workflowSource(workflowPath)
-        let script = try Self.workflowSource(scriptPath)
+        let workflow = try PinScan.source(workflowPath)
+        let script = try PinScan.source(scriptPath)
 
         // Exactly one step with the pinned name, and it is a `run: |` literal
         // block scalar. Fail closed with a re-derive message otherwise.
@@ -1416,8 +1416,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheGhosttyProbeBumpGateIsResolvedByTheScriptAndConsumedByBothSteps() throws {
         let workflowPath = ".github/workflows/ghostty-upstream-probe.yml"
         let ciWorkflowPath = ".github/workflows/vvterm-pr-ci.yml"
-        let workflow = try Self.workflowSource(workflowPath)
-        let ciWorkflow = try Self.workflowSource(ciWorkflowPath)
+        let workflow = try PinScan.source(workflowPath)
+        let ciWorkflow = try PinScan.source(ciWorkflowPath)
         let expectedConsumerGate = "${{ steps.noop-gate.outputs.noop != 'true' && steps.bump-gate.outputs.enabled == 'true' }}"
 
         // (1) Exactly one `Resolve bump-PR gate` step: the `bump-gate` id, the
@@ -1776,7 +1776,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         var scanned: [(file: String, step: String, escaped: Int)] = []
         for file in workflowFiles {
             let path = ".github/workflows/\(file)"
-            let source = try Self.workflowSource(path)
+            let source = try PinScan.source(path)
             let lines = source.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -1843,7 +1843,7 @@ struct WorkflowXcodebuildFlagPinsTests {
 
         var occurrences: [FlagOccurrence] = []
         for path in paths {
-            let source = try workflowSource(path)
+            let source = try PinScan.source(path)
             let stripped = Self.strippingYAMLComments(source)
             for (index, line) in stripped.components(separatedBy: "\n").enumerated() {
                 guard let range = line.range(
@@ -2044,15 +2044,6 @@ struct WorkflowXcodebuildFlagPinsTests {
         }
         return pieces.joined(separator: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-    }
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     /// Returns the dedented value of the `run: |` literal block scalar that

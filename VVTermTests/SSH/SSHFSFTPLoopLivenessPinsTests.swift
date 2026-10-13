@@ -94,13 +94,6 @@ struct SSHFSFTPLoopLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -328,7 +321,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// after-the-wait-only guard is the defect this asserts against.
     @Test
     func testListDirectoryLoopGuardsBothReentryPaths() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func listDirectory(at path: String, maxEntries: Int? = nil) async throws -> [RemoteFileEntry]",
@@ -347,7 +340,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// the `openFileHandle` await and before the loop-top guard).
     @Test
     func testReadFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func readFile(at path: String, maxBytes: Int, offset: UInt64 = 0) async throws -> Data",
@@ -365,7 +358,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 3 (#288): `downloadFile`.
     @Test
     func testDownloadFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func downloadFile(at path: String, to localURL: URL) async throws",
@@ -382,7 +375,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 4 (#288): `writeFile`.
     @Test
     func testWriteFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func writeFile(_ data: Data, to path: String, permissions: Int32 = 0o644) async throws",
@@ -399,7 +392,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 5 (#288): `fileSystemStatus`.
     @Test
     func testFileSystemStatusLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func fileSystemStatus(at path: String) async throws -> RemoteFileFilesystemStatus",
@@ -416,7 +409,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 6 (#288): `setPermissions`.
     @Test
     func testSetPermissionsLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func setPermissions(at path: String, permissions: UInt32) async throws",
@@ -433,7 +426,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 7 (#288): the `ensureSFTPSession()` inner-session init loop.
     @Test
     func testEnsureSFTPSessionInnerInitLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func ensureSFTPSession() async throws -> OpaquePointer",
@@ -450,7 +443,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 8 (#288): the `ensureSFTPSession()` outer-session init loop.
     @Test
     func testEnsureSFTPSessionOuterInitLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func ensureSFTPSession() async throws -> OpaquePointer",
@@ -468,7 +461,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// handle and `readFile`/`downloadFile`/`writeFile`'s file handles).
     @Test
     func testOpenSFTPHandleLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func openSFTPHandle(",
@@ -486,7 +479,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `renameItem`, `deleteFile`, `deleteDirectory`).
     @Test
     func testPerformSFTPMutationLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func performSFTPMutation(",
@@ -503,7 +496,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 11 (#288): `stat(at:statType:)` (serves `stat`/`lstat`).
     @Test
     func testStatLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func stat(at path: String, statType: Int32) async throws -> RemoteFileEntry",
@@ -521,7 +514,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `resolveHomeDirectory`).
     @Test
     func testReadSymlinkTargetLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func readSymlinkTarget(",
@@ -545,7 +538,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `.disconnected` instead of handing it out.
     @Test
     func testEnsureSFTPSessionCachedFastPathIsGatedOnLiveness() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
 
         let anchor = try #require(

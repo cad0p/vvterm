@@ -31,13 +31,6 @@ struct TeleportCredentialPairPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -204,7 +197,7 @@ struct TeleportCredentialPairPinsTests {
     /// the tear inside the hop).
     @Test
     func testAdapterPairBodyKeepsOneMainActorHop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/Teleport/TeleportKeyRingCredentialStore.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/Teleport/TeleportKeyRingCredentialStore.swift"))
 
         let declaration = try #require(
             text.range(of: "func storeCredentialPair("),

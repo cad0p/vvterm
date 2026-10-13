@@ -1097,7 +1097,7 @@ struct WorkflowShardSplitPinsTests {
     /// `needs-fixture`, or an `only-testing:` that is not a single-line
     /// double-quoted scalar throws instead of returning a partial parse.
     private static func uiTestsShardBlocks() throws -> [ShardBlock] {
-        let source = try workflowSource(workflowPath)
+        let source = try PinScan.source(workflowPath)
         let stripped = strippingYAMLComments(source)
         let lines = stripped.components(separatedBy: "\n")
         guard let jobStart = lines.firstIndex(where: {
@@ -1375,15 +1375,6 @@ struct WorkflowShardSplitPinsTests {
     }
 
     // MARK: - Filesystem / shared idiom
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
     /// (at line start or preceded by whitespace, outside a quoted scalar)

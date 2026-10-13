@@ -46,7 +46,7 @@ struct WorkflowArtifactDependencyPinsTests {
     /// that produces its artifact, and still downloads that artifact.
     @Test
     func testDebugTestJobDependsOnTheBuildThatUploadsItsArtifact() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "debug-test", in: stripped)
 
@@ -132,7 +132,7 @@ struct WorkflowArtifactDependencyPinsTests {
     /// trusted — fail closed and ask for a re-derivation.
     @Test
     func testWorkflowJobBlocksParseInTheCanonicalShape() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
@@ -160,15 +160,6 @@ struct WorkflowArtifactDependencyPinsTests {
         let lines: [String]
 
         var text: String { lines.joined(separator: "\n") }
-    }
-
-    private static func workflowSource() throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(workflowPath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read the workflow at \(url.path): \(error)")
-        }
     }
 
     // MARK: - Workflow parsing

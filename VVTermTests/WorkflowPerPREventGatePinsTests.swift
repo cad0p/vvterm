@@ -97,7 +97,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// The regression pin: the three per-PR jobs carry the exact compound gate.
     @Test
     func testPerPRJobsCarryTheCompoundEventGate() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
 
         let expectations: [(job: String, control: String)] = [
@@ -122,7 +122,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// so a newly added job cannot silently re-break #315.
     @Test
     func testEveryJobExceptBuildAndDebugTestIsGated() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
@@ -151,7 +151,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// path). Lens 2 measured the narrower assertion green for all of those.
     @Test
     func testBuildJobHasNoJobLevelGate() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "build", in: stripped)
 
@@ -174,7 +174,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// `debug-test` keeps the #313 dispatch gate verbatim.
     @Test
     func testDebugTestJobKeepsItsDispatchGate() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "debug-test", in: stripped)
 
@@ -193,7 +193,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// trusted — fail closed and ask for a re-derivation.
     @Test
     func testWorkflowJobBlocksParseInTheCanonicalShape() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
@@ -225,7 +225,7 @@ struct WorkflowPerPREventGatePinsTests {
     /// is a no-op on the PR path, where the head SHA is always set.
     @Test
     func testOTAPublishGateSkipsImmediatelyWhenHeadSHAIsEmpty() throws {
-        let source = try Self.workflowSource()
+        let source = try PinScan.source(Self.workflowPath)
         let stripped = Self.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "wait-for-ota-publish", in: stripped)
 
@@ -297,15 +297,6 @@ struct WorkflowPerPREventGatePinsTests {
         let lines: [String]
 
         var text: String { lines.joined(separator: "\n") }
-    }
-
-    private static func workflowSource() throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(workflowPath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read the workflow at \(url.path): \(error)")
-        }
     }
 
     // MARK: - Workflow parsing

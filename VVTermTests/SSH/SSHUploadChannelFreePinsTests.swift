@@ -56,13 +56,6 @@ struct SSHUploadChannelFreePinsTests {
 
     // MARK: - Fixtures
 
-    private static func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -301,7 +294,7 @@ struct SSHUploadChannelFreePinsTests {
 
     /// The `SSHSession` actor span of the production source.
     private static func slicedSource() throws -> (text: String, actorSpan: Range<String.Index>) {
-        let text = Self.strippingComments(try Self.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         return (text, try Self.sshSessionSpan(in: text))
     }
 

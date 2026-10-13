@@ -42,13 +42,6 @@ struct SSHProxyChannelFreePinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -232,7 +225,7 @@ struct SSHProxyChannelFreePinsTests {
         // if-let block, the lock span, and the file-wide call scan all resolve
         // against this same `String`, so every `String.Index` comparison below
         // is valid (never compare indices across differently-sliced strings).
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let bodyStart = try #require(
             text.range(of: "private func cleanupLibssh2()"),
@@ -341,7 +334,7 @@ struct SSHProxyChannelFreePinsTests {
     @Test
     func testAgentChannelFreeKeepsTheSameDiscipline() throws {
         let text = Self.strippingComments(
-            try source("VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift")
+            try PinScan.source("VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift")
         )
 
         let signature = try #require(
@@ -396,7 +389,7 @@ struct SSHProxyChannelFreePinsTests {
     @Test
     func testPumpTokenCheckSharesTheMutualExclusionSpan() throws {
         let text = Self.strippingComments(
-            try source("VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift")
+            try PinScan.source("VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift")
         )
 
         try Self.assertGuardSharesTheLockWithCall(
@@ -518,7 +511,7 @@ struct SSHProxyChannelFreePinsTests {
     /// it is an expected pin update, not a mystery red.
     @Test
     func testCleanupGuardChecksBothInFlightSets() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let cleanupAnchor = try #require(
             text.range(of: "private func cleanupLibssh2()"),
@@ -553,7 +546,7 @@ struct SSHProxyChannelFreePinsTests {
     /// registration.
     @Test
     func testPrepareBodyRegistersTheInnerPreparesInFlightToken() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
 
         let inserts = Self.occurrences(
@@ -594,7 +587,7 @@ struct SSHProxyChannelFreePinsTests {
     /// deliberately.
     @Test
     func testEveryNotActiveDeferCallsCleanupLibssh2() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
 
         let occurrences = Self.occurrences(of: "if !isActive", in: text)
@@ -628,7 +621,7 @@ struct SSHProxyChannelFreePinsTests {
     /// channel pins above).
     @Test
     func testCleanupLibssh2CallSiteCensus() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let declaration = try #require(
             text.range(of: "private func cleanupLibssh2()"),
@@ -655,7 +648,7 @@ struct SSHProxyChannelFreePinsTests {
     /// prepare body, not as file-wide presence.
     @Test
     func testPrepareIdempotenceGateChecksIsActive() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
         #expect(
             text[prepareBody].contains("if isActive, innerLibssh2Session != nil { return }"),
@@ -671,7 +664,7 @@ struct SSHProxyChannelFreePinsTests {
     /// first; this is not a file-wide presence check.
     @Test
     func testIsInnerSessionReadyChecksIsActiveFirst() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let anchor = try #require(
             text.range(of: "var isInnerSessionReady: Bool"),

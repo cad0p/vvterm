@@ -183,21 +183,12 @@ struct ServerNavigationUITestsWaitBudgetPinsTests {
     }
 
     private static func normalizedSource() throws -> String {
-        let stripped = Self.strippingComments(try Self.source(Self.uiTestsPath))
+        let stripped = Self.strippingComments(try PinScan.source(Self.uiTestsPath))
         return stripped.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
             options: .regularExpression
         )
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     /// A comment-stripped copy of `source`: characters inside `//` line

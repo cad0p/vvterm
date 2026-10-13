@@ -108,13 +108,6 @@ struct SSHProbeShellPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     /// The Swift source roots that compile into the `VVTerm` app target,
     /// enumerated live from `VVTerm.xcodeproj`: the root groups in the
     /// `VVTerm` native target's `fileSystemSynchronizedGroups`. Today this is
@@ -631,7 +624,7 @@ struct SSHProbeShellPinsTests {
         )
         #expect(
             nonSynchronized.paths.isEmpty,
-            "the VVTerm app target compiles non-synchronized Swift source(s) \(nonSynchronized.paths); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
+            "the VVTerm app target compiles non-synchronized Swift PinScan.source(s) \(nonSynchronized.paths); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
         )
     }
 
@@ -644,7 +637,7 @@ struct SSHProbeShellPinsTests {
         // The recursive, fail-closed sweep: a new file (or a new literal in an
         // existing file) cannot adopt login semantics silently.
         for file in files {
-            let text = Self.strippingComments(try source(file.path))
+            let text = Self.strippingComments(try PinScan.source(file.path))
             let tokenCount = Self.shFamilyLoginTokenCount(in: text)
             if tokenCount > 0 {
                 #expect(
@@ -664,7 +657,7 @@ struct SSHProbeShellPinsTests {
         // The sh-family file allowlist is exact: the enumerated functions, the
         // in-body occurrence count, and the whole-file count must all hold.
         for (path, allowed) in Self.expectedLoginShellSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingComments(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -703,7 +696,7 @@ struct SSHProbeShellPinsTests {
         // declaration-only allowance (the `defaultLoginShellCommand`
         // declaration is the one emitter reference outside a func body).
         for (path, allowed) in Self.expectedLoginShellEmitterSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingComments(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -770,7 +763,7 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let text = Self.strippingCommentsAndStrings(try source(file.path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(file.path))
             if Self.loginWrapperCallCount(in: text) > 0 {
                 #expect(
                     Self.expectedLoginWrapperSites[file.path] != nil,
@@ -780,7 +773,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedLoginWrapperSites {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -829,7 +822,7 @@ struct SSHProbeShellPinsTests {
     @Test
     func testConvertedProbeFilesUseTheNonLoginWrapperAtEverySite() throws {
         for (path, expected) in Self.expectedProbeWrapperOccurrences {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let probeCount = Self.occurrences(of: "wrapPOSIXProbeCommand(", in: text).count
             #expect(
                 probeCount == expected,
@@ -842,7 +835,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for builder in Self.probeBuilders {
-            let text = Self.strippingCommentsAndStrings(try source(builder.path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(builder.path))
             let bodies = try Self.functionBodies(in: text)
             let matches = bodies.filter { $0.name == builder.function }
             #expect(
@@ -872,7 +865,7 @@ struct SSHProbeShellPinsTests {
         #expect(command.contains(RemoteTerminalBootstrap.shellSystemPathExport()))
         #expect(!command.contains("$HOME/.local/bin"))
 
-        let text = Self.strippingComments(try source(path))
+        let text = Self.strippingComments(try PinScan.source(path))
         let bodies = try Self.functionBodies(in: text)
         let matches = bodies.filter { $0.name == "wrapPOSIXProbeCommand" }
         #expect(
@@ -912,7 +905,7 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let fileText = try source(file.path)
+            let fileText = try PinScan.source(file.path)
             // The call form is invisible inside a blanked string literal, so
             // the reference count reads the string-blanked copy; the
             // `$HOME/.local/bin` literal can only live inside a string, so its
@@ -932,7 +925,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedShellPathExportSites {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {

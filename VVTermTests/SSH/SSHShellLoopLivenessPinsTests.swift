@@ -69,13 +69,6 @@ struct SSHShellLoopLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -296,7 +289,7 @@ struct SSHShellLoopLivenessPinsTests {
     /// statement, before the `libssh2_channel_write_ex` call.
     @Test
     func testShellWriteLoopRechecksChannelLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func write(_ data: Data, to shellId: UUID) async throws",
@@ -315,7 +308,7 @@ struct SSHShellLoopLivenessPinsTests {
     /// `libssh2_channel_request_pty_size_ex` call.
     @Test
     func testShellResizeLoopRechecksChannelLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func resize(",

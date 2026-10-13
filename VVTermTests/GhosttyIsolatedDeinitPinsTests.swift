@@ -161,7 +161,7 @@ struct GhosttyIsolatedDeinitPinsTests {
             )
             let text: String
             do {
-                text = try Self.strippingComments(Self.source(entry.file))
+                text = try Self.strippingComments(PinScan.source(entry.file))
             } catch {
                 Issue.record("\(entry.file): cannot read the pinned source file: \(error)")
                 continue
@@ -192,7 +192,7 @@ struct GhosttyIsolatedDeinitPinsTests {
     /// could not be read.
     private static func commentStrippedSource(of file: String) -> String? {
         do {
-            return try strippingComments(source(file))
+            return try strippingComments(PinScan.source(file))
         } catch {
             Issue.record("\(file): cannot read the pinned source file: \(error)")
             return nil
@@ -743,7 +743,7 @@ struct GhosttyIsolatedDeinitPinsTests {
     private static func checkPin(_ pin: Pin) {
         let text: String
         do {
-            text = try strippingComments(source(pin.file))
+            text = try strippingComments(PinScan.source(pin.file))
         } catch {
             Issue.record("\(pin.file): cannot read the pinned source file: \(error)")
             return
@@ -769,7 +769,7 @@ struct GhosttyIsolatedDeinitPinsTests {
     private static func checkAnchorResolution(_ pin: Pin) {
         let text: String
         do {
-            text = try strippingComments(source(pin.file))
+            text = try strippingComments(PinScan.source(pin.file))
         } catch {
             Issue.record("\(pin.file): cannot read the pinned source file: \(error)")
             return
@@ -828,13 +828,6 @@ struct GhosttyIsolatedDeinitPinsTests {
     //
     // Deliberately duplicated per pin suite (the #280 pattern): the suites must
     // stay independently revertable, so they share no test-target helper file.
-
-    private static func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
 
     /// A comment-stripped copy of `source` for the token scans: characters
     /// inside `//` line comments and nested `/* … */` block comments become

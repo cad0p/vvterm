@@ -95,15 +95,8 @@ struct SSHUploadLoopLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    private static func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     private static func slicedSource() throws -> (text: String, actorSpan: Range<String.Index>) {
-        let text = Self.strippingComments(try Self.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorAnchor = try #require(
             text.range(of: "actor SSHSession {"),
             "SSHClient.swift must keep the `actor SSHSession {` declaration"

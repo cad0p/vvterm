@@ -122,7 +122,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     @Test
     func testUploadLegBudgetLeavesTheWorkflowAllowanceHeadroom() throws {
         let workflow = Self.strippingYAMLComments(
-            try Self.source(".github/workflows/teleport-e2e.yml")
+            try PinScan.source(".github/workflows/teleport-e2e.yml")
         )
         let allowances = Self.executionAllowances(in: workflow)
         #expect(
@@ -206,7 +206,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     @Test
     func testUploadSuiteBuildsItsClientThroughTheFactory() throws {
         let text = Self.strippingComments(
-            try Self.source("VVTermTests/SSHUploadIntegrationTests.swift")
+            try PinScan.source("VVTermTests/SSHUploadIntegrationTests.swift")
         )
 
         let suiteAnchor = try #require(
@@ -307,7 +307,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// literals gone.
     @Test
     func testProductionWiringDerivesSessionCapsFromTheConnectBudget() throws {
-        let text = Self.strippingComments(try Self.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         // The config construction passes the caller's budget through. Count
         // every construction spelling — Pin A's regex family:
@@ -591,7 +591,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     @Test
     func testFixtureSshdLogIsUploadedAsAReadableSnapshot() throws {
         let workflow = Self.strippingYAMLComments(
-            try Self.source(".github/workflows/teleport-e2e.yml")
+            try PinScan.source(".github/workflows/teleport-e2e.yml")
         )
         let liveLog = "vvterm-repro/sshd.log"
         let snapshot = "vvterm-repro/sshd-snapshot.log"
@@ -656,7 +656,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// post-start `chown`, which races sshd's first open and silently loses.
     @Test
     func testFixtureSetupPreCreatesTheSshdLogBeforeLaunch() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let preCreate = try #require(
             script.range(of: #": >> "$REPRO_DIR/sshd.log""#),
             "`repro-sshd-setup.sh` must pre-create `$REPRO_DIR/sshd.log` (append, never truncate) before starting sshd — `-E` creates a missing file root-owned 0600 (issue #356) — re-derive this pin"
@@ -691,15 +691,6 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     }
 
     // MARK: - Fixtures
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error) — re-derive this pin (issue #356)")
-        }
-    }
 
     /// Every `-default-test-execution-time-allowance <seconds>` value in a
     /// YAML-comment-stripped workflow, in file order.

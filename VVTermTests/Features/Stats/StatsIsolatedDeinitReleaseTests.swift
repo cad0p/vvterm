@@ -156,13 +156,6 @@ struct StatsIsolatedDeinitPinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
 
     /// A comment-stripped copy of `source` for the token scans: characters
@@ -350,7 +343,7 @@ struct StatsIsolatedDeinitPinsTests {
     @Test
     func testStatsCollectionContextCarriesExactlyOneNonisolatedDeinit() throws {
         let text = Self.strippingComments(
-            try source("VVTerm/Features/Stats/Infrastructure/Platforms/PlatformStatsCollector.swift")
+            try PinScan.source("VVTerm/Features/Stats/Infrastructure/Platforms/PlatformStatsCollector.swift")
         )
         let anchor = try #require(
             text.range(of: "final class StatsCollectionContext: @unchecked Sendable"),
@@ -388,7 +381,7 @@ struct StatsIsolatedDeinitPinsTests {
     @Test
     func testServerStatsCollectorCarriesExactlyOneNonisolatedDeinit() throws {
         let text = Self.strippingComments(
-            try source("VVTerm/Features/Stats/Application/ServerStatsCollector.swift")
+            try PinScan.source("VVTerm/Features/Stats/Application/ServerStatsCollector.swift")
         )
         let anchor = try #require(
             text.range(of: "final class ServerStatsCollector: ObservableObject"),
@@ -427,7 +420,7 @@ struct StatsIsolatedDeinitPinsTests {
     @Test
     func testViewTabConfigurationManagerCarriesExactlyOneNonisolatedDeinit() throws {
         let text = Self.strippingComments(
-            try source("VVTerm/Features/ConnectionViews/Application/ViewTabConfigurationManager.swift")
+            try PinScan.source("VVTerm/Features/ConnectionViews/Application/ViewTabConfigurationManager.swift")
         )
         let anchor = try #require(
             text.range(of: "final class ViewTabConfigurationManager: ObservableObject"),

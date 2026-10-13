@@ -293,7 +293,7 @@ struct TerminalReconnectTapDeliveryPinsTests {
     /// A10: the fixture emits `DEV212_INPUT_Z_1` only from the probe command.
     @Test
     func testA10TheFixtureEmitsZOnlyFromTheProbe() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let helloLines = script.split(separator: "\n", omittingEmptySubsequences: false).filter { $0.contains("hello() {") }
         #expect(
             helloLines.count == 1,
@@ -337,7 +337,7 @@ struct TerminalReconnectTapDeliveryPinsTests {
     /// dotfiles (issue #414).
     @Test
     func testA11ReproRigFragmentIsShellCorrectAndGated() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let zshMarker = "TITLE_FRAGMENT_ZSH+=\"$(cat <<'ZSH'"
         let zshStart = script.range(of: zshMarker)
         #expect(
@@ -480,21 +480,12 @@ struct TerminalReconnectTapDeliveryPinsTests {
     }
 
     private static func normalizedSource() throws -> String {
-        let stripped = Self.strippingComments(try Self.source(Self.uiTestsPath))
+        let stripped = Self.strippingComments(try PinScan.source(Self.uiTestsPath))
         return stripped.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
             options: .regularExpression
         )
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
     }
 
     /// A comment-stripped copy of `source`: characters inside `//` line

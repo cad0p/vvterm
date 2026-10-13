@@ -124,13 +124,6 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
     // MARK: - Fixtures
 
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     private static let appSource = "VVTerm/GhosttyTerminal/Ghostty.App.swift"
     private static let surfaceSource = "VVTerm/GhosttyTerminal/Ghostty.Surface.swift"
     private static let contextSource = "VVTerm/GhosttyTerminal/Ghostty.SurfaceCallbackContext.swift"
@@ -191,7 +184,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// `ghostty_surface_userdata(` read is the action fallback paired with it.
     @Test
     func testPBEveryRoutingSiteResolvesThroughTheContext() throws {
-        let appText = Self.strippingComments(try source(Self.appSource))
+        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
         let appRoutes = Self.flexibleOccurrences(
             of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
             in: appText
@@ -262,7 +255,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         )
 
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
-            let text = Self.strippingComments(try source(file))
+            let text = Self.strippingComments(try PinScan.source(file))
             let routes = Self.flexibleOccurrences(
                 of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
                 in: text
@@ -279,7 +272,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// set_title/cell_size from inside `Surface.init`).
     @Test
     func testPBBothSetupSurfaceBranchesInstallTheContextUserdata() throws {
-        let text = Self.strippingComments(try source(Self.renderingSetupSource))
+        let text = Self.strippingComments(try PinScan.source(Self.renderingSetupSource))
         let anchors = Self.occurrences(of: "func setupSurface(", in: text)
         #expect(anchors.count == 2, "P-B: both platform setupSurface functions must exist")
 
@@ -322,7 +315,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// keeps it alive with `withExtendedLifetime`.
     @Test
     func testPCSurfaceInvalidatesBeforeEveryFreeAndRetainsTheContext() throws {
-        let text = Self.strippingComments(try source(Self.surfaceSource))
+        let text = Self.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let initAnchor = try #require(
             Self.occurrences(of: "init(cSurface: ghostty_surface_t, callbackContext: Ghostty.SurfaceCallbackContext)", in: text).first,
@@ -394,7 +387,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     @Test
     func testPDWriteCallbacksUseTheContextUserdata() throws {
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
-            let text = Self.strippingComments(try source(file))
+            let text = Self.strippingComments(try PinScan.source(file))
             let anchor = try #require(
                 Self.occurrences(of: "func setupWriteCallback()", in: text).first,
                 "P-D: \(file) must keep setupWriteCallback()"
@@ -435,7 +428,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// one reds the count and the per-site ordering check.
     @Test
     func testPEConfirmReadClipboardResolvesBeforeEveryTerminalCall() throws {
-        let appText = Self.strippingComments(try source(Self.appSource))
+        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-E: Ghostty.App.swift must keep confirmReadClipboard"
@@ -518,8 +511,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// presenters are never instantiated in tests).
     @Test
     func testPFPlatformPresentersShareTheTitleAndDefaultButton() throws {
-        let iOS = Self.strippingComments(try source(Self.iOSClipboardConfirmationSource))
-        let macOS = Self.strippingComments(try source(Self.macOSClipboardConfirmationSource))
+        let iOS = Self.strippingComments(try PinScan.source(Self.iOSClipboardConfirmationSource))
+        let macOS = Self.strippingComments(try PinScan.source(Self.macOSClipboardConfirmationSource))
 
         #expect(
             Self.occurrences(of: "title: ClipboardConfirmationRequest.promptTitle", in: iOS).count == 1,
@@ -565,7 +558,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// comparison stays green there.
     @Test
     func testPGClipboardCompletionGateComparesTheCapturedHandle() throws {
-        let appText = Self.strippingComments(try source(Self.appSource))
+        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-G: Ghostty.App.swift must keep confirmReadClipboard"
@@ -639,7 +632,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// clipboard request while the surface handle is still valid.
     @Test
     func testPHSurfaceDrainsPendingClipboardRequestsBeforeEveryFree() throws {
-        let text = Self.strippingComments(try source(Self.surfaceSource))
+        let text = Self.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let freeAnchor = try #require(
             Self.occurrences(of: "func free()", in: text).first,
@@ -713,7 +706,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// stay inside `completeRequest`, which is its single call site.
     @Test
     func testPHCompletionClaimsBeforeTheCCompletion() throws {
-        let appText = Self.strippingComments(try source(Self.appSource))
+        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
         let completeAnchor = try #require(
             Self.occurrences(of: "func complete(", in: appText).first,
             "P-H: Ghostty.App.swift must keep complete("
@@ -805,7 +798,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// registration-less deny can never leak the core's request.
     @Test
     func testPHClipboardRegistrationSitsAfterEachResolveGuard() throws {
-        let appText = Self.strippingComments(try source(Self.appSource))
+        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-H: Ghostty.App.swift must keep confirmReadClipboard"
@@ -914,8 +907,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// helper's body).
     @Test
     func testPHRegistryInvariants() throws {
-        let contextText = Self.strippingComments(try source(Self.contextSource))
-        let surfaceText = Self.strippingComments(try source(Self.surfaceSource))
+        let contextText = Self.strippingComments(try PinScan.source(Self.contextSource))
+        let surfaceText = Self.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let invalidateAnchor = try #require(
             Self.occurrences(of: "func invalidate()", in: contextText).first,
