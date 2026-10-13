@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //  PinScanSupportGoldenTests.swift
 //
 //  The committed golden corpus for the shared pin-scan lexers (issue #450).

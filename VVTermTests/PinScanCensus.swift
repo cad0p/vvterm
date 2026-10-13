@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //  PinScanCensus.swift
 //
 //  The pure logic behind `PinScanCensusPinsTests`. Kept free of the Testing

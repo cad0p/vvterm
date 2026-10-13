@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //  PinScanSupport.swift
 //
 //  The shared pin-scan support for the `VVTermTests` pin suites (issue #450).

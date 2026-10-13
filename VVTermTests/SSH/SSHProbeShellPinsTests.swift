@@ -624,7 +624,7 @@ struct SSHProbeShellPinsTests {
         )
         #expect(
             nonSynchronized.paths.isEmpty,
-            "the VVTerm app target compiles non-synchronized Swift PinScan.source(s) \(nonSynchronized.paths); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
+            "the VVTerm app target compiles non-synchronized Swift source(s) \(nonSynchronized.paths); a plain PBXGroup reference is outside every synchronized scan root, so it must either move under a synchronized root or the roots/sweep design must be widened deliberately"
         )
     }
 

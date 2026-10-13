@@ -1557,7 +1557,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             )
             #expect(
                 manifest.contains(fixture),
-                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` PinScan.source(issue #399)"
+                "\(Self.manifestPath) must reference \(fixture) as an `extra_files` source (issue #399)"
             )
         }
 

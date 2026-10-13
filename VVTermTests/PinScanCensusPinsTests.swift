@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //  PinScanCensusPinsTests.swift
 //
 //  The #450 census pin: every migrated helper lives in
