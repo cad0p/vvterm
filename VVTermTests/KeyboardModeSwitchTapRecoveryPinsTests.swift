@@ -78,7 +78,8 @@
 //  This is one more copy of the `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT`
 //  source-scan idiom (the #450 census lists 7; this worktree carries 33
 //  `VVTermTests` files with the `VVTERM_PINS_SOURCE_ROOT` + `repositoryRoot()`
-//  shape, 24 with `strippingComments` and 20 with the `VVTerm.xcodeproj`
+//  shape, 23 with `strippingComments` (the intersection with the
+//  `VVTERM_PINS_SOURCE_ROOT` set) and 20 with the `VVTerm.xcodeproj`
 //  walk), so the ordinal framing is dropped; #450 tracks the shared-scanner
 //  extraction. The #444 note's "re-evaluate at the eighth" trigger is
 //  discharged by an explicit decision to defer again: the #441 plan §4

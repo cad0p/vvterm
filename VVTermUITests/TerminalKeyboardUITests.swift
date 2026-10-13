@@ -3161,7 +3161,7 @@ final class TerminalKeyboardUITests: XCTestCase {
         }
         XCTAssertTrue(
             surface.exists,
-            "Mode switch to \(surfaceID) never landed after 3 attempt(s). markerBefore=\(markerBefore) markerAfter=\(harnessMode(in: app)) frame=\(lastFrame) exists=\(lastExists). \(diagnosticsText(in: app))"
+            "Mode switch to \(surfaceID) did not complete after 3 attempt(s). markerBefore=\(markerBefore) markerAfter=\(harnessMode(in: app)) frame=\(lastFrame) exists=\(lastExists). \(diagnosticsText(in: app))"
         )
     }
 
