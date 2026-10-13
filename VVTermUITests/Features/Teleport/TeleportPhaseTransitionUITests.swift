@@ -40,13 +40,14 @@
 //      `isHittable` read are the same recorded `hitPoint:` path).
 //    - Budget scope (the A1 corrected scope rule): only the phase-transition
 //      carriers take `axWaitBudget` (30 s, the #387/#400 calibrated floor) —
-//      each `tapControl` existence wait plus the `registrationContinue`
-//      marker wait. The non-carrier probes keep their pre-existing short
-//      values because they do not gate a chain step, and lifting them to
-//      30 s pushes the per-method ceiling past the 300 s allowance (#444 plan
-//      §7). The exempt list:
+//      each `tapControl` existence wait, the `registrationContinue` marker
+//      wait, and the bootstrap-header sheet-appearance wait in tests 1–2
+//      (the pre-gate existence probe was the residual I2-shaped arm; impl
+//      review M1-1). The non-carrier probes keep their pre-existing short
+//      values because they do not gate a chain step; the lifted carrier keeps
+//      the per-method ceilings at ≈146 s / 136 s / 184 s, inside the 300 s
+//      allowance (#444 plan §7). The exempt list:
 //        * `setupPill` existence                               5 s
-//        * bootstrap header existence                           5 s
 //        * "Approve in Safari" header label                     5 s
 //        * `gateReleases` label read                            5 s
 //        * `bootstrapBegins` label                              5 s
@@ -295,12 +296,14 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
             reason: "tapping the needsBootstrap row must present the bootstrap sheet"
         )
 
-        // Non-carrier probe: the header is a stable state, not a ~100 ms
-        // transient (the gate holds), so it keeps its 5 s.
-        let bootstrapHeader = app.staticTexts[Self.bootstrapHeaderIdentifier]
-        XCTAssertTrue(
-            bootstrapHeader.waitForExistence(timeout: 5),
-            "bootstrap sheet header should appear after tapping a needsBootstrap row"
+        // Sheet-appearance carrier (impl review M1-1): the header existence
+        // was the last I2-shaped 5 s gate before the release tap, so it takes
+        // the 30 s carrier budget; the header LABEL equality below stays a
+        // 5 s probe.
+        waitForElement(
+            Self.bootstrapHeaderIdentifier,
+            in: app,
+            reason: "bootstrap sheet header should appear after tapping a needsBootstrap row — the sheet-appearance gate"
         )
         waitForLabel(
             "Approve in Safari",
@@ -371,9 +374,15 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
             reason: "tapping the needsBootstrap row must present the bootstrap sheet"
         )
 
-        // Gate-held bootstrap phase. Non-carrier probe: 5 s.
+        // Gate-held bootstrap phase: the sheet-appearance carrier (impl
+        // review M1-1) takes the 30 s budget; the element reference below is
+        // reused for the post-transition absence check.
         let bootstrapHeader = app.staticTexts[Self.bootstrapHeaderIdentifier]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5))
+        waitForElement(
+            Self.bootstrapHeaderIdentifier,
+            in: app,
+            reason: "bootstrap sheet header should appear after tapping a needsBootstrap row — the sheet-appearance gate"
+        )
 
         tapControl(
             Self.releaseControlIdentifier,
