@@ -2,12 +2,13 @@
 # VVTerm vendor build (GhosttyKit + libssh2/OpenSSL)
 
 # Ghostty is built from UPSTREAM (ghostty-org/ghostty) + a repo-owned patch
-# (scripts/patches/ghostty/custom-io.patch) that carries the custom-I/O backend
-# VVTerm depends on. The old floating wiedymi/ghostty@custom-io fork branch is
-# retired (issue #127): M1 pinned the fork tip commit as a stopgap; M2 moves to
-# upstream + patch-queue. Default ref = the BASE commit recorded in
-# scripts/patches/ghostty/BASE; a rebuild without a pin silently changes the
-# vendored core, so the drift guard below enforces reproducibility.
+# queue (scripts/patches/ghostty/) that carries the custom-I/O backend VVTerm
+# depends on and the core CR paste-safety fix (#442). The old floating
+# wiedymi/ghostty@custom-io fork branch is retired (issue #127): M1 pinned the
+# fork tip commit as a stopgap; M2 moves to upstream + patch-queue. Default ref
+# = the BASE commit recorded in scripts/patches/ghostty/BASE; a rebuild without
+# a pin silently changes the vendored core, so the drift guard below enforces
+# reproducibility.
 
 set -euo pipefail
 
@@ -74,7 +75,8 @@ Commands:
 Env:
   GHOSTTY_REF=<git-ref>   Build a specific ghostty ref (an UPSTREAM SHA or tag;
                           default: the BASE commit in scripts/patches/ghostty/BASE).
-                          custom-io.patch is applied on top automatically.
+                          The scripts/patches/ghostty/ queue is applied on top
+                          automatically.
   VVTERM_STRICT_BUILD=1   Fail hard if the checked-out ref != vendored VERSION
   KEEP_WORKDIR=1          Keep ghostty build temp dir for debugging
 EOF
@@ -158,15 +160,20 @@ build_ghosttykit() {
         verify_ghostty_version "${workdir}/ghostty"
     fi
 
-    # Apply the repo-owned custom-io patch (issue #127). If it no longer
-    # applies, follow the rebase runbook in scripts/patches/ghostty/README.md.
-    local custom_io_patch="${SCRIPT_DIR}/patches/ghostty/custom-io.patch"
-    if ! git -C "${workdir}/ghostty" apply --check "${custom_io_patch}" 2>/dev/null; then
-        log_error "custom-io.patch no longer applies to ghostty @ ${GHOSTTY_REF}; rebase it per scripts/patches/ghostty/README.md (issue #127)"
-        exit 1
-    fi
-    git -C "${workdir}/ghostty" apply "${custom_io_patch}"
-    log_info "Applied custom-io.patch"
+    # Apply the repo-owned patch queue in order (issue #127): custom-io first
+    # (the callback I/O backend + iOS build restoration the app depends on),
+    # then the paste-safety CR fix (#442). If a patch no longer applies, follow
+    # the rebase runbook in scripts/patches/ghostty/README.md.
+    local patch_name patch_path
+    for patch_name in custom-io.patch paste-safety-cr.patch; do
+        patch_path="${SCRIPT_DIR}/patches/ghostty/${patch_name}"
+        if ! git -C "${workdir}/ghostty" apply --check "${patch_path}" 2>/dev/null; then
+            log_error "${patch_name} no longer applies to ghostty @ ${GHOSTTY_REF}; rebase it per scripts/patches/ghostty/README.md (issue #127)"
+            exit 1
+        fi
+        git -C "${workdir}/ghostty" apply "${patch_path}"
+        log_info "Applied ${patch_name}"
+    done
 
     local embedded_path="${workdir}/ghostty/src/apprt/embedded.zig"
     if [ -f "${embedded_path}" ]; then

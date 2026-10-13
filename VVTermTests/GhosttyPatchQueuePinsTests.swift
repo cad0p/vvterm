@@ -26,8 +26,9 @@
 //
 //  MEASURED COUNTERFACTUALS (each pin red under a targeted mutation of a copied
 //  tree, run with `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>`; the
-//  mutated tree needs only `scripts/patches/ghostty/custom-io.patch` and
-//  `scripts/patches/ghostty/BASE` — the same hook the other pin suites use):
+//  mutated tree needs `scripts/patches/ghostty/custom-io.patch`,
+//  `scripts/patches/ghostty/paste-safety-cr.patch`, `scripts/patches/ghostty/BASE`,
+//  and `scripts/build.sh` — the same hook the other pin suites use):
 //    - drop the `set_write_callback: SetWriteCallback,` field → the fork-symbol
 //      pin reds.
 //    - delete the `pkg/macos/build.zig` section → the path-set pin reds
@@ -35,7 +36,9 @@
 //    - drop `new file mode` from the Callback.zig section → the new-file pin
 //      reds (the fold-round-1 defect this battery exists to catch).
 //    - truncate `BASE` to 7 hex → the BASE-shape pin reds.
-//    - unmutated copy → all four green (control).
+//    - drop the `paste-safety-cr.patch` entry from the build.sh loop (or the
+//      patch's CR predicate) → the queue pin reds.
+//    - unmutated copy → all five green (control).
 
 import Foundation
 import Testing
@@ -74,6 +77,8 @@ struct GhosttyPatchQueuePinsTests {
     }
 
     private static let patchPath = "scripts/patches/ghostty/custom-io.patch"
+    private static let pasteSafetyPatchPath = "scripts/patches/ghostty/paste-safety-cr.patch"
+    private static let buildScriptPath = "scripts/build.sh"
     private static let basePath = "scripts/patches/ghostty/BASE"
 
     /// The fork-only API VVTerm cannot exist without (README "Why a patch at
@@ -130,6 +135,16 @@ struct GhosttyPatchQueuePinsTests {
             paths.append(String(rest[pathStart..<separator.lowerBound]))
         }
         return (paths, unreadable)
+    }
+
+    /// One file's section of a patch: its `diff --git` header through the line
+    /// before the next header (or EOF). Nil when the header is missing, so the
+    /// caller can fail closed.
+    private static func patchSection(_ path: String, in text: String) -> String? {
+        guard let header = text.range(of: "diff --git a/\(path) b/\(path)") else { return nil }
+        let remainder = text[header.upperBound...]
+        let nextFile = remainder.range(of: "diff --git ")?.lowerBound ?? remainder.endIndex
+        return String(text[header.lowerBound..<nextFile])
     }
 
     // MARK: - Pins
@@ -204,6 +219,81 @@ struct GhosttyPatchQueuePinsTests {
         #expect(
             base.allSatisfy { $0.isHexDigit && ($0.isNumber || $0.isLowercase) },
             "BASE must be lowercase hex; found \(base)"
+        )
+    }
+
+    /// #442: the queue must carry the CR paste-safety predicate, and the build
+    /// script must keep applying it. Measured before #442: no pin read
+    /// `scripts/build.sh`, so deleting the new patch — or dropping it from the
+    /// ordered list — would silently regress the paste gate at the next rebuild
+    /// while all CI stayed green.
+    @Test
+    func testPasteSafetyPatchIsQueuedWithTheCRPredicate() throws {
+        // (a) The build script applies both patches in order through the
+        // fail-closed loop, with the interpolated drift message naming the
+        // failing patch (not a hard-coded custom-io.patch).
+        let buildScript = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(Self.buildScriptPath),
+            encoding: .utf8
+        )
+        let orderLine = try #require(
+            buildScript.split(separator: "\n").first { $0.contains("for patch_name in ") },
+            "scripts/build.sh must apply the patch queue through the ordered for-loop"
+        )
+        let customRange = try #require(orderLine.range(of: "custom-io.patch"), "the loop must name custom-io.patch")
+        let safetyRange = try #require(orderLine.range(of: "paste-safety-cr.patch"), "the loop must name paste-safety-cr.patch")
+        #expect(customRange.lowerBound < safetyRange.lowerBound, "custom-io.patch must be applied before paste-safety-cr.patch")
+        #expect(
+            buildScript.contains("${patch_name} no longer applies to ghostty @ ${GHOSTTY_REF}; rebase it per scripts/patches/ghostty/README.md"),
+            "the drift message must name the failing patch (interpolated), not a hard-coded filename"
+        )
+
+        // (b) The patch carries exactly the five pinned paths and the CR bytes.
+        let patch = try String(
+            contentsOf: repositoryRoot().appendingPathComponent(Self.pasteSafetyPatchPath),
+            encoding: .utf8
+        )
+        let parsed = Self.patchPaths(in: patch)
+        #expect(
+            parsed.unreadable.isEmpty,
+            "every `diff --git` header must be readable by this pin; unreadable: \(parsed.unreadable)"
+        )
+        #expect(
+            parsed.paths.sorted() == [
+                "include/ghostty/vt/paste.h",
+                "src/Surface.zig",
+                "src/config/Config.zig",
+                "src/input/paste.zig",
+                "src/terminal/paste.zig",
+            ].sorted(),
+            "the paste-safety patch path set changed; update the pin and the README's 5-path recipe together. found: \(parsed.paths)"
+        )
+        #expect(
+            patch.contains(#"std.mem.indexOf(u8, data, "\r") == null and"#),
+            "the patch must carry the CR predicate"
+        )
+        for needle in [
+            #"!isSafe("hello\r")"#,
+            #"!isSafe("hello\rworld")"#,
+            #"!isSafe("hello\r\nworld")"#,
+            #"isSafeWith("hello\rworld", .{ .bracketed = true })"#,
+            #"!isSafeWith("hello\rworld", .{ .bracketed = false })"#,
+        ] {
+            #expect(patch.contains(needle), "the patch's zig tests must carry \(needle)")
+        }
+        for path in ["include/ghostty/vt/paste.h", "src/terminal/paste.zig", "src/config/Config.zig", "src/Surface.zig"] {
+            let section = try #require(Self.patchSection(path, in: patch), "the patch must carry \(path)")
+            #expect(
+                section.lowercased().contains("carriage return"),
+                "\(path) must document the CR rule"
+            )
+        }
+
+        // (c) custom-io must not own any paste code — one owner per behavior.
+        let customIO = try patchText()
+        #expect(
+            !customIO.contains("paste.zig"),
+            "custom-io.patch must not touch paste code; the CR predicate lives in paste-safety-cr.patch"
         )
     }
 }
