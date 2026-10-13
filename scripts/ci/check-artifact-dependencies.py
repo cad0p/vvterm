@@ -1251,9 +1251,9 @@ the runtime cannot flip; the pipe-chain walk still refuses them because
 it assumes the operand flows through every hop. The compound body scan
 is deliberately branch- and segment-blind like the fold-1 F6 scan, so
 a benign `if true; then cat | xargs …` shares that same
-non-passthrough class (pre-existing, disclosed). All 20 rejects and the
-two over-refusal pins are counterfactually base-ACCEPT → head-REFUSE
-with their `file:line`; the four mechanism mutants
+non-passthrough class (pre-existing, disclosed). All 20 rejects
+(including the two over-refusal pins) are counterfactually base-ACCEPT →
+head-REFUSE with their `file:line`; the four mechanism mutants
 (condition-skip, `!`-skip, condition-substitution-skip, backstop
 target-skip) plus the nested-substitution and case mutants red exactly
 their own fixtures and no others.
