@@ -7760,8 +7760,12 @@ _XARGS_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])xargs(?![A-Za-z0-9_])")
 # `_PIPE_COMPOUND_OPENERS` are the segment-leading keywords whose body is
 # scanned for the carrier; `_CONTINUATION_KEYWORDS` are skipped inside a
 # segment (`then xargs …`, `do xargs …`, `else xargs …`, `elif xargs …`).
+# `_COMPOUND_CONDITION_KEYWORDS` are the openers whose *condition* command
+# follows them in the same segment (`if xargs …`, `while env xargs …`) and
+# still reads the pipeline's stdin (issue #350f fold round 4).
 _PIPE_COMPOUND_OPENERS = frozenset({"if", "while", "until", "for", "case"})
 _CONTINUATION_KEYWORDS = frozenset({"then", "do", "else", "elif"})
+_COMPOUND_CONDITION_KEYWORDS = frozenset({"if", "while", "until"})
 # The redirection operators `_shell_tokens` emits; `&` is its own token, so
 # `2>&1` is `2`, `>`, `&`, `1` and `&>` is `&`, `>`, `target` (fold round 1,
 # F3).
@@ -8097,10 +8101,18 @@ def _consume_wrapper_options(
 
 def _effective_command_word(
     segment: list[tuple[str, str, int, int]],
+    *,
+    skip_compound_conditions: bool = True,
 ) -> tuple[str, int, str] | tuple[str, int, str, str] | tuple[str] | None:
     """The command a segment executes, walking assignment prefixes, the
     redirection prefixes and the modelled wrapper table (issue #350f; fold
-    round 1 F3/F6; fold round 2 H decodes `$'…'` ANSI-C literals first).
+    round 1 F3/F6; fold round 2 H decodes `$'…'` ANSI-C literals first;
+    fold round 4 skips the `if`/`while`/`until` condition openers and a
+    `!` negation directly behind them, so `if xargs …` resolves the
+    condition command the pipeline feeds). `skip_compound_conditions=False`
+    restores the pre-fold-4 walk (the opener resolves as the command word);
+    `_pipe_continuation_command` uses it to recover the opener it must scan
+    the body for.
     Returns `("resolved", index, name)` for a definite
     effective command word, `("unparsed", index, wrapper, token)` when a
     recognized wrapper meets a word the table cannot place where its
@@ -8118,6 +8130,7 @@ def _effective_command_word(
     word could only drop candidates."""
     position = 0
     pending_wrapper: str | None = None
+    condition_prefix = False
     while position < len(segment):
         redirect_end, consumed, stdin_stop = _consume_leading_redirections(
             segment, position
@@ -8160,6 +8173,20 @@ def _effective_command_word(
             # where its command follows (fold round 1, F6).
             position += 1
             continue
+        if skip_compound_conditions and text in _COMPOUND_CONDITION_KEYWORDS:
+            # `if xargs …` / `while env xargs …`: a compound's condition
+            # command follows its opener in the same segment and still reads
+            # the pipeline's stdin (fold round 4).
+            condition_prefix = True
+            position += 1
+            continue
+        if skip_compound_conditions and text == "!" and condition_prefix:
+            # `if ! env xargs …`: bash's pipeline negation sits directly
+            # between the opener and the condition command (fold round 4).
+            condition_prefix = True
+            position += 1
+            continue
+        condition_prefix = False
         if pending_wrapper is not None and (
             text.startswith("-") or "$" in text or "`" in text
         ):
@@ -8247,7 +8274,26 @@ def _xargs_unresolved_command(
         # option (the sibling refusal) and a stdin-taking redirection are
         # all definite outcomes the backstop must not override.
         return None
-    for kind, text, _start, _end in segment:
+    # The walk can end None after consuming lead redirections whose target
+    # words are not command candidates (`2<<< xargs`: the `xargs` word is
+    # the here-string target). Re-consume the placeable prefixes and scan
+    # the words the walk never claimed, so the backstop only refuses an
+    # `xargs` word that remains a command-position candidate (fold round
+    # 4 closes the redirect-target over-refusal its diagnostic described
+    # as a command position).
+    position = 0
+    while position < len(segment):
+        redirect_end, consumed, stdin_stop = _consume_leading_redirections(
+            segment, position
+        )
+        if stdin_stop:
+            # A recognized stdin-taking redirection replaced the feed
+            # before any command word; no carrier can receive the operand.
+            return None
+        if not consumed:
+            break
+        position = redirect_end
+    for kind, text, _start, _end in segment[position:]:
         if kind != "word":
             continue
         candidate = _shell_decode_ansi_c(text)
@@ -8358,11 +8404,23 @@ def _substitution_command_word(
     Assignment prefixes and compound keywords are skipped like the
     effective-word walk does."""
     position = 0
+    condition_prefix = False
     while position < len(segment):
         kind, text, _start, _end = segment[position]
         if kind != "word":
             return None
         if _ASSIGNMENT_OPERAND_RE.match(text) or text in _CONTINUATION_KEYWORDS:
+            position += 1
+            continue
+        if text in _COMPOUND_CONDITION_KEYWORDS:
+            # `if $(xargs …)` / `while $(xargs …)`: the condition command
+            # follows the opener (issue #350f fold round 4).
+            condition_prefix = True
+            position += 1
+            continue
+        if text == "!" and condition_prefix:
+            # `if ! $(xargs …)`: the negation sits between the opener and
+            # the condition command (issue #350f fold round 4).
             position += 1
             continue
         if (text.startswith("$(") or text.startswith("`")) and _XARGS_WORD_RE.search(
@@ -8373,27 +8431,116 @@ def _substitution_command_word(
     return None
 
 
+def _xargs_command_position(
+    segment: list[tuple[str, str, int, int]],
+) -> bool:
+    """True when the segment's command position is the `xargs` carrier or
+    a substitution carrying an `xargs` word (issue #350f fold round 4). The
+    compound body/continuation scan uses it for `then $(xargs …)` /
+    `elif $(xargs …)` / `do $(xargs …)` next to the resolved-verb
+    spelling the fold-1 F6 scan already covered."""
+    walk = _effective_command_word(segment)
+    if walk is not None and walk[0] == "resolved" and walk[2] == "xargs":
+        return True
+    return _substitution_command_word(segment) is not None
+
+
+def _tokens_after_first_terminator(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[str, str, int, int]] | None:
+    """The tokens after the first `case` pattern terminator in the
+    segment, or None when it has none (issue #350f fold round 4). Used for
+    the `;;`-separated later branches (`…;; y) xargs …`), whose segment
+    starts directly with its own pattern list."""
+    for position, token in enumerate(segment):
+        kind, text, _start, _end = token
+        if kind == "op" and text == ")":
+            return segment[position + 1 :]
+        if kind == "word" and _shell_decode_ansi_c(text).endswith(")"):
+            return segment[position + 1 :]
+    return None
+
+
+def _case_body_tokens(
+    segment: list[tuple[str, str, int, int]],
+) -> list[tuple[str, str, int, int]] | None:
+    """The tokens after a `case` pattern terminator (`case x in x) cmd`),
+    or None when the segment carries no terminator (issue #350f fold round
+    4). The tokenizer glues the terminator to the last pattern word (`x)`,
+    `(x)`, `y)`) or emits a bare `)` word for the spaced spelling, so the
+    first word ending in `)` after the `in` keyword closes the pattern
+    list; the command behind it shares the case compound's stdin, so
+    `case x in x) xargs …` must classify like the `if`/`for` bodies. A
+    `case` header split across physical lines carries no terminator on the
+    hop line and stays outside the line-scoped model (a named residual);
+    a pattern list whose first `)`-ending word is a quoted pattern with
+    more patterns behind it is not modelled (the common single-pattern
+    spellings are the fixture-bounded set)."""
+    start: int | None = None
+    seen_case = False
+    for position, token in enumerate(segment):
+        if token[0] != "word":
+            continue
+        decoded = _shell_decode_ansi_c(token[1])
+        if not seen_case:
+            if decoded == "case":
+                seen_case = True
+            continue
+        if decoded == "in":
+            start = position + 1
+            break
+    if start is None:
+        return None
+    return _tokens_after_first_terminator(segment[start:])
+
+
 def _pipe_continuation_command(
     segments: list[list[tuple[str, str, int, int]]],
 ) -> str:
     """Classify the command a trailing-`|` pipeline continuation feeds
-    (issue #350f fold round 1, F2/F5/F6): `"xargs"` when the first segment
-    resolves to the carrier, when a compound keyword's body (`if true;
-    then xargs …`) contains one, or when the first word is a substitution
-    carrying an `xargs` word; `"none"` otherwise. A non-compound first
-    command that is not the carrier does not end the chain here — the
-    caller decides that from the hop line's own trailing operator."""
+    (issue #350f fold round 1, F2/F5/F6; fold round 4 adds the compound
+    condition position and the nested command-position substitution):
+    `"xargs"` when the first segment resolves to the carrier, when a
+    compound keyword's condition or body (`if xargs …`, `if true; then
+    xargs …`, `then $(xargs …)`, `case x in x) xargs …`) contains one, or
+    when the first word is a substitution carrying an `xargs` word;
+    `"none"` otherwise. A non-compound first command that is not the
+    carrier does not end the chain here — the caller decides that from the
+    hop line's own trailing operator."""
     walk = _effective_command_word(segments[0])
-    if walk is not None and walk[0] == "resolved":
-        if walk[2] == "xargs":
-            return "xargs"
-        if walk[2] in _PIPE_COMPOUND_OPENERS:
+    if walk is not None and walk[0] == "resolved" and walk[2] == "xargs":
+        # The condition command itself (`if xargs …`) or a bare carrier.
+        return "xargs"
+    # Recover the pre-fold-4 opener resolution: the body scan below must
+    # keep firing for `if true; then xargs …` now that the default walk
+    # skips the opener to resolve the condition command (fold round 4).
+    opener_walk = _effective_command_word(
+        segments[0], skip_compound_conditions=False
+    )
+    if (
+        opener_walk is not None
+        and opener_walk[0] == "resolved"
+        and opener_walk[2] in _PIPE_COMPOUND_OPENERS
+    ):
+        for segment in segments[1:]:
+            if _xargs_command_position(segment):
+                return "xargs"
+        if opener_walk[2] == "case":
+            # `case x in x) xargs …`: the body command shares the first
+            # segment with its pattern list (fold round 4). A `x|y)`
+            # alternation splits the pattern list at the `|` token, so the
+            # second pattern's segment starts with its own terminator and
+            # the later-branch scan below reads it; the `;;`-separated
+            # branches are read the same way, branch-blind like the
+            # `if`/`do` bodies the fold-1 F6 scan already reads.
+            case_body = _case_body_tokens(segments[0])
+            if case_body is not None and _xargs_command_position(case_body):
+                return "xargs"
             for segment in segments[1:]:
-                nested = _effective_command_word(segment)
+                branch_body = _tokens_after_first_terminator(segment)
                 if (
-                    nested is not None
-                    and nested[0] == "resolved"
-                    and nested[2] == "xargs"
+                    branch_body is not None
+                    and _xargs_command_position(branch_body)
                 ):
                     return "xargs"
     if _substitution_command_word(segments[0]) is not None:
