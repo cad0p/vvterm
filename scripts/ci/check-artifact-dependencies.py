@@ -644,8 +644,9 @@ multi-line pipeline) now refuse since #350f, and the bare
 `… | xargs cp payload {}` form has refused since A13; the #350f fold
 round 1 additionally refuses the split-string payload spellings, the
 multi-hop pipe chain, the redirection-prefixed command position, the
-quote-close-then-pipe ordering, the substitution and compound-keyword
-command positions, and the unlisted valid long option fail-closed; the
+quote-close-then-pipe ordering, the substitution command position and
+the compound-keyword body positions, and the unlisted valid long option
+fail-closed; the
 #350f fold round 2 makes `env -S`/`--split-string` an unconditional
 refusal at any spelling (separated, attached, `=`-long, abbreviated,
 short-option cluster, or behind another unparsed option — closing the
@@ -661,7 +662,16 @@ consumes the `<<<` operator pair and the spaced `<<-` operator with its
 delimiter, distinguishes the recognized stdin-taking redirections
 (`("stdin",)`) from unresolved walks, and the `_xargs_unresolved_command`
 backstop refuses an unresolved segment that still carries an `xargs`
-word (see the fold-round-3 passage below), the
+word (see the fold-round-3 passage below), the #350f fold round 4 closes
+the compound command *positions*: the `if`/`while`/`until` condition
+command (with `!`, wrapper, redirect and substitution carriers), the
+nested command-position substitution in a body or continuation
+(`then $(xargs …)`, `elif $(xargs …)`, `do $(xargs …)`), and the `case`
+pattern-body command (`x)`, `(x)`, `x|y)`, a `;;`-separated later
+branch, or a `$(xargs …)` body) now refuse, and the unresolved-command
+backstop no longer misreads a here-string *target* as a command
+position (`2<<< xargs` is accepted; see the fold-round-4 passage
+below), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
@@ -705,12 +715,23 @@ long-option abbreviation that is not a `--split-string` spelling, or a
 grouped command position (`(xargs …)`) still sits outside the carrier
 table (the split string is refused unconditionally at any spelling since
 #350f fold round 2, so the former runtime-assembled `$CMD` residual is
-closed; the refusal does not claim the payload contains `xargs`); a
+closed; the refusal does not claim the payload contains `xargs`); an
+`xargs` word inside a substitution in an *argument* position
+(`echo $(xargs …)`, `if [ $(xargs …) ]`, a `for` list item, an
+assignment value) is outside the command-position model (measured
+ACCEPT, runtime FLIP, accept-pinned by
+`accept-runid-github-env-write-xargs-substitution-argument-position`),
+and a compound whose body sits on a plain physical line after the hop
+(`cmd | if true` newline `then xargs …; fi`) is outside the
+logical-line model (measured ACCEPT, runtime FLIP, accept-pinned by
+`accept-runid-github-env-write-xargs-compound-multiline-body`); a
 valid unlisted long option of a listed
 wrapper (`env --ignore-environment`/`--chdir=DIR`/`--null`) refuses
 fail-closed rather than being parsed (the listed wrappers, assignment
 prefixes, redirection prefixes, quote-close pipes, multi-hop chains,
-substitution/compound positions and `|`/backslash continuations refuse
+substitution/compound positions (the compound condition,
+nested-substitution and case body positions since fold round 4) and
+`|`/backslash continuations refuse
 since #350f; the bare `… | xargs cp payload {}` form refuses since A13);
 other
 argv write verbs that need verb-specific semantics are closed by A12
@@ -921,7 +942,9 @@ only, the pipe join walks multi-hop chains, treats each hop as its whole
 logical line (a quote or backslash span across hop lines, with an
 internal pipe classified by the command after it), and reconstructs a
 quote-continuation logical line, and a substitution or compound-keyword
-command position carrying an `xargs` word refuses; `command -v`/`-V`
+command position — including the `if`/`while`/`until` condition, the
+`then`/`elif`/`do` nested substitution and the `case` pattern body since
+fold round 4 — carrying an `xargs` word refuses; `command -v`/`-V`
 stops the walk; the
 unlisted wrappers (`exec`/`ionice`/`chrt`/`taskset`), non-split long-option
 abbreviations, the grouped command positions, the untraced `$`-word on a
@@ -1126,8 +1149,10 @@ chain (`… |` newline `cat |` newline `xargs …`), the redirection-prefixed
 command position (`> /dev/null xargs …`, `2> … xargs …`, `2>&1 xargs …`,
 `&> … xargs …`, `<&0 xargs …`), the pipe after a multiline quote closes on
 its line (`"pad` newline `" |` newline `xargs …`), the substitution
-command position (`$(echo xargs …)`), the compound-keyword command
-position (`if true; then xargs …; fi`, `for i in 1; do xargs …; done`),
+command position (`$(echo xargs …)`), the compound-keyword body command
+position (`if true; then xargs …; fi`, `for i in 1; do xargs …; done`;
+the condition, nested-substitution and case positions follow in fold
+round 4),
 and the unlisted valid long option (`env --ignore-environment xargs …`,
 refused fail-closed). Both over-refusal controls are pinned
 (`env -S 'echo xargs'`, the blank-inflated pipe chain beyond the bound).
@@ -1190,6 +1215,48 @@ a syntax-error operator pair the consumer does not model (`><`,
 `2><`) now refuses through the backstop instead of accepting — bash
 rejects those shapes with rc 2, so the refusal is fail-closed and not a
 measured over-refusal.
+
+#350f fold round 4 (the compound-position fold) closes the compound
+command *positions* the fold-1 passage's body claim left unnamed. The
+closure re-lens measured ten ACCEPT+FLIP spellings of the
+`if`/`while`/`until` **condition** command position (bare carrier, `env`
+wrapper, `!` negation, `2<<<`/`2>&1` prefixes, a `$(xargs …)`
+condition, and the pipe-hop placement): `_effective_command_word` now
+skips the condition openers like the continuation keywords (and a `!`
+directly behind one), `_substitution_command_word` skips them too so
+the pipe hop's substitution check reads `if $(xargs …)`, and
+`_pipe_continuation_command` keeps the fold-1 body scan by recovering
+the pre-fold-4 opener with `skip_compound_conditions=False`. The same
+scan now reads the nested command-position substitution in a body or
+continuation (`then $(xargs …)`, `elif $(xargs …)`, `do $(xargs …)`)
+and the `case` pattern-body command (`case x in x) xargs …` with the
+`(x)`/`x|y)`/spaced terminators, a `;;`-separated later branch, and a
+`$(xargs …)` body). The fold ships 27 fixtures (10 condition rejects, 3
+nested-substitution rejects, 5 case-body rejects, 2 over-refusal pins,
+3 condition accepts, 1 nested accept, 1 case accept, and the 2 named
+boundary pins), every reject declaring `base_exit: 0`; all 18 runtime
+rejects FLIP (bash 5.2.26) and the 125-shape fd×op sweep at the folded
+head still measures 0 ACCEPT+FLIP / 0 over-refusals. The structural
+backstop correction: `_xargs_unresolved_command` re-consumes the
+placeable lead redirections before its `xargs` word scan, so a
+here-string *target* (`2<<< xargs`) is no longer misread as a command
+position and the `2<<<-`-style redirect-only shape is accepted; the
+unmodelled-operator spellings (`2<<<<`, the rc-2 `2><`/`2><<`/`2>><`
+pairs) still refuse through the same backstop. The fold's two new
+over-refusal pins name the pipe-chain non-passthrough classes: a
+redirect-only middle hop (`… | 2<<< "pad" | xargs …`) and a quoted
+middle command (`"pad` newline `" | 2<<< "x" xargs …`) both emit
+nothing to the downstream `xargs`, so the operand cannot reach it and
+the runtime cannot flip; the pipe-chain walk still refuses them because
+it assumes the operand flows through every hop. The compound body scan
+is deliberately branch- and segment-blind like the fold-1 F6 scan, so
+a benign `if true; then cat | xargs …` shares that same
+non-passthrough class (pre-existing, disclosed). All 20 rejects and the
+two over-refusal pins are counterfactually base-ACCEPT → head-REFUSE
+with their `file:line`; the four mechanism mutants
+(condition-skip, `!`-skip, condition-substitution-skip, backstop
+target-skip) plus the nested-substitution and case mutants red exactly
+their own fixtures and no others.
 
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
