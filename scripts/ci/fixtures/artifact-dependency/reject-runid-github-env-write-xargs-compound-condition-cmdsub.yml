@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): a multi-line pipeline (trailing `|`)
-# hides the upstream from the per-line carrier walk; joining a trailing
-# `|` is a new mechanism deferred as a residual. The payload write makes
-# the pin exercise the real deferred hole: the gate stays ACCEPT and the
-# shape runtime-FLIPs (issue #350, item 2 boundary class).
+# Fixture: the condition command is a substitution carrying an
+# `xargs` word (`$(xargs …)`), so the substituted command reads the
+# pipeline's stdin (issue #350f fold round 4; base ACCEPT, runtime
+# FLIP).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,8 +20,7 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" |
-          xargs -I{} cp payload {}
+          printf '%s\n' "$(printenv "${x}${y}")" | if $(xargs -I{} cp payload {}); then :; fi
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

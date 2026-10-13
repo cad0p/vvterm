@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control): the walk resolves the definite command
+# word `echo` and the `xargs` word is an argument, so the
+# unresolved-command backstop must not fire (issue #350f fold round
+# 3; runtime NOFLIP).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          echo xargs > file
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

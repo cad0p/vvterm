@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control, residual): the compound's body sits on a
+# plain physical line after the pipe hop (`if true` newline `then
+# xargs …`), which the logical-line/hop model does not join; no
+# line-scoped site sees the carrier. Measured ACCEPT, runtime FLIP,
+# a named residual (issue #350f fold round 4).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" | if true
+          then xargs -I{} cp payload {}; fi
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

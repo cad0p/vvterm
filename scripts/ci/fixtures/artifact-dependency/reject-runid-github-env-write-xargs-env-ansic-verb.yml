@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
-# Fixture (accept control, boundary): the xargs wrapper spelling
-# (`env xargs`) stays accepted and runtime-FLIPs; wrapper/assignment-prefix
-# resolution is a new mechanism deferred as a residual (issue #350, item 2
-# boundary class).
+# Fixture: bash decodes the ANSI-C command word before `env`
+# sees it (`$'env'` is `env`), so the wrapper resolves through
+# the carrier-site word decode (issue #350f fold round 2, H; base
+# ACCEPT, runtime FLIP).
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,7 +20,8 @@ jobs:
         run: |
           echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
           printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
-          printf '%s\n' "$(printenv "${x}${y}")" | env xargs -I{} cp payload {}
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          $'env' xargs -I{} cp payload {}
       - uses: actions/download-artifact@v8
         with:
           name: vvterm-build

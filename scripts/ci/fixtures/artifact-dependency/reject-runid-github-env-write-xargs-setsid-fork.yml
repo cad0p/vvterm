@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture (L2-4 census): the modelled `setsid -f` branch resolves
+# to `xargs`; `setsid` is absent on the macOS probe host (rc 127,
+# NOFLIP), the same tool-absence caveat the fold-1 `setsid` row
+# carries (issue #350f fold round 2; base ACCEPT).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          setsid -f xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

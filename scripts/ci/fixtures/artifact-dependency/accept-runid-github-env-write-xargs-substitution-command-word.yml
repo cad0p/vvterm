@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture (accept control, residual): the command word is a
+# substitution that produces the wrapper (`$(echo env) xargs …`,
+# backtick twin); the F5 substitution-position check refuses only
+# a substitution carrying an `xargs` word, so the wrapper-
+# producing form stays accepted; runtime FLIP, a named residual
+# (issue #350f fold round 2, H).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          $(echo env) xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

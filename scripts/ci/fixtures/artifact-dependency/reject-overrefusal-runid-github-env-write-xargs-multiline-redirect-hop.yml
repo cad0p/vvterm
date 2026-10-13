@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture (over-refusal pin): an intermediate hop that redirects its
+# stdout away (`> /dev/null cat |`) is refused fail-closed by the
+# chain-level upstream rule even though `cat`'s redirected stdout
+# feeds `xargs` an empty stream; runtime NOFLIP (issue #350f fold
+# round 2, lens MINOR).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          > /dev/null cat |
+          xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

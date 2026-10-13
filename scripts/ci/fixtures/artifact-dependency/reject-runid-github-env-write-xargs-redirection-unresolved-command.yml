@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Fixture (fail-closed backstop): `2<<<<` is an operator spelling the
+# consumer does not model, so the walk resolves no command word; an
+# `xargs` word remains in the segment and the structural backstop
+# refuses rather than guessing (issue #350f fold round 3; base
+# ACCEPT; bash rejects the shape with rc 2, so the refusal is
+# fail-closed rather than a runtime FLIP).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          2<<<< "pad" xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

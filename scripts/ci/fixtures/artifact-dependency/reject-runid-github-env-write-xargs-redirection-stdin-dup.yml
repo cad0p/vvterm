@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Fixture: `<&0` duplicates fd 0 from itself, so the pipeline stdin
+# survives; the walk consumes it like a non-stdin redirect (issue
+# #350f fold round 1, F3; base ACCEPT, runtime FLIP; `<&-` and
+# `< file` stay ACCEPT because the feed is replaced).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    env:
+      x: GITHUB_
+      y: ENV
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" > payload
+          printf '%s\n' "$(printenv "${x}${y}")" |
+          <&0 xargs -I{} cp payload {}
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
