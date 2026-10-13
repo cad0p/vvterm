@@ -23,4 +23,19 @@ struct PinScanCensusPinsTests {
             "the #450 pin-scan census found local copies or a stray hook use:\n\(violations.joined(separator: "\n"))"
         )
     }
+
+    /// Change-detector: the cohort list is a deliberate record of the migrated
+    /// files, so editing it must update the recorded count and digest in the
+    /// same commit. Without this, dropping a cohort entry would pass silently.
+    @Test
+    func pinScanCohortListIsRecorded() {
+        #expect(
+            PinScanCensus.expectedCohort.count == PinScanCensus.expectedCohortCount,
+            "the #450 census cohort changed size (\(PinScanCensus.expectedCohort.count) != \(PinScanCensus.expectedCohortCount)); update expectedCohortCount and expectedCohortDigest deliberately"
+        )
+        #expect(
+            PinScanCensus.cohortDigest() == PinScanCensus.expectedCohortDigest,
+            "the #450 census cohort list changed (digest \(PinScanCensus.cohortDigest()) != \(PinScanCensus.expectedCohortDigest)); update expectedCohortDigest deliberately"
+        )
+    }
 }
