@@ -104,11 +104,17 @@ struct ClipboardConfirmationRequest {
 
     static func lineCount(for payload: String) -> Int {
         // Count line breaks as LF bytes plus CR bytes not immediately
-        // followed by LF (`\r\n` counts once; #442 made CR unsafe and
-        // prompt-able, so the count must match the lines a confirmed paste
-        // submits). `components(separatedBy:)` would materialize one substring
-        // per line for a remote-seeded payload that can be arbitrarily large,
-        // just to render a count; the byte scan is allocation-free.
+        // followed by LF, then add the base line (`\r\n` counts once; #442
+        // made CR unsafe and prompt-able, so a CR-separated payload's count
+        // must reflect its line breaks — the prompt's only numeric
+        // blast-radius signal). This is the conventional line count, not an
+        // exact count of the chunks a confirmed paste submits: `encode`
+        // converts LF to CR on the non-bracketed arm, so a trailing break
+        // yields one submitted chunk for a "2 line" payload — the pre-#442
+        // LF-only count had the same property. `components(separatedBy:)`
+        // would materialize one substring per line for a remote-seeded
+        // payload that can be arbitrarily large, just to render a count; the
+        // byte scan is allocation-free.
         var count = 1
         var previousByte: UInt8?
         for byte in payload.utf8 {
