@@ -9,8 +9,17 @@
 //  - It is name-based. A residual copy that renames its helper (`func repoRoot`,
 //    `func scan`) or inlines a lexer body passes.
 //  - The comment stripper is the minimal line-based one below, not the
-//    raw-string-aware `PinScan.strippingComments`: a declaration hidden in a
-//    string literal is not found (a real declaration is always in code).
+//    raw-string-aware `PinScan.strippingComments`. The unterminated-`/*`-inside-
+//    a-string-literal desync is closed (fold round 2, CL-1): a `/*` starts a
+//    block comment only when a closing `*/` exists later in the file, so an
+//    unterminated one cannot swallow the remainder, and the declaration scan
+//    runs over the joined stripped text (CL-3), so a `func` and its name split
+//    across a line break are still caught. Residuals left on purpose: a `/*`
+//    inside a string literal that *is* later "closed" by any `*/` in the file
+//    still enters block mode and can hide the lines in between, and a `//`-like
+//    sequence inside a string still blanks the rest of that line; a real
+//    declaration is always in code, and the golden lexer corpus carries the
+//    string-aware semantic contract.
 //  - It cannot see the pre-existing inline depth-based root resolvers that
 //    never declared a migrated name and never read the hook
 //    (`TeleportLoginClientErrorShapeTests`, `StartupDeadlineTests`,
@@ -166,15 +175,17 @@ enum PinScanCensus {
             if censusFiles.contains(relative) { continue }
 
             let allowed = allowlist[relative]?.helpers ?? []
-            for (lineNumber, line) in strippingLineComments(content) {
-                for helper in migratedHelpers where !allowed.contains(helper) {
-                    let pattern = "func\\s+" + helper + "\\s*\\("
-                    if line.range(of: pattern, options: .regularExpression) != nil {
-                        failures.append(
-                            "unexpected declaration: \(relative):\(lineNumber) declares `func \(helper)(`. \(remedy(for: helper))"
-                        )
-                    }
+            let strippedLines = strippingLineComments(content)
+            let joinedCode = strippedLines.map(\.1).joined(separator: "\n")
+            for helper in migratedHelpers where !allowed.contains(helper) {
+                let pattern = "func\\s+" + helper + "\\s*\\("
+                for lineNumber in declarationLineNumbers(in: joinedCode, pattern: pattern) {
+                    failures.append(
+                        "unexpected declaration: \(relative):\(lineNumber) declares `func \(helper)(`. \(remedy(for: helper))"
+                    )
                 }
+            }
+            for (lineNumber, line) in strippedLines {
                 if line.range(of: "struct\\s+PinFailure\\b", options: .regularExpression) != nil {
                     failures.append(
                         "unexpected declaration: \(relative):\(lineNumber) declares `struct PinFailure`. Use the shared `PinFailure` in \(supportFile)."
@@ -228,16 +239,40 @@ enum PinScanCensus {
         return "\(migration).\(note) Otherwise allowlist this file with a reason."
     }
 
+    /// The 1-based line numbers in `code` where `pattern` matches. The caller
+    /// passes the joined, comment-stripped text (the same form as the
+    /// support-file presence check), so a `func` keyword and its name split
+    /// across a line break are still caught (fold round 2, CL-3). The pattern
+    /// is not string-aware, so a literal `"func <helper>("` would be a false
+    /// positive — the fail-closed direction the census wants.
+    private static func declarationLineNumbers(in code: String, pattern: String) -> [Int] {
+        var lineNumbers: [Int] = []
+        var searchStart = code.startIndex
+        while searchStart < code.endIndex,
+              let match = code.range(of: pattern, options: .regularExpression, range: searchStart..<code.endIndex) {
+            let lineNumber = code[..<match.lowerBound].reduce(into: 1) { count, character in
+                if character == "\n" { count += 1 }
+            }
+            lineNumbers.append(lineNumber)
+            searchStart = match.upperBound
+        }
+        return lineNumbers
+    }
+
     /// A minimal line-based comment stripper: returns `(lineNumber, code)` with
     /// `//` line comments and `/* … */` block comments removed. It deliberately
     /// does NOT try to understand string literals — the census scans for
     /// declaration and environment-variable tokens that only ever appear in
     /// code, and a string-aware stripper (the shared lexer) can desynchronize
-    /// on raw strings and silently hide code.
+    /// on raw strings and silently hide code. An unterminated `/*` (including
+    /// one inside a string literal) starts a block comment only when a `*/`
+    /// exists later in the file; otherwise it is left as literal text, so it
+    /// cannot swallow the rest of the file (fold round 2, CL-1).
     private static func strippingLineComments(_ content: String) -> [(Int, String)] {
+        let lines = content.components(separatedBy: "\n")
         var out: [(Int, String)] = []
         var inBlockComment = false
-        for (index, raw) in content.components(separatedBy: "\n").enumerated() {
+        for (index, raw) in lines.enumerated() {
             var line = raw
             if inBlockComment {
                 if let end = line.range(of: "*/") {
@@ -260,8 +295,16 @@ enum PinScanCensus {
                     line = String(line[..<bs.lowerBound]) + String(line[end.upperBound...])
                     continue
                 }
-                line = String(line[..<bs.lowerBound])
-                inBlockComment = true
+                // No `*/` on this line: only a block that actually closes later in
+                // the file may swallow the following lines. An unterminated `/*`
+                // (e.g. inside a string literal) is left as literal text and must
+                // not hide the rest of the file.
+                let tail = String(line[bs.upperBound...]) + "\n"
+                    + lines[(index + 1)...].joined(separator: "\n")
+                if tail.contains("*/") {
+                    line = String(line[..<bs.lowerBound])
+                    inBlockComment = true
+                }
                 break
             }
             out.append((index + 1, line))
