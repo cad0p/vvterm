@@ -46,6 +46,17 @@ struct TeleportPhaseChainUITestHarness: View {
     @StateObject private var keyRing = MockTeleportKeyRing()
     @State private var presentingSheet: Bool = false
 
+    /// The number of gate-button actions that ran while the mock was still
+    /// parked in `.awaitingApproval` (issue #444). The pinned mock self-
+    /// releases its 30 s hold, so a missed gate tap would otherwise complete
+    /// the chain and pass green; the UI test asserts this counter is exactly 1
+    /// immediately after its gate tap. The count is tap-specific only because
+    /// the action is state-gated: the pinned mock's `releaseApproval()` still
+    /// returns `true` after its own self-release (it never sets
+    /// `approvalReleased` on the deadline path), so the state guard — not the
+    /// return value alone — is what excludes a post-self-release dispatch.
+    @State private var gateReleases: Int = 0
+
     /// Parent-owned bootstrap coordinator (issue #277): the harness owns the
     /// single instance so its `beginCallCount` survives the phase-1 → phase-2
     /// sheet swap and the no-re-run assertion can read it. It is handed to the
@@ -116,7 +127,23 @@ struct TeleportPhaseChainUITestHarness: View {
                 // The #277 deterministic gate: a sibling of the shared sheet
                 // that observes the harness-owned coordinator. Its own
                 // existence is the gate-engaged signal.
-                PhaseChainGateOverlay(coordinator: bootstrapCoordinator)
+                PhaseChainGateOverlay(coordinator: bootstrapCoordinator, gateReleases: $gateReleases)
+
+                // The #444 A3 gate-release observable: always rendered on the
+                // presented surface (deliberately a direct child of this
+                // ZStack, NOT inside the state-gated `PhaseChainGateOverlay`,
+                // whose removal would take the label with it). A missed gate
+                // tap leaves this at 0 and reds the class instead of passing
+                // green via the mock's 30 s self-release.
+                // `.allowsHitTesting(false)`: the label's expanded frame must
+                // not intercept the sheet's taps (it is accessibility-only).
+                Text("gateReleases: \(gateReleases)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.gateReleases")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 12)
+                    .allowsHitTesting(false)
             }
         }
         .preferredColorScheme(.dark)
@@ -148,11 +175,21 @@ struct TeleportPhaseChainUITestHarness: View {
 
 private struct PhaseChainGateOverlay: View {
     @ObservedObject var coordinator: MockTeleportBootstrapCoordinator
+    @Binding var gateReleases: Int
 
     var body: some View {
         if coordinator.state == .awaitingApproval {
             Button("Release Bootstrap Approval") {
-                coordinator.releaseApproval()
+                // #444 A3: state-gated so the counter is tap-specific. The
+                // mock checks its deadline only at the loop condition after
+                // each 50 ms park sleep, so a delivered-but-late action can
+                // still observe `.awaitingApproval` for up to ~50 ms past the
+                // mock's 30 s self-release; re-checking the state at action
+                // time closes the post-state-write arm, and the residual is
+                // bounded by that cadence (recorded in the #444 walk).
+                if coordinator.state == .awaitingApproval, coordinator.releaseApproval() {
+                    gateReleases += 1
+                }
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("vvterm.teleport.phaseChainHarness.releaseBootstrapApproval")

@@ -23,6 +23,44 @@
 //  The host call-site composition (readiness capture + presentation binding)
 //  is pinned by `TeleportSetupSheetPinsTests`, not exercised here.
 //
+//  Wait/tap contract (issue #444; source-pinned by
+//  `VVTermTests/Features/Teleport/TeleportPhaseTransitionWaitBudgetPinsTests`):
+//    - `waitForElement` / `waitForLabel` are bounded re-query polls: the
+//      query is constructed fresh inside the loop, `exists` guards every
+//      read, the pause is a `RunLoop` run (never a fixed sleep), and the
+//      deadline is derived from `budget`. They assert internally with a
+//      diagnostic payload (one failure owner), so a timeout names the site.
+//    - `tapControl` is the ONLY tap path: existence wait -> bounded
+//      best-effort frame settle (3 s; `exists` re-checked immediately before
+//      every `.frame` read, and a vanished element returns without tapping or
+//      asserting) -> `coordinate(withNormalizedOffset:)` tap. No
+//      `.isHittable` read and no bare element `.tap()` can record the #444
+//      "Failed to determine hittability" / "Activation point invalid" abort,
+//      and `XCTNSPredicateExpectation` is not used (its predicate and a direct
+//      `isHittable` read are the same recorded `hitPoint:` path).
+//    - Budget scope (the A1 corrected scope rule): only the phase-transition
+//      carriers take `axWaitBudget` (30 s, the #387/#400 calibrated floor) —
+//      each `tapControl` existence wait, the `registrationContinue` marker
+//      wait, and the bootstrap-header sheet-appearance wait in tests 1–2
+//      (the pre-gate existence probe was the residual I2-shaped arm; impl
+//      review M1-1). The non-carrier probes keep their pre-existing short
+//      values because they do not gate a chain step; the lifted carrier keeps
+//      the per-method ceilings at ≈146 s / 136 s / 184 s, inside the 300 s
+//      allowance (#444 plan §7). The exempt list:
+//        * `setupPill` existence                               5 s
+//        * "Approve in Safari" header label                     5 s
+//        * `gateReleases` label read                            5 s
+//        * `bootstrapBegins` label                              5 s
+//        * "Signed in to Teleport" existence                    5 s
+//        * `loginContinue` non-existence (negative check)       8 s
+//        * terminal dismissal proofs                            3 s
+//    - The A3 gate-release counter
+//      (`vvterm.teleport.phaseChainHarness.gateReleases`) is asserted right
+//      after each gate tap, bounded at 5 s. `waitForLabel` compares the full
+//      label, so `gateReleases: 10` cannot satisfy `gateReleases: 1`
+//      (CL-13). The pinned mock self-releases its 30 s hold, so without this
+//      counter a missed gate tap would pass green.
+//
 //  Launch-arg contract (parsed by TeleportPhaseChainUITestHarness+iOS.swift):
 //    --vvterm-ui-test-teleport-phase-chain   enables the harness
 //
@@ -36,6 +74,25 @@ import XCTest
 
 @MainActor
 final class TeleportPhaseTransitionUITests: XCTestCase {
+
+    // MARK: - Identifiers
+
+    private static let serverRowIdentifier = "vvterm.serverRow.00000000-0000-0000-0000-000000000001"
+    private static let setupPillIdentifier = "vvterm.serverRow.readinessPill.setup"
+    private static let releaseControlIdentifier = "vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"
+    private static let gateReleasesIdentifier = "vvterm.teleport.phaseChainHarness.gateReleases"
+    private static let bootstrapHeaderIdentifier = "vvterm.teleport.bootstrap.header"
+    private static let registrationContinueIdentifier = "vvterm.teleport.registration.continueButton"
+    private static let loginHeaderIdentifier = "vvterm.teleport.login.header"
+    private static let signInButtonIdentifier = "vvterm.teleport.login.signInButton"
+    private static let loginContinueIdentifier = "vvterm.teleport.login.continueButton"
+    private static let bootstrapBeginsIdentifier = "vvterm.teleport.phaseChainHarness.bootstrapBegins"
+
+    /// The calibrated stall floor for the phase-transition carriers (#387's
+    /// 22.557 s stall; 20 s was rejected in #400). Declared exactly once: the
+    /// pin suite reds a second `TimeInterval` constant and a call-site
+    /// override.
+    private static let axWaitBudget: TimeInterval = 30
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -95,37 +152,118 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         add(attachment)
     }
 
-    // MARK: - Helpers
+    // MARK: - Wait/tap helpers (issue #444)
 
-    /// The harness renders a single `ServerRow` with a fixed cluster ID.
-    private func serverRow(_ app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)["vvterm.serverRow.00000000-0000-0000-0000-000000000001"]
-    }
-
-    /// Bounded hittability wait, so a mounted-but-untappable control during
-    /// the sheet presentation cannot false-red the assertion (the
-    /// NoticePresentationUITests / ServerNavigationUITests idiom).
-    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isHittable == true"),
-            object: element
+    /// Bounded re-query existence poll. The query is constructed fresh inside
+    /// the loop (a captured element would go stale behind the presentation
+    /// animation) and the failure payload is owned by this single assertion.
+    @discardableResult
+    private func waitForElement(
+        _ identifier: String,
+        in app: XCUIApplication,
+        reason: String,
+        budget: TimeInterval = TeleportPhaseTransitionUITests.axWaitBudget,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(budget)
+        let start = Date()
+        var attempts = 0
+        var lastExists = false
+        while Date() < deadline {
+            attempts += 1
+            let candidate = app.descendants(matching: .any)[identifier]
+            lastExists = candidate.exists
+            if lastExists {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+        XCTFail(
+            "\(reason) — attempts=\(attempts) elapsed=\(elapsedMs)ms budget=\(budget)s identifier=\(identifier) lastExists=\(lastExists) app state=\(app.state.rawValue)",
+            file: file,
+            line: line
         )
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+        return false
     }
 
-    /// Bounded poll for a counters/readiness label substring. The label
-    /// re-renders on the parent-owned coordinator's `@Published` state, so
-    /// this is a signal wait whose timeout only bounds a genuine failure.
+    /// Bounded re-query label poll. `needle` is compared with `==` — the full
+    /// label — so a longer label (`gateReleases: 10`) cannot satisfy a shorter
+    /// needle (`gateReleases: 1`) (CL-13).
+    @discardableResult
     private func waitForLabel(
         _ needle: String,
-        in element: XCUIElement,
-        timeout: TimeInterval = 5
+        _ identifier: String,
+        in app: XCUIApplication,
+        reason: String,
+        budget: TimeInterval = TeleportPhaseTransitionUITests.axWaitBudget,
+        file: StaticString = #filePath,
+        line: UInt = #line
     ) -> Bool {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", needle),
-            object: element
+        let deadline = Date().addingTimeInterval(budget)
+        let start = Date()
+        var attempts = 0
+        var lastExists = false
+        var lastLabel = "<unread>"
+        var lastLabelReadMs = 0
+        while Date() < deadline {
+            attempts += 1
+            let candidate = app.staticTexts[identifier]
+            lastExists = candidate.exists
+            if lastExists {
+                let readStart = Date()
+                lastLabel = candidate.label
+                lastLabelReadMs = Int(Date().timeIntervalSince(readStart) * 1000)
+                if lastLabel == needle {
+                    return true
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+        XCTFail(
+            "\(reason) — attempts=\(attempts) elapsed=\(elapsedMs)ms budget=\(budget)s identifier=\(identifier) needle=\(needle) lastExists=\(lastExists) label=\(lastLabel) labelReadMs=\(lastLabelReadMs) app state=\(app.state.rawValue)",
+            file: file,
+            line: line
         )
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+        return false
+    }
+
+    /// The only tap path (issue #444): existence wait -> bounded best-effort
+    /// frame settle -> coordinate tap. The settle timeout does not assert and
+    /// a vanished element returns without tapping, so the caller's next-state
+    /// wait (or the A3 counter) is the verdict.
+    private func tapControl(
+        _ identifier: String,
+        in app: XCUIApplication,
+        reason: String,
+        budget: TimeInterval = TeleportPhaseTransitionUITests.axWaitBudget,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard waitForElement(identifier, in: app, reason: reason, budget: budget, file: file, line: line) else {
+            return
+        }
+
+        // Frame settle: the I1 record was an element-tappability condition, so
+        // give a mounted-but-unmeasured frame a bounded window to settle. The
+        // `.frame` read is guarded by `exists` immediately before it.
+        let settleDeadline = Date().addingTimeInterval(3)
+        while Date() < settleDeadline {
+            let candidate = app.descendants(matching: .any)[identifier]
+            guard candidate.exists else { return }
+            if candidate.frame.width > 0, candidate.frame.height > 0 { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+
+        // Coordinate tap: no `hitPoint:`/scroll-to-visible record path. The
+        // event builder still resolves the element's frame at dispatch (a
+        // vanished element records and aborts — an accepted residual), so the
+        // element is re-queried and `exists`-guarded once more.
+        let element = app.descendants(matching: .any)[identifier]
+        guard element.exists else { return }
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     // MARK: - Phase 1 → Phase 2 transition (the bug)
@@ -143,47 +281,65 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // PillBadge applies `.accessibilityElement(children: .ignore)`, which
         // surfaces the element as `Other`, not `StaticText` — query
         // type-agnostically (the migration every sibling readiness suite
-        // already carries, 85421b53).
-        let setupPill = app.descendants(matching: .any)["vvterm.serverRow.readinessPill.setup"]
+        // already carries, 85421b53). Non-carrier probe: 5 s.
+        let setupPill = app.descendants(matching: .any)[Self.setupPillIdentifier]
         XCTAssertTrue(setupPill.waitForExistence(timeout: 5), "amber 'Setup' pill should be visible for needsBootstrap")
 
-        // Tap the row → the bootstrap sheet should appear.
-        serverRow(app).tap()
-
-        // The harness's mock holds `.awaitingApproval` until the release
-        // control is tapped (issue #277) — the control's existence is the
-        // gate-engaged signal, so the header below is a stable state, not a
-        // ~100 ms transient.
-        let releaseControl = app.buttons["vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"]
-        XCTAssertTrue(
-            releaseControl.waitForExistence(timeout: 5),
-            "bootstrap gate's release control should appear in .awaitingApproval"
+        // Tap the row → the bootstrap sheet should appear. The tap path's own
+        // existence wait is the carrier; the old standalone pre-tap
+        // `releaseControl.waitForExistence`/`waitForHittable` pair and its
+        // "persistence proof" are dropped (subsumed by the tap path and the
+        // A3 counter).
+        tapControl(
+            Self.serverRowIdentifier,
+            in: app,
+            reason: "tapping the needsBootstrap row must present the bootstrap sheet"
         )
-        XCTAssertTrue(waitForHittable(releaseControl), "release control must be hittable")
 
-        let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5), "bootstrap sheet header should appear after tapping a needsBootstrap row")
-        XCTAssertEqual(bootstrapHeader.label, "Approve in Safari")
+        // Sheet-appearance carrier (impl review M1-1): the header existence
+        // was the last I2-shaped 5 s gate before the release tap, so it takes
+        // the 30 s carrier budget; the header LABEL equality below stays a
+        // 5 s probe.
+        waitForElement(
+            Self.bootstrapHeaderIdentifier,
+            in: app,
+            reason: "bootstrap sheet header should appear after tapping a needsBootstrap row — the sheet-appearance gate"
+        )
+        waitForLabel(
+            "Approve in Safari",
+            Self.bootstrapHeaderIdentifier,
+            in: app,
+            reason: "bootstrap header must read 'Approve in Safari'",
+            budget: 5
+        )
         attachScreenshot(app, named: "phaseChain-1-bootstrap-sheet")
 
-        // Persistence proof: after the header read the gate is still held, so
-        // the header was not caught by luck.
-        XCTAssertTrue(
-            releaseControl.exists && waitForHittable(releaseControl),
-            "the gate must still hold after the header read"
+        tapControl(
+            Self.releaseControlIdentifier,
+            in: app,
+            reason: "the bootstrap gate's release control must be present in .awaitingApproval"
         )
 
-        tapWhenHittable(releaseControl)
+        // #444 A3: the mock self-releases its 30 s hold, so a missed gate tap
+        // would complete the chain anyway; the counter is the tap-specific
+        // observable. Non-carrier probe: 5 s.
+        waitForLabel(
+            "gateReleases: 1",
+            Self.gateReleasesIdentifier,
+            in: app,
+            reason: "the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+            budget: 5
+        )
 
         // The mock bootstrap coordinator (happyPath) succeeds once released.
         // The bootstrap sheet's `onSuccess` stores the result and flips
         // readiness to `.needsRegistration`, which re-renders the sheet as
-        // `TeleportRegistrationView`. Wait for the registration form's
-        // Continue button to appear — that's the phase-2 marker.
-        let registrationContinue = app.buttons["vvterm.teleport.registration.continueButton"]
-        XCTAssertTrue(
-            registrationContinue.waitForExistence(timeout: 8),
-            "registration sheet (Continue button) should appear after bootstrap succeeds — this is the phase 1→2 transition that was broken"
+        // `TeleportRegistrationView`. The Continue button's appearance is the
+        // phase-2 marker — a phase-transition carrier, 30 s.
+        waitForElement(
+            Self.registrationContinueIdentifier,
+            in: app,
+            reason: "registration sheet (Continue button) should appear after bootstrap succeeds — the phase 1→2 transition that was broken (#272)"
         )
 
         // The bootstrap sheet should be GONE (the success copy must not
@@ -194,7 +350,7 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         )
 
         // The "Signed in to Teleport" row (phase-1-complete section of the
-        // registration sheet) confirms we're on phase 2.
+        // registration sheet) confirms we're on phase 2. Non-carrier probe: 5 s.
         let signedIn = app.staticTexts["Signed in to Teleport"]
         XCTAssertTrue(
             signedIn.waitForExistence(timeout: 5),
@@ -212,25 +368,44 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
     func testPhase1BootstrapSuccess_doesNotReRunBootstrap() {
         let app = launch()
 
-        serverRow(app).tap()
+        tapControl(
+            Self.serverRowIdentifier,
+            in: app,
+            reason: "tapping the needsBootstrap row must present the bootstrap sheet"
+        )
 
-        // Gate-held bootstrap phase: the release control exists exactly while
-        // the mock is parked in `.awaitingApproval` (issue #277).
-        let releaseControl = app.buttons["vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"]
-        XCTAssertTrue(releaseControl.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForHittable(releaseControl))
+        // Gate-held bootstrap phase: the sheet-appearance carrier (impl
+        // review M1-1) takes the 30 s budget; the element reference below is
+        // reused for the post-transition absence check.
+        let bootstrapHeader = app.staticTexts[Self.bootstrapHeaderIdentifier]
+        waitForElement(
+            Self.bootstrapHeaderIdentifier,
+            in: app,
+            reason: "bootstrap sheet header should appear after tapping a needsBootstrap row — the sheet-appearance gate"
+        )
 
-        let bootstrapHeader = app.staticTexts["vvterm.teleport.bootstrap.header"]
-        XCTAssertTrue(bootstrapHeader.waitForExistence(timeout: 5))
+        tapControl(
+            Self.releaseControlIdentifier,
+            in: app,
+            reason: "the bootstrap gate's release control must be present in .awaitingApproval"
+        )
 
-        // Persistence proof: the gate is still holding after the header read.
-        XCTAssertTrue(releaseControl.exists && waitForHittable(releaseControl))
+        // #444 A3: the tap-specific gate-release observable. Non-carrier
+        // probe: 5 s.
+        waitForLabel(
+            "gateReleases: 1",
+            Self.gateReleasesIdentifier,
+            in: app,
+            reason: "the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+            budget: 5
+        )
 
-        tapWhenHittable(releaseControl)
-
-        // Wait for the registration sheet.
-        let registrationContinue = app.buttons["vvterm.teleport.registration.continueButton"]
-        XCTAssertTrue(registrationContinue.waitForExistence(timeout: 8))
+        // Wait for the registration sheet — a phase-transition carrier, 30 s.
+        waitForElement(
+            Self.registrationContinueIdentifier,
+            in: app,
+            reason: "registration sheet (Continue button) should appear after bootstrap succeeds"
+        )
 
         // The bootstrap header must be gone (not re-presented).
         XCTAssertFalse(
@@ -240,15 +415,13 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         // The namesake no-re-run property: the parent-owned coordinator counts
         // `begin` calls and the harness renders the count outside the sheet, so
         // it survives the bootstrap → registration swap. A second (fallback)
-        // bootstrap would increment it to 2.
-        let bootstrapBeginsLabel = app.staticTexts["vvterm.teleport.phaseChainHarness.bootstrapBegins"]
-        XCTAssertTrue(
-            bootstrapBeginsLabel.waitForExistence(timeout: 5),
-            "the harness bootstrapBegins label should be visible after the transition"
-        )
-        XCTAssertTrue(
-            waitForLabel("bootstrapBegins: 1", in: bootstrapBeginsLabel),
-            "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count; label was \(bootstrapBeginsLabel.label)"
+        // bootstrap would increment it to 2. Non-carrier probe: 5 s.
+        waitForLabel(
+            "bootstrapBegins: 1",
+            Self.bootstrapBeginsIdentifier,
+            in: app,
+            reason: "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+            budget: 5
         )
 
         attachScreenshot(app, named: "phaseChain-no-bootstrap-rerun")
@@ -261,46 +434,60 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
     func testPhase2RegistrationSuccess_transitionsToLoginSheet() {
         let app = launch()
 
-        serverRow(app).tap()
+        tapControl(
+            Self.serverRowIdentifier,
+            in: app,
+            reason: "tapping the needsBootstrap row must present the bootstrap sheet"
+        )
 
-        // Wait for the release control (the mock parks in `.awaitingApproval`)
-        // — its presence is this test's bootstrap-phase proof.
-        let releaseControl = app.buttons["vvterm.teleport.phaseChainHarness.releaseBootstrapApproval"]
-        XCTAssertTrue(releaseControl.waitForExistence(timeout: 5), "bootstrap gate's release control should appear")
-        XCTAssertTrue(waitForHittable(releaseControl))
-        tapWhenHittable(releaseControl)
+        tapControl(
+            Self.releaseControlIdentifier,
+            in: app,
+            reason: "the bootstrap gate's release control must be present in .awaitingApproval"
+        )
 
-        // Wait for the registration sheet (phase 1 succeeds after release).
-        let registrationContinue = app.buttons["vvterm.teleport.registration.continueButton"]
-        XCTAssertTrue(registrationContinue.waitForExistence(timeout: 8))
+        // #444 A3: the tap-specific gate-release observable. Non-carrier
+        // probe: 5 s.
+        waitForLabel(
+            "gateReleases: 1",
+            Self.gateReleasesIdentifier,
+            in: app,
+            reason: "the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+            budget: 5
+        )
 
         // Tap Continue → the mock registration coordinator (happyPath)
         // succeeds, firing `onSuccess` which flips readiness to
-        // `.needsLogin` → the login sheet appears.
-        registrationContinue.tap()
+        // `.needsLogin` → the login sheet appears. The tap path's existence
+        // wait is the phase-1→2 carrier (30 s).
+        tapControl(
+            Self.registrationContinueIdentifier,
+            in: app,
+            reason: "registration sheet (Continue button) should appear after bootstrap succeeds — the phase 1→2 transition"
+        )
 
         // The login sheet's "Sign in with Face ID" button is the phase-3
-        // marker (the login sheet starts in .idle and requires a tap).
-        let signInButton = app.buttons["vvterm.teleport.login.signInButton"]
-        XCTAssertTrue(
-            signInButton.waitForExistence(timeout: 8),
-            "login sheet (Sign in button) should appear after registration succeeds — this is the phase 2→3 transition"
+        // marker (the login sheet starts in .idle and requires a tap); the tap
+        // path's existence wait is the phase-2→3 carrier (30 s).
+        tapControl(
+            Self.signInButtonIdentifier,
+            in: app,
+            reason: "login sheet (Sign in button) should appear after registration succeeds — the phase 2→3 transition"
         )
 
         // The registration Continue button must be gone.
         XCTAssertFalse(
-            registrationContinue.exists,
+            app.buttons[Self.registrationContinueIdentifier].exists,
             "registration sheet should NOT persist — it should have transitioned to login"
         )
 
         // Tap Sign in → the mock login coordinator (happyPath) succeeds and
-        // the host-login step appears with a Continue button.
-        XCTAssertTrue(waitForHittable(signInButton), "Sign in button must be hittable")
-        signInButton.tap()
-        let loginContinue = app.buttons["vvterm.teleport.login.continueButton"]
-        XCTAssertTrue(
-            loginContinue.waitForExistence(timeout: 8),
-            "the host-login step (Continue button) should appear after Face ID succeeds"
+        // the host-login step appears with a Continue button. The tap path's
+        // existence wait is the Face-ID-success carrier (30 s).
+        tapControl(
+            Self.loginContinueIdentifier,
+            in: app,
+            reason: "the host-login step (Continue button) should appear after Face ID succeeds"
         )
         attachScreenshot(app, named: "phaseChain-3-login-hostLogin")
 
@@ -309,18 +496,28 @@ final class TeleportPhaseTransitionUITests: XCTestCase {
         //
         // `signInButton` renders only in login `.idle` and disappears as soon
         // as the coordinator leaves it, so its absence is NOT a dismissal
-        // signal. Assert the host-login step is gone AND the harness row is
-        // interactive again: the sheet must actually dismiss.
-        XCTAssertTrue(waitForHittable(loginContinue), "host-login Continue must be hittable")
-        loginContinue.tap()
-
+        // signal. Assert the host-login step is gone AND the presented
+        // surface's own live marker is gone: the sheet must actually dismiss.
+        // Negative check keeps its pre-existing 8 s.
         XCTAssertTrue(
-            loginContinue.waitForNonExistence(timeout: 8),
+            app.buttons[Self.loginContinueIdentifier].waitForNonExistence(timeout: 8),
             "the host-login step should be gone after Continue — login success must finish the chain"
         )
+        // Terminal dismissal proof: the harness row's `exists` is true behind a
+        // presented sheet, so the pre-#444 `waitForHittable(serverRow)` cannot
+        // become a row-existence check. The login sheet's header is the marker
+        // that is live while the sheet is up at this point (it renders in every
+        // login state, including the host-login step); the bootstrap header is
+        // kept as the #444 plan's explicit check, but it is already absent from
+        // phase 2 onward, so the login header is the non-vacuous verdict. Both
+        // are the `TeleportReadinessIOSUITests.swift:283` absence idiom, 3 s.
         XCTAssertTrue(
-            waitForHittable(serverRow(app)),
-            "the harness row must be hittable again — the setup sheet must have dismissed"
+            app.staticTexts[Self.loginHeaderIdentifier].waitForNonExistence(timeout: 3),
+            "the login sheet's header must be gone — the setup sheet must have dismissed"
+        )
+        XCTAssertTrue(
+            app.staticTexts[Self.bootstrapHeaderIdentifier].waitForNonExistence(timeout: 3),
+            "the setup sheet must have dismissed (its bootstrap header must be gone)"
         )
     }
 }
