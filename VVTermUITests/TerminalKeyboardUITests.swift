@@ -225,7 +225,11 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     @MainActor
     func testKeyboardIsScopedToTerminalSurface() throws {
-        let app = launchKeyboardHarness()
+        // Issue #441 positive control: the harness swallows the first
+        // mode-button invocation of this launch, so the first switch below
+        // must be carried end-to-end by the retry + marker + coordinate-tap
+        // recovery path (the second switch then runs the normal path).
+        let app = launchKeyboardHarness(swallowsFirstModeTap: true)
         let terminal = waitForTerminal(in: app)
         terminal.tap()
         assertKeyboardAndAccessoryVisible(in: app)
@@ -2805,7 +2809,8 @@ final class TerminalKeyboardUITests: XCTestCase {
         simulatesDetachedLightAccessoryHost: Bool = false,
         simulatesStaleLightAccessoryCacheOnResume: Bool = false,
         splitPaneFocus: Bool = false,
-        testsAppShortcutInputs: Bool = false
+        testsAppShortcutInputs: Bool = false,
+        swallowsFirstModeTap: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -2820,6 +2825,9 @@ final class TerminalKeyboardUITests: XCTestCase {
         }
         if testsAppShortcutInputs {
             app.launchArguments.append("--vvterm-ui-test-terminal-app-shortcut-inputs")
+        }
+        if swallowsFirstModeTap {
+            app.launchArguments.append("--vvterm-ui-test-mode-buttons-swallow-first-tap")
         }
         if preservesTerminalSize {
             app.launchArguments.append("--vvterm-ui-test-preserve-terminal-size")
@@ -3021,10 +3029,54 @@ final class TerminalKeyboardUITests: XCTestCase {
         element.tap()
     }
 
-    /// Taps a harness mode button and verifies the expected surface appeared;
-    /// under runner load the tap can land on a stale AX frame and the mode
-    /// switch never fires (observed: inputViewMode=system after mode.other),
-    /// so a single bounded re-tap absorbs the miss. #85 family.
+    /// Reads the harness `harnessMode=terminal|other` marker (issue #441)
+    /// from the keyboard-harness diagnostics. Token-boundary parse: the
+    /// prefix match cannot alias the product-built `inputViewMode=` token,
+    /// and a missing element / token reads `unknown` rather than aborting.
+    @MainActor
+    private func harnessMode(in app: XCUIApplication) -> String {
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        guard diagnostics.exists else { return "unknown" }
+        guard let token = diagnostics.label
+            .split(separator: " ")
+            .first(where: { $0.hasPrefix("harnessMode=") }) else {
+            return "unknown"
+        }
+        return String(token.dropFirst("harnessMode=".count))
+    }
+
+    /// Bounded wait for the harness mode marker to change after a mode-switch
+    /// tap (issue #441): unchanged means the touch was delivered but lost (the
+    /// retry signal), changed means it landed (only the surface wait remains).
+    @MainActor
+    private func waitForHarnessModeChange(
+        from previous: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if harnessMode(in: app) != previous {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    /// Taps a harness mode button and verifies the expected surface appeared
+    /// (issue #441). Every attempt dispatches a raw coordinate touch — the
+    /// element `tap()`/`isHittable` path is the one that recorded `Computed
+    /// hit point {-1, -1} after scrolling to visible` and then repeated the
+    /// identical mechanism — and the retry is keyed on the harness
+    /// `harnessMode=` marker: an unchanged marker means the touch was
+    /// delivered but lost (retry), a changed one means it landed and only a
+    /// bounded surface wait remains. Attempts differ only in preparation
+    /// (fresh re-resolve + settle; `waitForKeyboardSettle` on attempt 3). The
+    /// terminal assertion carries the marker before/after, the last observed
+    /// frame and existence. `isHittable` is deliberately absent here: the
+    /// getter itself records the hit-point issue on this host path and would
+    /// replace the diagnostic.
     @MainActor
     private func tapModeSwitchAndWaitForSurface(
         _ buttonID: String,
@@ -3032,21 +3084,65 @@ final class TerminalKeyboardUITests: XCTestCase {
         in app: XCUIApplication,
         timeout: TimeInterval = 5
     ) {
-        let button = app.buttons[buttonID]
         // Element-agnostic like waitForTerminal: the terminal surface is a
         // plain UIView, so it never matches under app.buttons[...].
         let surface = app.descendants(matching: .any)
             .matching(identifier: surfaceID)
             .firstMatch
-        for _ in 1...2 {
-            tapWhenHittable(button, in: app)
-            if surface.waitForExistence(timeout: timeout) {
+        var markerBefore = "unknown"
+        var lastFrame: CGRect = .null
+        var lastExists = false
+        for attempt in 1...3 {
+            if attempt == 3 {
+                // Attempt 3 adds a keyboard-state settle: the mode switch can
+                // race the keyboard-avoidance relayout (issue #48 flicker).
+                waitForKeyboardSettle(in: app, timeout: 5)
+            }
+            // Existence guard + bounded onscreen-stable settle. The `.frame`
+            // read stays `exists`-guarded: a frame read on a missing element
+            // records a hard failure and this class sets
+            // `continueAfterFailure = false`.
+            let appFrame = app.frame
+            let settleDeadline = Date().addingTimeInterval(3)
+            var previousMidY: CGFloat = .nan
+            var stableReadings = 0
+            while Date() < settleDeadline {
+                let candidate = app.buttons[buttonID]
+                lastExists = candidate.exists
+                guard candidate.exists else { break }
+                lastFrame = candidate.frame
+                let onscreen = !lastFrame.isEmpty
+                    && lastFrame.maxY > 0
+                    && lastFrame.minY < appFrame.height
+                if onscreen, lastFrame.midY == previousMidY {
+                    stableReadings += 1
+                    if stableReadings >= 2 {
+                        break
+                    }
+                } else {
+                    stableReadings = 0
+                }
+                previousMidY = lastFrame.midY
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            }
+            guard lastExists else {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+                continue
+            }
+            let target = app.buttons[buttonID]
+            lastExists = target.exists
+            guard target.exists else { continue }
+            lastFrame = target.frame
+            markerBefore = harnessMode(in: app)
+            target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            if waitForHarnessModeChange(from: markerBefore, in: app, timeout: timeout) {
+                _ = surface.waitForExistence(timeout: timeout)
                 return
             }
         }
         XCTAssertTrue(
             surface.exists,
-            "Mode switch to \(surfaceID) never landed. \(diagnosticsText(in: app))"
+            "Mode switch to \(surfaceID) never landed after 3 attempt(s). markerBefore=\(markerBefore) markerAfter=\(harnessMode(in: app)) frame=\(lastFrame) exists=\(lastExists). \(diagnosticsText(in: app))"
         )
     }
 
