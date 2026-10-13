@@ -64,8 +64,9 @@
 //  token on a scanned line — a `"func ghost"` decoy or the token inside an
 //  `XCTAssert`/`XCTFail` message — is collected and reds the name-set
 //  reconcile; that over-collection is the fail-closed direction and is
-//  documented in the defeat list (closure re-check CG-3). Test bodies on
-//  `(?m)^    func (test\w+)\(`; a slice terminates at the EARLIEST of the
+//  documented in the defeat list (closure re-check CG-3). Test bodies are the
+//  `func test…` subset of the same any-indent anchors; a slice terminates at
+//  the EARLIEST of the
 //  next func anchor, the next test-body anchor, or the column-0 `}`. The v3
 //  rule (next helper or `}`) swallowed all three test bodies into the last
 //  helper's slice, so any `contains` property could be satisfied by test-body
@@ -91,7 +92,12 @@
 //  `[identifier]` check — the shard-3 class run is the oracle; impl lens 2
 //  T2-6); the runtime snapshot freshness no source pin can see; the
 //  exists-guarded `.frame`/`.label` reads that remain racy at runtime
-//  (#444 §8); a payload branch reachable only at runtime; a coherent
+//  (#444 §8); a payload branch reachable only at runtime; a call-site rewrite
+//  that preserves the per-body `(helper, identifier, reason)` multiset (two
+//  identical-keyed calls are indistinguishable without positional binding, so
+//  a carrier call rewritten to the probe's helper shape in the same body stays
+//  green — closure re-check CH-1; the rewrite removes the gate tap and the
+//  class's own A3 runtime assertion catches it); a coherent
 //  code+pin edit (inherent to update-on-purpose pins); and, for property 6,
 //  the `WorkflowShardSplitPinsTests` overlap (that suite is the scheduling
 //  authority).
@@ -105,7 +111,7 @@
 //  Extraction is DELIBERATELY DEFERRED: this pin's per-helper slice scanner
 //  (anchor sets, earliest-of-three terminator, numeric allowlists) is
 //  scanner-local, and refactoring the sibling pin suites would be an
-//  unrelated risk on a flake fix. The 738-line size at landing is
+//  unrelated risk on a flake fix. The 739-line size at landing is
 //  consciously accepted for this flake fix; re-evaluate when an eighth
 //  Swift-source pin needs the same scanner — a second copy would carry a
 //  second mutation battery and should share the scanner (impl lens 3 B3-7).
@@ -273,7 +279,8 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         // triple owned by the test body that makes it, or carries no
         // `budget:` token at all. The triple includes the helper-call name,
         // and `probeBindingsPerTest` binds it to the owning test body, so a
-        // carrier cannot adopt a probe triple and a probe cannot be relocated
+        // carrier cannot adopt a probe triple while keeping its own helper-call
+        // shape, and a probe cannot be relocated
         // to another test while the token count and literal multiset match.
         var boundTriples: [String] = []
         var budgetCallCount = 0
@@ -632,7 +639,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         let allFuncNames = funcs.map(\.name)
         guard allFuncNames.sorted() == (helperNames + testNames).sorted() else {
             throw PinFailure(
-                "a `func` outside the frozen helper/test set is at class scope: \(allFuncNames) — every class-indent `func` is collected (any modifier/attribute spelling), so a new, renamed or respelled helper or a 4th `func test…` reds the anchor-set freeze (impl lens 2 T2-4 / closure lens CF-2) (issue #444)"
+                "a `func` outside the frozen helper/test set is at class scope: \(allFuncNames) — every line carrying a `func` keyword is collected (any indent/modifier/attribute spelling), so a new, renamed or respelled helper or a 4th `func test…` reds the anchor-set freeze (impl lens 2 T2-4 / closure lens CF-2 / closure re-check CG-1) (issue #444)"
             )
         }
         let helpers = funcs.filter { helperNames.contains($0.name) }
