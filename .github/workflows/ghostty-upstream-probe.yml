@@ -5,8 +5,8 @@
 #   2. resolves the latest upstream ghostty main SHA,
 #   3. no-ops when the vendored build is already on that SHA (unless
 #      force_rebuild),
-#   4. rebuilds Vendor/libghostty via scripts/build.sh (custom-io.patch,
-#      writes Vendor/libghostty/VERSION),
+#   4. rebuilds Vendor/libghostty via scripts/build.sh (the
+#      scripts/patches/ghostty/ queue, then writes Vendor/libghostty/VERSION),
 #   5. pre-validates with the FULL VVTermTests unit suite (incl. the
 #      behavioral probe tests GhosttyCustomIOProbeTests +
 #      GhosttyOSCColorQueryTests) against the NEW binaries,
@@ -294,7 +294,7 @@ jobs:
             Weekly probe (issue #127): upstream ghostty main moved from `${OLD_VERSION}` to `${RESOLVED_SHA}` (`${SHA7}`).
 
             ### What changed in this PR
-            - Rebuilt `Vendor/libghostty` from upstream main at `${RESOLVED_SHA}` with `scripts/patches/ghostty/custom-io.patch` applied (`GhosttyKit.xcframework`, `lib/`, `ios/`, `ios-simulator/`, `include/`, `VERSION`).
+            - Rebuilt `Vendor/libghostty` from upstream main at `${RESOLVED_SHA}` with the `scripts/patches/ghostty/` patch queue applied (`custom-io.patch`, `paste-safety-cr.patch`; `GhosttyKit.xcframework`, `lib/`, `ios/`, `ios-simulator/`, `include/`, `VERSION`).
             - Regenerated `VVTerm/Resources/terminfo/`.
             - Updated `scripts/patches/ghostty/BASE` to `${RESOLVED_SHA}`.
 
@@ -358,14 +358,14 @@ jobs:
             The weekly probe could not rebuild or validate ghostty at the resolved upstream main SHA.
 
             ### Likely causes
-            - `scripts/patches/ghostty/custom-io.patch` (or an inline patch in `scripts/build.sh`) no longer applies to `${SHA}` — upstream drift.
+            - A `scripts/patches/ghostty/` patch (`custom-io.patch` or `paste-safety-cr.patch`) no longer applies to `${SHA}` — upstream drift.
             - zig 0.16.0 build flag drift.
             - The full unit suite (incl. the behavioral probe tests) failed against the new binaries.
             - The GitHub App token step failed (GHOSTTY_BUMP_CLIENT_ID variable / GHOSTTY_BUMP_PRIVATE_KEY secret missing or expired; app not installed on the repo).
 
             ### What to do
             1. Follow the rebase runbook: `scripts/patches/ghostty/README.md`.
-            2. Rebase `custom-io.patch` onto `${SHA}` (`git apply --3way`; the known conflict spots are documented in the runbook).
+            2. Rebase the failing patch (`custom-io.patch` first, then `paste-safety-cr.patch`) onto `${SHA}` (`git apply --3way`; the known conflict spots are documented in the runbook).
             3. Update `scripts/patches/ghostty/BASE`, then re-dispatch the probe (workflow_dispatch, force_rebuild=true, create_bump_pr=false) to validate before the real bump.
 
             ### Risk window
