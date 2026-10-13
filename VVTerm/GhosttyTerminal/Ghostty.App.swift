@@ -88,7 +88,7 @@ enum ClipboardConfirmationPolicy {
 /// if the user allows the paste, plus the neutral presentation copy.
 ///
 /// The copy never claims more than the code checked: `input.paste.isSafe`
-/// rejects a bare `ESC[201~` as well as `\n` (`input/paste.zig:175-177`), so
+/// rejects a bare `ESC[201~` as well as `\n` and `\r` (`input/paste.zig`), so
 /// the body says "newlines or control characters" and shows only the payload's
 /// line count — never the payload itself.
 struct ClipboardConfirmationRequest {
@@ -103,12 +103,26 @@ struct ClipboardConfirmationRequest {
     var promptBody: String { Self.promptBody(lineCount: lineCount) }
 
     static func lineCount(for payload: String) -> Int {
-        // Count LF bytes directly. `components(separatedBy: "\n")` would
-        // materialize one substring per line for a remote-seeded payload that
-        // can be arbitrarily large, just to render a count; the byte scan is
-        // exactly equivalent for LF (0x0A can only appear as LF in UTF-8) and
-        // allocation-free.
-        1 + payload.utf8.reduce(0) { count, byte in count + (byte == 0x0A ? 1 : 0) }
+        // Count line breaks as LF bytes plus CR bytes not immediately
+        // followed by LF (`\r\n` counts once; #442 made CR unsafe and
+        // prompt-able, so the count must match the lines a confirmed paste
+        // submits). `components(separatedBy:)` would materialize one substring
+        // per line for a remote-seeded payload that can be arbitrarily large,
+        // just to render a count; the byte scan is allocation-free.
+        var count = 1
+        var previousByte: UInt8?
+        for byte in payload.utf8 {
+            if byte == 0x0A {
+                count += 1
+            } else if previousByte == 0x0D {
+                count += 1
+            }
+            previousByte = byte
+        }
+        if previousByte == 0x0D {
+            count += 1
+        }
+        return count
     }
 
     static func promptBody(lineCount: Int) -> String {

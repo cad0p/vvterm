@@ -103,8 +103,8 @@ enum ClipboardURIList {
 }
 
 /// Upstream's path escaping (`Ghostty.Shell.escape`), with one deliberate
-/// local divergence: `escapeCharacters` also escapes CR. The divergence is
-/// recorded on the set itself and tracked by #442 for the core-side gap.
+/// local divergence: `escapeCharacters` also escapes CR. The divergence stays
+/// as defense in depth after #442 landed the core-side CR rule.
 enum ClipboardPathEscape {
     /// The escape set in upstream's written order, `\` first — upstream's 22
     /// characters plus a local CR, 23 in total. `\` stays first because the
@@ -112,18 +112,18 @@ enum ClipboardPathEscape {
     ///
     /// `\n` is not in the set by design: newline safety is owned by the
     /// core's unsafe-paste check and the #327 confirmation prompt, not by the
-    /// escape. CR is, deliberately: the core's `isSafe`/`isSafeWith` does not
-    /// treat CR as unsafe (unlike the unbracketed `\n` rule; the bracketed
-    /// rule checks only the frame terminator), and the app has no pre-paste
-    /// hook to rely on — `confirm_read_clipboard` fires only after `UnsafePaste`
-    /// `UnauthorizedPaste` — so the app-side lever is the representation it
-    /// composes. `\`+CR neutralizes the line break at the shell layer: the CR
-    /// still ends the input line (readline's accept-line in raw mode, or
-    /// ICRNL→NL in canonical mode), but the line ends in the guard backslash,
-    /// which the shell's own `\`+newline rule reads as a continuation — so
-    /// nothing runs until the user's Enter. Residual: the pasted word is the
-    /// CR-less path, and only the user's Enter submits it. The same gap for
-    /// arbitrary text pastes is tracked by #442.
+    /// escape. CR is, deliberately — and stays after #442 made the core treat
+    /// CR as unsafe (`scripts/patches/ghostty/paste-safety-cr.patch`, landed
+    /// through the probe's bump path): an allowed paste still delivers the
+    /// bytes, so the escape remains defense in depth for this app-composed
+    /// representation. `\`+CR neutralizes the line break at the shell layer:
+    /// the CR still ends the input line (readline's accept-line in raw mode,
+    /// or ICRNL→NL in canonical mode), but the line ends in the guard
+    /// backslash, which the shell's own `\`+newline rule reads as a
+    /// continuation — so nothing runs until the user's Enter. Residual: the
+    /// pasted word is the CR-less path, and only the user's Enter submits it.
+    /// Arbitrary text pastes no longer rely on this escape: the core's
+    /// confirmation prompt is the gate.
     static let escapeCharacters = "\\ ()[]{}<>\"'`!#$&;|*?\t\r"
 
     /// Single pass over the escape set in written order: every occurrence of
