@@ -69,12 +69,9 @@
 //  exporting `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<tree>` into xcodebuild's
 //  own environment reaches the test process. Never set in CI.
 //
-//  THIS IS THE SIXTH COPY of the repository-root + comment-stripping pin
-//  idiom (`repositoryRoot()` honouring `VVTERM_PINS_SOURCE_ROOT`, YAML comment
-//  stripping, Swift comment stripping). Each pin file is self-contained so it
-//  reverts independently until the shared helper extraction lands
-//  (`WorkflowShardSplitPinsTests` re-evaluates when it passes ~1500 lines);
-//  any fix to the shared idiom must be applied to all copies.
+//  The repository-root + comment-stripping pin idiom now lives in the shared
+//  `PinScan` support (`VVTermTests/PinScanSupport.swift`, issue #450); a fix
+//  to the shared idiom is applied once, there.
 //
 
 import Foundation

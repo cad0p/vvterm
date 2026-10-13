@@ -102,19 +102,10 @@
 //  the `WorkflowShardSplitPinsTests` overlap (that suite is the scheduling
 //  authority).
 //
-//  THIS IS THE SEVENTH COPY of the `repositoryRoot()` +
-//  `VVTERM_PINS_SOURCE_ROOT` source-scan idiom (after
-//  `ServerNavigationUITestsWaitBudgetPinsTests`,
-//  `TerminalKeyboardCoordinatorPinsTests`,
-//  `TeleportCredentialPairPinsTests` and the workflow pin family). The
-//  extraction debt is tracked in #450.
-//  Extraction is DELIBERATELY DEFERRED: this pin's per-helper slice scanner
-//  (anchor sets, earliest-of-three terminator, numeric allowlists) is
-//  scanner-local, and refactoring the sibling pin suites would be an
-//  unrelated risk on a flake fix. The 739-line size at landing is
-//  consciously accepted for this flake fix; re-evaluate when an eighth
-//  Swift-source pin needs the same scanner — a second copy would carry a
-//  second mutation battery and should share the scanner (impl lens 3 B3-7).
+//  The `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT` source-scan idiom now
+//  lives in the shared `PinScan` support (`VVTermTests/PinScanSupport.swift`,
+//  issue #450). This pin's per-helper slice scanner (anchor sets,
+//  earliest-of-three terminator, numeric allowlists) stays scanner-local.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as

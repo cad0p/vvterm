@@ -39,23 +39,11 @@
 //  wider than the current deltas so a calibration refresh has room, and
 //  deliberately narrower than any real method move).
 //
-//  THIS IS THE FIFTH COPY of the workflow-pin idiom (`repositoryRoot()`
-//  honouring `VVTERM_PINS_SOURCE_ROOT`, YAML comment stripping) — after
-//  `WorkflowArtifactDependencyPinsTests`,
-//  `WorkflowArtifactDependencyClassGatePinsTests`,
-//  `WorkflowXcodebuildFlagPinsTests` and `WorkflowPerPREventGatePinsTests`.
-//  `WorkflowArtifactDependencyClassGatePinsTests`'s header says a fifth pin
-//  file justifies extracting a shared helper. This PR DELIBERATELY DEFERS
-//  that extraction: the new pin needs a `matrix.shard` block slicer that the
-//  other four do not share, and this PR is a record refresh (no behaviour
-//  change), so a refactor of four pin suites would be an unrelated risk. The
-//  #362 allowlist extension defers it a SECOND time: the declaration scanner
-//  is scanner-local by design (hash-prefix-aware string blanking, `#if`
-//  polarity), and extraction would still span the five Swift pin suites, plus
-//  the ledger schema/loader. Re-evaluate when this
-//  file passes ~1500 lines (the ClassGate pin is the 1416-line precedent).
-//  Any parser/comment-strip fix for the shared idiom must be applied to all
-//  five files until the extraction lands.
+//  The `repositoryRoot()` / `VVTERM_PINS_SOURCE_ROOT` / YAML-comment-strip
+//  idiom now lives in the shared `PinScan` support
+//  (`VVTermTests/PinScanSupport.swift`, issue #450). This suite keeps only its
+//  scanner-local `matrix.shard` block slicer; a fix to the shared idiom is
+//  applied once, in `PinScanSupport.swift`.
 //
 //  REFRESH PATH (adding, removing or renaming any declared UI test). A PR
 //  that changes the declared-test set must, in the SAME PR, do ONE of:

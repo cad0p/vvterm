@@ -75,16 +75,10 @@
 //  brace matcher cannot follow (e.g. braces inside the body's string
 //  literals) reds as a missing or oversized slice rather than passing.
 //
-//  This is one more copy of the `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT`
-//  source-scan idiom (the #450 census lists 7; this worktree carries 33
-//  `VVTermTests` files with the `VVTERM_PINS_SOURCE_ROOT` + `repositoryRoot()`
-//  shape, 23 with `strippingComments` (the intersection with the
-//  `VVTERM_PINS_SOURCE_ROOT` set) and 20 with the `VVTerm.xcodeproj`
-//  walk), so the ordinal framing is dropped; #450 tracks the shared-scanner
-//  extraction. The #444 note's "re-evaluate at the eighth" trigger is
-//  discharged by an explicit decision to defer again: the #441 plan §4
-//  specifies a self-contained pin suite, and a shared scanner would refactor
-//  six landed pin suites inside a flake fix. Recorded as a residual on the PR.
+//  The `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT` source-scan idiom now
+//  lives in the shared `PinScan` support (`VVTermTests/PinScanSupport.swift`,
+//  issue #450), so the ordinal framing is dropped and the #444 note's
+//  extraction trigger is discharged.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as

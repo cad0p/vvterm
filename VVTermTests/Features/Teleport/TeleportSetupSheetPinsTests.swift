@@ -14,19 +14,9 @@
 //  but adding a bypass `switch chain.phase`, or a restored private wrapper)
 //  would silently re-create the mirror #369 closed.
 //
-//  This is the sixth copy of the `repositoryRoot()` /
-//  `VVTERM_PINS_SOURCE_ROOT` pin idiom after the five workflow-pin files
-//  (`WorkflowArtifactDependencyPinsTests`,
-//  `WorkflowArtifactDependencyClassGatePinsTests`,
-//  `WorkflowXcodebuildFlagPinsTests`, `WorkflowPerPREventGatePinsTests` and
-//  `WorkflowShardSplitPinsTests`; those five use the YAML comment stripper,
-//  while this file strips Swift comments). Measured at the fold head: 6
-//  `VVTermTests` files call `strippingYAMLComments`, and the
-//  `VVTERM_PINS_SOURCE_ROOT` override itself appears in 25 files across the
-//  other pin families. Extraction is DELIBERATELY DEFERRED for the same
-//  reason `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is
-//  small, and extraction would span six independent pin suites. Re-evaluate
-//  when a seventh pin file lands.
+//  The `repositoryRoot()` / `VVTERM_PINS_SOURCE_ROOT` pin idiom now lives in
+//  the shared `PinScan` support (`VVTermTests/PinScanSupport.swift`, issue
+//  #450), so the ordinal copy framing is dropped.
 //
 //  COUNTERFACTUAL HOOK: `VVTERM_PINS_SOURCE_ROOT` points the scans at a copy
 //  of the tree; set it from the test process by exporting
