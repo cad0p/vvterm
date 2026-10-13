@@ -280,7 +280,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     @Test
     func testTheDebugTestJobInvokesXcodebuildWithAnAcceptedDiagnosticValue() throws {
         let source = try PinScan.source(".github/workflows/vvterm-pr-ci.yml")
-        let stripped = Self.strippingYAMLComments(source)
+        let stripped = PinScan.strippingYAMLComments(source)
         let lines = stripped.components(separatedBy: "\n")
 
         let jobIndex = try #require(
@@ -388,7 +388,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // rationale comments quote `-collect-test-diagnostics never` and
         // `-test-timeouts-enabled YES` verbatim, so an unstripped contains()
         // would pass even with the real flags gone.
-        let strippedScript = Self.strippingYAMLComments(script)
+        let strippedScript = PinScan.strippingYAMLComments(script)
         let scriptLines = strippedScript.components(separatedBy: "\n")
         let invocationLines = scriptLines.enumerated().filter {
             $0.element.contains("xcodebuild test-without-building")
@@ -767,7 +767,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // `grep -E` lines — a bare presence check anywhere (the error message
         // echoes the same literal) is not the predicate that executes.
         let guardSource = try PinScan.source(guardPath)
-        let strippedGuard = Self.strippingYAMLComments(guardSource)
+        let strippedGuard = PinScan.strippingYAMLComments(guardSource)
         let guardScriptLines = strippedGuard.components(separatedBy: "\n")
         let xctestPredicateLines = guardScriptLines.filter {
             $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'")
@@ -1093,7 +1093,7 @@ struct WorkflowXcodebuildFlagPinsTests {
 
         // Invariant pair: the alarm step must still read the marker the script
         // writes (the script's 3 write sites are asserted below).
-        let strippedWorkflow = Self.strippingYAMLComments(workflow)
+        let strippedWorkflow = PinScan.strippingYAMLComments(workflow)
         #expect(
             strippedWorkflow.contains(#"[[ -f "$RUNNER_TEMP/ghostty-probe-ok" ]]"#),
             "the alarm step must still read `$RUNNER_TEMP/ghostty-probe-ok`: without it the script's post-PR markers are dead and pre-PR failures file false alarms — re-derive this pin (issue #396)"
@@ -1102,7 +1102,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // Script load-bearing lines, in the comment-stripped script,
         // occurrence bound: a duplicated or dropped statement is how a bad
         // edit hides.
-        let strippedScript = Self.strippingYAMLComments(script)
+        let strippedScript = PinScan.strippingYAMLComments(script)
         let scriptLines = strippedScript.components(separatedBy: "\n")
 
         func expectExactlyOneLine(containing needle: String, _ reason: String) {
@@ -1435,7 +1435,7 @@ struct WorkflowXcodebuildFlagPinsTests {
             gateIdLines.count == 1,
             "the `Resolve bump-PR gate` step must carry exactly one `id: bump-gate`, found \(gateIdLines.count) — the consumers read `steps.bump-gate.outputs.enabled`, so a renamed id leaves them permanently false — re-derive this pin (issue #435)"
         )
-        let workflowWideIdLines = Self.strippingYAMLComments(workflow)
+        let workflowWideIdLines = PinScan.strippingYAMLComments(workflow)
             .components(separatedBy: "\n")
             .map { Self.cuttingLineComment($0) }
             .filter { $0.trimmingCharacters(in: .whitespaces) == "id: bump-gate" }
@@ -1628,7 +1628,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // diagnostic echo and the alarm body's validation-dispatch hint). A
         // comparison spelling (dotted, bracket, `contains(...)`, …) lands in
         // none and reds, with no separate needle per spelling.
-        let codeLines = Self.strippingYAMLComments(workflow)
+        let codeLines = PinScan.strippingYAMLComments(workflow)
             .components(separatedBy: "\n")
             .map { Self.cuttingLineComment($0) }
         let gateEnvOccurrences = codeLines.filter {
@@ -1844,7 +1844,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         var occurrences: [FlagOccurrence] = []
         for path in paths {
             let source = try PinScan.source(path)
-            let stripped = Self.strippingYAMLComments(source)
+            let stripped = PinScan.strippingYAMLComments(source)
             for (index, line) in stripped.components(separatedBy: "\n").enumerated() {
                 guard let range = line.range(
                     of: #"-collect-test-diagnostics\s+(\S+)"#,
@@ -1883,7 +1883,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// round 1, impl lens 2). A trailing comment on the job key itself is
     /// cut before matching, so `  unit-tests:  # note` still resolves.
     private static func jobBlock(named job: String, in source: String) throws -> [String] {
-        let lines = Self.strippingYAMLComments(source)
+        let lines = PinScan.strippingYAMLComments(source)
             .components(separatedBy: "\n")
             .map(Self.cuttingLineComment)
         let keyLine = "  \(job):"
@@ -2219,84 +2219,4 @@ struct WorkflowXcodebuildFlagPinsTests {
             .joined(separator: "\n")
     }
 
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim, so a `#` inside a scalar is not
-    /// read as a comment. Duplicated from `WorkflowArtifactDependencyPinsTests`
-    /// (each pin file is self-contained so it reverts independently). The
-    /// bash-corpus divergence is documented in the file header.
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        // YAML single-quote escape: `''` stays inside the scalar.
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
 }

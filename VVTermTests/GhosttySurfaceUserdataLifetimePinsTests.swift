@@ -165,7 +165,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
 
         var offenders: [String] = []
         for url in files {
-            let text = Self.strippingComments(try String(contentsOf: url, encoding: .utf8))
+            let text = PinScan.strippingComments(try String(contentsOf: url, encoding: .utf8))
             if !Self.occurrences(of: "Unmanaged<GhosttyTerminalView>", in: text).isEmpty {
                 offenders.append(url.lastPathComponent)
             }
@@ -184,7 +184,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// `ghostty_surface_userdata(` read is the action fallback paired with it.
     @Test
     func testPBEveryRoutingSiteResolvesThroughTheContext() throws {
-        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
+        let appText = PinScan.strippingComments(try PinScan.source(Self.appSource))
         let appRoutes = Self.flexibleOccurrences(
             of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
             in: appText
@@ -255,7 +255,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
         )
 
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
-            let text = Self.strippingComments(try PinScan.source(file))
+            let text = PinScan.strippingComments(try PinScan.source(file))
             let routes = Self.flexibleOccurrences(
                 of: "Ghostty.SurfaceCallbackContext .fromOpaque(",
                 in: text
@@ -272,7 +272,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// set_title/cell_size from inside `Surface.init`).
     @Test
     func testPBBothSetupSurfaceBranchesInstallTheContextUserdata() throws {
-        let text = Self.strippingComments(try PinScan.source(Self.renderingSetupSource))
+        let text = PinScan.strippingComments(try PinScan.source(Self.renderingSetupSource))
         let anchors = Self.occurrences(of: "func setupSurface(", in: text)
         #expect(anchors.count == 2, "P-B: both platform setupSurface functions must exist")
 
@@ -315,7 +315,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// keeps it alive with `withExtendedLifetime`.
     @Test
     func testPCSurfaceInvalidatesBeforeEveryFreeAndRetainsTheContext() throws {
-        let text = Self.strippingComments(try PinScan.source(Self.surfaceSource))
+        let text = PinScan.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let initAnchor = try #require(
             Self.occurrences(of: "init(cSurface: ghostty_surface_t, callbackContext: Ghostty.SurfaceCallbackContext)", in: text).first,
@@ -387,7 +387,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     @Test
     func testPDWriteCallbacksUseTheContextUserdata() throws {
         for file in [Self.iOSViewSource, Self.macOSViewSource] {
-            let text = Self.strippingComments(try PinScan.source(file))
+            let text = PinScan.strippingComments(try PinScan.source(file))
             let anchor = try #require(
                 Self.occurrences(of: "func setupWriteCallback()", in: text).first,
                 "P-D: \(file) must keep setupWriteCallback()"
@@ -428,7 +428,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// one reds the count and the per-site ordering check.
     @Test
     func testPEConfirmReadClipboardResolvesBeforeEveryTerminalCall() throws {
-        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
+        let appText = PinScan.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-E: Ghostty.App.swift must keep confirmReadClipboard"
@@ -511,8 +511,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// presenters are never instantiated in tests).
     @Test
     func testPFPlatformPresentersShareTheTitleAndDefaultButton() throws {
-        let iOS = Self.strippingComments(try PinScan.source(Self.iOSClipboardConfirmationSource))
-        let macOS = Self.strippingComments(try PinScan.source(Self.macOSClipboardConfirmationSource))
+        let iOS = PinScan.strippingComments(try PinScan.source(Self.iOSClipboardConfirmationSource))
+        let macOS = PinScan.strippingComments(try PinScan.source(Self.macOSClipboardConfirmationSource))
 
         #expect(
             Self.occurrences(of: "title: ClipboardConfirmationRequest.promptTitle", in: iOS).count == 1,
@@ -558,7 +558,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// comparison stays green there.
     @Test
     func testPGClipboardCompletionGateComparesTheCapturedHandle() throws {
-        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
+        let appText = PinScan.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-G: Ghostty.App.swift must keep confirmReadClipboard"
@@ -632,7 +632,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// clipboard request while the surface handle is still valid.
     @Test
     func testPHSurfaceDrainsPendingClipboardRequestsBeforeEveryFree() throws {
-        let text = Self.strippingComments(try PinScan.source(Self.surfaceSource))
+        let text = PinScan.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let freeAnchor = try #require(
             Self.occurrences(of: "func free()", in: text).first,
@@ -706,7 +706,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// stay inside `completeRequest`, which is its single call site.
     @Test
     func testPHCompletionClaimsBeforeTheCCompletion() throws {
-        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
+        let appText = PinScan.strippingComments(try PinScan.source(Self.appSource))
         let completeAnchor = try #require(
             Self.occurrences(of: "func complete(", in: appText).first,
             "P-H: Ghostty.App.swift must keep complete("
@@ -798,7 +798,7 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// registration-less deny can never leak the core's request.
     @Test
     func testPHClipboardRegistrationSitsAfterEachResolveGuard() throws {
-        let appText = Self.strippingComments(try PinScan.source(Self.appSource))
+        let appText = PinScan.strippingComments(try PinScan.source(Self.appSource))
         let confirmAnchor = try #require(
             Self.occurrences(of: "func confirmReadClipboard(", in: appText).first,
             "P-H: Ghostty.App.swift must keep confirmReadClipboard"
@@ -907,8 +907,8 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     /// helper's body).
     @Test
     func testPHRegistryInvariants() throws {
-        let contextText = Self.strippingComments(try PinScan.source(Self.contextSource))
-        let surfaceText = Self.strippingComments(try PinScan.source(Self.surfaceSource))
+        let contextText = PinScan.strippingComments(try PinScan.source(Self.contextSource))
+        let surfaceText = PinScan.strippingComments(try PinScan.source(Self.surfaceSource))
 
         let invalidateAnchor = try #require(
             Self.occurrences(of: "func invalidate()", in: contextText).first,
@@ -962,104 +962,6 @@ struct GhosttySurfaceUserdataLifetimePinsTests {
     }
 
     // MARK: - Source helpers
-
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.

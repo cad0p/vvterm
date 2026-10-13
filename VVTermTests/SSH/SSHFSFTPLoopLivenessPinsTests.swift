@@ -96,104 +96,6 @@ struct SSHFSFTPLoopLivenessPinsTests {
 
     // MARK: - Source helpers
 
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.
     private static func bracedBlock(
@@ -247,18 +149,6 @@ struct SSHFSFTPLoopLivenessPinsTests {
             searchStart = found.upperBound
         }
         return result
-    }
-
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
-    }
-
-    /// The whitespace-normalized form of `text`: every run of whitespace
-    /// collapses to a single space (empty for an all-whitespace span).
-    private static func normalizedWhitespace(_ text: Substring) -> String {
-        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     /// The range of the first whitespace-flexible occurrence of `needle`
@@ -321,7 +211,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// after-the-wait-only guard is the defect this asserts against.
     @Test
     func testListDirectoryLoopGuardsBothReentryPaths() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func listDirectory(at path: String, maxEntries: Int? = nil) async throws -> [RemoteFileEntry]",
@@ -340,7 +230,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// the `openFileHandle` await and before the loop-top guard).
     @Test
     func testReadFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func readFile(at path: String, maxBytes: Int, offset: UInt64 = 0) async throws -> Data",
@@ -358,7 +248,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 3 (#288): `downloadFile`.
     @Test
     func testDownloadFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func downloadFile(at path: String, to localURL: URL) async throws",
@@ -375,7 +265,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 4 (#288): `writeFile`.
     @Test
     func testWriteFileLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func writeFile(_ data: Data, to path: String, permissions: Int32 = 0o644) async throws",
@@ -392,7 +282,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 5 (#288): `fileSystemStatus`.
     @Test
     func testFileSystemStatusLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func fileSystemStatus(at path: String) async throws -> RemoteFileFilesystemStatus",
@@ -409,7 +299,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 6 (#288): `setPermissions`.
     @Test
     func testSetPermissionsLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func setPermissions(at path: String, permissions: UInt32) async throws",
@@ -426,7 +316,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 7 (#288): the `ensureSFTPSession()` inner-session init loop.
     @Test
     func testEnsureSFTPSessionInnerInitLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func ensureSFTPSession() async throws -> OpaquePointer",
@@ -443,7 +333,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 8 (#288): the `ensureSFTPSession()` outer-session init loop.
     @Test
     func testEnsureSFTPSessionOuterInitLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func ensureSFTPSession() async throws -> OpaquePointer",
@@ -461,7 +351,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// handle and `readFile`/`downloadFile`/`writeFile`'s file handles).
     @Test
     func testOpenSFTPHandleLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func openSFTPHandle(",
@@ -479,7 +369,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `renameItem`, `deleteFile`, `deleteDirectory`).
     @Test
     func testPerformSFTPMutationLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func performSFTPMutation(",
@@ -496,7 +386,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// Pin 11 (#288): `stat(at:statType:)` (serves `stat`/`lstat`).
     @Test
     func testStatLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func stat(at path: String, statType: Int32) async throws -> RemoteFileEntry",
@@ -514,7 +404,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `resolveHomeDirectory`).
     @Test
     func testReadSymlinkTargetLoopRechecksLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "private func readSymlinkTarget(",
@@ -538,7 +428,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
     /// `.disconnected` instead of handing it out.
     @Test
     func testEnsureSFTPSessionCachedFastPathIsGatedOnLiveness() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
 
         let anchor = try #require(
@@ -579,7 +469,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
         let returns = Self.occurrences(of: "return sftpSession", in: text, range: functionBody)
         let fastPathReturn = try #require(returns.first)
         #expect(
-            Self.isInside(fastPathBlock, fastPathReturn.lowerBound),
+            PinScan.isInside(fastPathBlock, fastPathReturn.lowerBound),
             "the first `return sftpSession` must be the gated fast path"
         )
 
@@ -593,7 +483,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             "the fast-path guard must precede `return sftpSession`"
         )
         // Placement: the guard is the fast-path block's first statement.
-        let prefix = Self.normalizedWhitespace(text[fastPathBlock.lowerBound..<guardRange.lowerBound])
+        let prefix = PinScan.normalizedWhitespace(text[fastPathBlock.lowerBound..<guardRange.lowerBound])
         #expect(
             prefix.isEmpty,
             "the fast-path guard must be the block's first statement; found `\(prefix)` before it"
@@ -714,7 +604,7 @@ struct SSHFSFTPLoopLivenessPinsTests {
             Self.rangeOfWhitespaceFlexible(expectedGuard, in: text, range: loopBody),
             "the `\(loopAnchor)` loop body must contain the exact guard `\(expectedGuard)` at its top"
         )
-        let prefix = Self.normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
+        let prefix = PinScan.normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
         #expect(
             prefix.isEmpty || prefix == "try Task.checkCancellation()",
             "the guard must be the loop body's first statement after `try Task.checkCancellation()`; found `\(prefix)` between the loop open and the guard in `\(loopAnchor)`"

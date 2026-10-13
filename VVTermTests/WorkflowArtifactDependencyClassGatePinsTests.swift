@@ -1368,7 +1368,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     @Test
     func testBuildJobRunsTheGateAfterLicenseHeadersWithTheExactStep() throws {
         let source = try PinScan.source(Self.workflowPath)
-        let stripped = Self.strippingYAMLComments(source)
+        let stripped = PinScan.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "build", in: stripped)
 
         let steps = Self.stepBlocks(in: job)
@@ -1475,7 +1475,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     @Test
     func testWorkflowJobBlocksParseInTheCanonicalShape() throws {
         let source = try PinScan.source(Self.workflowPath)
-        let stripped = Self.strippingYAMLComments(source)
+        let stripped = PinScan.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
         #expect(!blocks.isEmpty, "the workflow must contain at least one job block")
@@ -1821,83 +1821,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         }
         if !current.isEmpty { steps.append(current) }
         return steps
-    }
-
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim.
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
     }
 
     /// Strips Python comments line-by-line so the P5 diagnostic fragments are

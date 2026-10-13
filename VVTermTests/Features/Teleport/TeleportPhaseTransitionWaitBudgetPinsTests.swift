@@ -235,7 +235,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property1NoHittabilityReadAndNoPredicateExpectation() throws {
-        let normalized = Self.collapse(try Self.strippingComments(PinScan.source(Self.classPath)))
+        let normalized = Self.collapse(try PinScan.strippingComments(PinScan.source(Self.classPath)))
         #expect(
             !normalized.contains("isHittable"),
             "the class must not read `isHittable`: the #444 I1 record lives inside the getter's `hitPoint:` path — re-derive this pin (issue #444)"
@@ -460,7 +460,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property5EveryTapIsACoordinateTapAndEveryFrameReadIsGuarded() throws {
-        let raw = try Self.strippingComments(PinScan.source(Self.classPath))
+        let raw = try PinScan.strippingComments(PinScan.source(Self.classPath))
         let lines = raw.components(separatedBy: "\n")
         var tapCount = 0
         var tapViolations: [String] = []
@@ -519,7 +519,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     @Test
     func property7TheGateReleaseObservableIsStateGatedAndAlwaysRendered() throws {
-        let raw = try Self.strippingComments(PinScan.source(Self.harnessPath))
+        let raw = try PinScan.strippingComments(PinScan.source(Self.harnessPath))
         let normalized = Self.collapse(raw)
 
         #expect(
@@ -618,7 +618,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// body, or the column-0 `}`. Fail closed on any drift, and on a helper
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
-        let raw = Self.strippingComments(try PinScan.source(Self.classPath))
+        let raw = PinScan.strippingComments(try PinScan.source(Self.classPath))
         // Modifier-agnostic, any-indent func anchors (impl lens 2 T2-4,
         // closure lens CF-2, closure re-check CG-1): EVERY line carrying a
         // `func` keyword is collected — `static private func`, `fileprivate
@@ -840,102 +840,5 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     // Deliberately duplicated per pin suite (the #280 pattern): the suites
     // must stay independently revertable, so they share no test-target helper
     // file.
-
-    /// A comment-stripped copy of `source`: characters inside `//` line
-    /// comments and nested `/* … */` block comments become spaces; newlines
-    /// are preserved, so slice anchors still resolve. String contents are
-    /// copied verbatim. Duplicated from the merged pin suites so each family's
-    /// pin file is self-contained and reverts independently.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 
 }

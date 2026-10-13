@@ -44,104 +44,6 @@ struct SSHProxyChannelFreePinsTests {
 
     // MARK: - Source helpers
 
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.
     private static func bracedBlock(
@@ -185,12 +87,6 @@ struct SSHProxyChannelFreePinsTests {
         return try bracedBlock(openingAt: open, in: text)
     }
 
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
-    }
-
     /// Every occurrence of `needle` in `text` (optionally within `range`),
     /// in source order.
     private static func occurrences(
@@ -225,7 +121,7 @@ struct SSHProxyChannelFreePinsTests {
         // if-let block, the lock span, and the file-wide call scan all resolve
         // against this same `String`, so every `String.Index` comparison below
         // is valid (never compare indices across differently-sliced strings).
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let bodyStart = try #require(
             text.range(of: "private func cleanupLibssh2()"),
@@ -277,11 +173,11 @@ struct SSHProxyChannelFreePinsTests {
         let close = try #require(closeCalls.first)
         let free = try #require(freeCalls.first)
         #expect(
-            Self.isInside(lockBlock, close.lowerBound),
+            PinScan.isInside(lockBlock, close.lowerBound),
             "libssh2_channel_close(proxyChannel) must run inside outerSessionMutex.withLock"
         )
         #expect(
-            Self.isInside(lockBlock, free.lowerBound),
+            PinScan.isInside(lockBlock, free.lowerBound),
             "libssh2_channel_free(proxyChannel) must run inside outerSessionMutex.withLock"
         )
 
@@ -333,7 +229,7 @@ struct SSHProxyChannelFreePinsTests {
     /// bind the read closure's lock and pass vacuously.
     @Test
     func testAgentChannelFreeKeepsTheSameDiscipline() throws {
-        let text = Self.strippingComments(
+        let text = PinScan.strippingComments(
             try PinScan.source("VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift")
         )
 
@@ -367,11 +263,11 @@ struct SSHProxyChannelFreePinsTests {
         let close = try #require(closeCalls.first)
         let free = try #require(freeCalls.first)
         #expect(
-            Self.isInside(lockBlock, close.lowerBound),
+            PinScan.isInside(lockBlock, close.lowerBound),
             "the agent channel close must run inside its mutex.withLock span"
         )
         #expect(
-            Self.isInside(lockBlock, free.lowerBound),
+            PinScan.isInside(lockBlock, free.lowerBound),
             "the agent channel free must run inside its mutex.withLock span"
         )
         #expect(
@@ -388,7 +284,7 @@ struct SSHProxyChannelFreePinsTests {
     /// channel.
     @Test
     func testPumpTokenCheckSharesTheMutualExclusionSpan() throws {
-        let text = Self.strippingComments(
+        let text = PinScan.strippingComments(
             try PinScan.source("VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift")
         )
 
@@ -442,11 +338,11 @@ struct SSHProxyChannelFreePinsTests {
         let guardRange = try #require(guards.first)
         let call = try #require(calls.first)
         #expect(
-            isInside(lockBlock, guardRange.lowerBound),
+            PinScan.isInside(lockBlock, guardRange.lowerBound),
             "the cancel-token guard must sit inside the same outerSessionMutex span as \(libssh2Call)"
         )
         #expect(
-            isInside(lockBlock, call.lowerBound),
+            PinScan.isInside(lockBlock, call.lowerBound),
             "\(libssh2Call) must sit inside the outerSessionMutex span"
         )
     }
@@ -511,7 +407,7 @@ struct SSHProxyChannelFreePinsTests {
     /// it is an expected pin update, not a mystery red.
     @Test
     func testCleanupGuardChecksBothInFlightSets() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let cleanupAnchor = try #require(
             text.range(of: "private func cleanupLibssh2()"),
@@ -546,7 +442,7 @@ struct SSHProxyChannelFreePinsTests {
     /// registration.
     @Test
     func testPrepareBodyRegistersTheInnerPreparesInFlightToken() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
 
         let inserts = Self.occurrences(
@@ -587,7 +483,7 @@ struct SSHProxyChannelFreePinsTests {
     /// deliberately.
     @Test
     func testEveryNotActiveDeferCallsCleanupLibssh2() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
 
         let occurrences = Self.occurrences(of: "if !isActive", in: text)
@@ -603,7 +499,7 @@ struct SSHProxyChannelFreePinsTests {
                 text[block].contains("cleanupLibssh2()"),
                 "every `if !isActive` guard must re-enter cleanupLibssh2()"
             )
-            if Self.isInside(prepareBody, occurrence.lowerBound) {
+            if PinScan.isInside(prepareBody, occurrence.lowerBound) {
                 insidePrepare += 1
             }
         }
@@ -621,14 +517,14 @@ struct SSHProxyChannelFreePinsTests {
     /// channel pins above).
     @Test
     func testCleanupLibssh2CallSiteCensus() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let declaration = try #require(
             text.range(of: "private func cleanupLibssh2()"),
             "SSHClient.swift must keep SSHSession.cleanupLibssh2()"
         )
         let all = Self.occurrences(of: "cleanupLibssh2()", in: text)
-        let calls = all.filter { !Self.isInside(declaration, $0.lowerBound) }
+        let calls = all.filter { !PinScan.isInside(declaration, $0.lowerBound) }
 
         #expect(
             all.count == 6,
@@ -648,7 +544,7 @@ struct SSHProxyChannelFreePinsTests {
     /// prepare body, not as file-wide presence.
     @Test
     func testPrepareIdempotenceGateChecksIsActive() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let prepareBody = try Self.sshSessionPrepareBody(in: text)
         #expect(
             text[prepareBody].contains("if isActive, innerLibssh2Session != nil { return }"),
@@ -664,7 +560,7 @@ struct SSHProxyChannelFreePinsTests {
     /// first; this is not a file-wide presence check.
     @Test
     func testIsInnerSessionReadyChecksIsActiveFirst() throws {
-        let text = Self.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         let anchor = try #require(
             text.range(of: "var isInnerSessionReady: Bool"),

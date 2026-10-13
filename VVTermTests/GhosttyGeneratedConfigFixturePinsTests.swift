@@ -257,7 +257,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     @Test
     func macOSDefaultBranchSourcesArePinned() throws {
         let source = Self.normalized(
-            Self.strippingComments(try Self.swiftSource("VVTerm/GhosttyTerminal/Ghostty.App.swift"))
+            PinScan.strippingComments(try Self.swiftSource("VVTerm/GhosttyTerminal/Ghostty.App.swift"))
         )
 
         #expect(
@@ -301,7 +301,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     @Test
     func configBuilderDefaultsRemainTheProductionWiring() throws {
         let source = Self.normalized(
-            Self.strippingComments(try Self.swiftSource("VVTerm/GhosttyTerminal/Ghostty.App.swift"))
+            PinScan.strippingComments(try Self.swiftSource("VVTerm/GhosttyTerminal/Ghostty.App.swift"))
         )
 
         guard let configContent = Self.declarationText(startingAt: "static func configContent(", in: source) else {
@@ -344,7 +344,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     /// `ui-tests` passed 8/8 — issue #247 impl lens 1 finding 2).
     @Test
     func buildJobRunsTheCoreConfigCheckBetweenTheGates() throws {
-        let source = Self.strippingYAMLComments(try Self.swiftSource(Self.workflowPath))
+        let source = PinScan.strippingYAMLComments(try Self.swiftSource(Self.workflowPath))
 
         let stepOccurrences = source.components(separatedBy: "- name: \(Self.checkStepName)").count - 1
         #expect(
@@ -427,7 +427,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     @Test
     func coreReadbackControlsArePinned() throws {
         let probe = Self.normalized(
-            Self.strippingComments(
+            PinScan.strippingComments(
                 try Self.swiftSource("scripts/ci/ghostty-config-probe.c")
             )
         )
@@ -443,7 +443,7 @@ struct GhosttyGeneratedConfigFixturePinsTests {
         }
 
         let script = Self.normalized(
-            Self.strippingYAMLComments(
+            PinScan.strippingYAMLComments(
                 try Self.swiftSource("scripts/ci/check-ghostty-config.sh")
             )
         )
@@ -593,178 +593,4 @@ struct GhosttyGeneratedConfigFixturePinsTests {
     // MARK: - Repository root + shared comment-stripping idiom
     // (copied verbatim from WorkflowShardSplitPinsTests.swift until the shared helper extraction lands)
 
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Duplicated from the other workflow pin suites (each pin
-    /// file is self-contained so it reverts independently until the shared
-    /// helper extraction lands).
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
-
-    /// A Swift comment-stripped copy of `source`: text inside `//` line
-    /// comments and nested `/* … */` block comments becomes spaces; newlines
-    /// are preserved. String contents are copied verbatim (so a `//` inside a
-    /// literal is not read as a comment). Duplicated from
-    /// `SSHShellLoopLivenessPinsTests` (each pin file is self-contained).
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 }
