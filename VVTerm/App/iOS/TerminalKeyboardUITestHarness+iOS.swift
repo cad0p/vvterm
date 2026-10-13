@@ -100,6 +100,11 @@ struct TerminalKeyboardUITestHarness: View {
     /// argument has consumed the first mode-button invocation, every later
     /// invocation runs normally.
     @State private var swallowedFirstModeTap = false
+    /// Issue #441 witness: set when the swallow actually consumed a mode tap.
+    /// Emitted as `swallowedModeTap=` so the UI test can prove the launch
+    /// argument was delivered and the deterministic control fired (the pins
+    /// are text-level and cannot observe runtime delivery).
+    @State private var didSwallowModeTap = false
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
     @State private var linkFeedDelivered = false
@@ -168,6 +173,7 @@ struct TerminalKeyboardUITestHarness: View {
         guard swallowsFirstModeTap else { return true }
         guard !swallowedFirstModeTap else { return true }
         swallowedFirstModeTap = true
+        didSwallowModeTap = true
         return false
     }
 
@@ -707,7 +713,7 @@ struct TerminalKeyboardUITestHarness: View {
             // `terminalView` released) the recovery must detect. Derived from
             // `showsTerminal`, the only state true iff the terminal mode is
             // rendered (`terminalReady` is also false when switching back).
-            diagnostics = "notReady harnessMode=\(showsTerminal ? "terminal" : "other") ghostty=\(ghosttyApp.readiness.rawValue)"
+            diagnostics = "notReady harnessMode=\(showsTerminal ? "terminal" : "other") swallowedModeTap=\(didSwallowModeTap ? "true" : "false") ghostty=\(ghosttyApp.readiness.rawValue)"
             return
         }
         let terminalDiagnostics = terminalView.keyboardUITestDiagnostics(
@@ -728,7 +734,7 @@ struct TerminalKeyboardUITestHarness: View {
         if feedsOSC8DoubleClick {
             deliverOSC8DoubleClickIfPossible()
         }
-        diagnostics = terminalDiagnostics + " harnessMode=\(showsTerminal ? "terminal" : "other") " + keyboardAvoidanceDiagnostics(for: terminalView)
+        diagnostics = terminalDiagnostics + " harnessMode=\(showsTerminal ? "terminal" : "other") swallowedModeTap=\(didSwallowModeTap ? "true" : "false") " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
             + " userHidden=\(keyboardCoordinator.isUserHidden)"
