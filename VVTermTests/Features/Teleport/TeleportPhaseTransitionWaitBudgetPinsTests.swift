@@ -477,7 +477,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// body, or the column-0 `}`. Fail closed on any drift, and on a helper
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
-        let raw = Self.strippingComments(Self.source(Self.classPath))
+        let raw = Self.strippingComments(try Self.source(Self.classPath))
         let helpers = try anchors(pattern: #"(?m)^    private func (\w+)"#, in: raw)
         let tests = try anchors(pattern: #"(?m)^    func (test\w+)\("#, in: raw)
         let closers = try anchors(pattern: #"(?m)^(\})"#, in: raw)
