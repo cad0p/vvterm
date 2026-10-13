@@ -1167,13 +1167,21 @@ carries an `xargs` word literal/ANSI-C-decoded — so any *future*
 unmodelled operator spelling in a GITHUB_ENV-mentioning body refuses
 rather than silently accepting (it never fires on a definite command word
 — `echo xargs > file` stays accepted — or on a recognized stdin-taking
-redirection; the real tree stays green). The fold ships 17 fixtures (11
+redirection; the real tree stays green). The fold ships 18 fixtures (11
 rejects — here-string fd2/fd3/`{fd}`, spaced-heredoc fd2/fd3/`{fd}`,
 backslash-join and chain-hop placements, and the unresolved-command
-backstop — plus 6 benign twins: literal upstreams, a non-`xargs` command
-word, two stdin-replaced shapes and the definite-command-word control),
-every reject declaring `base_exit: 0`; the 125-shape sweep at the folded
-head measures 0 ACCEPT+FLIP rows and 0 over-refusals. Named limits stay
+backstop — plus 1 over-refusal pin and 6 benign twins: literal upstreams,
+a non-`xargs` command word, two stdin-replaced shapes and the
+definite-command-word control), every reject declaring `base_exit: 0`;
+the 125-shape sweep at the folded head measures 0 ACCEPT+FLIP rows and 0
+over-refusals. The over-refusal pin names the family-wide
+benign-xargs-command class: a mention-bearing upstream now also refuses
+for the `<<<`/`<<-` spellings when `xargs` runs a benign command or no
+command (the fold makes them behave exactly like their already-refusing
+`2>`/`>`/`env`/plain siblings; `xargs` with no command runs the default
+`echo`, so the runtime cannot flip) — the added cell is a consistency
+refusal, and the pre-existing sibling cells are disclosed here rather
+than newly claimed. Named limits stay
 as recorded above/below (unlisted wrappers such as `exec`/`ionice`/`chrt`/`taskset`, a
 runtime-assembled command word, grouped positions, `xargs … < pf`, an
 untraced `$`-word joined line incl. `${!v}`, a nested assignment body,
@@ -1343,7 +1351,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 985
+EXPECTED_MANIFEST_CASES = 986
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1368,7 +1376,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 542
+EXPECTED_BASE_VERDICT_CASES = 543
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign

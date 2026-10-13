@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 985
-    private static let expectedBaseVerdictCases = 542
+    private static let expectedManifestCases = 986
+    private static let expectedBaseVerdictCases = 543
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -1243,6 +1243,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-join.yml",
         "reject-runid-github-env-write-xargs-redirection-heredoc-spaced-chain-hop.yml",
         "reject-runid-github-env-write-xargs-redirection-unresolved-command.yml",
+        "reject-overrefusal-runid-github-env-write-xargs-redirection-herestring-no-command.yml",
         "accept-runid-github-env-write-xargs-redirection-herestring-literal.yml",
         "accept-runid-github-env-write-xargs-redirection-herestring-non-xargs-command.yml",
         "accept-runid-github-env-write-xargs-redirection-heredoc-spaced-literal.yml",

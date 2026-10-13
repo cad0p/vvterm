@@ -9310,4 +9310,15 @@ CASES = [
         "diagnostics": [
         ]
     },
+    {
+        "id": "reject-overrefusal-runid-github-env-write-xargs-redirection-herestring-no-command",
+        "files": [
+            "reject-overrefusal-runid-github-env-write-xargs-redirection-herestring-no-command.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runid-github-env-write-xargs-redirection-herestring-no-command.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
 ]
