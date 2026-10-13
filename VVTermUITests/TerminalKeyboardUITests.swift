@@ -239,6 +239,12 @@ final class TerminalKeyboardUITests: XCTestCase {
             surfaceID: "vvterm.keyboardTest.nonTerminalSurface",
             in: app
         )
+        // Issue #441 witness: the harness sets `swallowedModeTap=true`
+        // synchronously when the launch argument consumes the tap; asserting
+        // it proves the deterministic retry path was actually taken rather
+        // than silently degraded to the normal path.
+        let diagnostics = app.staticTexts["vvterm.keyboardTest.diagnostics"]
+        wait(for: diagnostics, labelContaining: "swallowedModeTap=true", timeout: 5, diagnostics: diagnosticsText(in: app))
         assertKeyboardAndAccessoryHidden(in: app)
 
         tapModeSwitchAndWaitForSurface(
@@ -3054,6 +3060,10 @@ final class TerminalKeyboardUITests: XCTestCase {
         in app: XCUIApplication,
         timeout: TimeInterval
     ) -> Bool {
+        // A captured `unknown` is not a mode value: its first appearance must
+        // not satisfy the change predicate (a lost tap would then skip the
+        // retry). The next attempt re-captures the marker.
+        guard previous != "unknown" else { return false }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if harnessMode(in: app) != previous {
@@ -3070,13 +3080,17 @@ final class TerminalKeyboardUITests: XCTestCase {
     /// hit point {-1, -1} after scrolling to visible` and then repeated the
     /// identical mechanism — and the retry is keyed on the harness
     /// `harnessMode=` marker: an unchanged marker means the touch was
-    /// delivered but lost (retry), a changed one means it landed and only a
-    /// bounded surface wait remains. Attempts differ only in preparation
-    /// (fresh re-resolve + settle; `waitForKeyboardSettle` on attempt 3). The
-    /// terminal assertion carries the marker before/after, the last observed
-    /// frame and existence. `isHittable` is deliberately absent here: the
-    /// getter itself records the hit-point issue on this host path and would
-    /// replace the diagnostic.
+    /// delivered but lost (retry); a changed marker means the tap landed and
+    /// the bounded surface wait below must still see the surface enter the AX
+    /// tree, or the terminal assertion fails with the marker/frame/existence
+    /// payload. Attempts differ only in preparation (fresh re-resolve +
+    /// settle; `waitForKeyboardSettle` on attempt 3). The terminal assertion
+    /// carries the marker before/after, the last observed frame and existence.
+    /// `isHittable` is deliberately absent here: the getter itself records the
+    /// hit-point issue on this host path and would replace the diagnostic.
+    /// Residual: an element that vanishes between the `exists` read and the
+    /// `.frame` read / coordinate dispatch records and aborts — the same
+    /// accepted TOCTOU the landed #444 `tapControl` carries.
     @MainActor
     private func tapModeSwitchAndWaitForSurface(
         _ buttonID: String,
@@ -3136,8 +3150,13 @@ final class TerminalKeyboardUITests: XCTestCase {
             markerBefore = harnessMode(in: app)
             target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             if waitForHarnessModeChange(from: markerBefore, in: app, timeout: timeout) {
-                _ = surface.waitForExistence(timeout: timeout)
-                return
+                // The marker moved, so the mode did switch; if the surface
+                // still never entered the AX tree, fall through to the
+                // terminal assertion below (which carries
+                // markerBefore/markerAfter/frame/exists) rather than
+                // returning a green result with the surface unverified.
+                if surface.waitForExistence(timeout: timeout) { return }
+                break
             }
         }
         XCTAssertTrue(
