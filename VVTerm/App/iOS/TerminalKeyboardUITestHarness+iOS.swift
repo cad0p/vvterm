@@ -96,6 +96,15 @@ struct TerminalKeyboardUITestHarness: View {
     @State private var foreignKeyboardFrameInjectionCount = 0
     @State private var keyboardAccessoryPairingObservation = KeyboardAccessoryPairingObservation.idle
     @State private var diagnostics = "notReady"
+    /// Issue #441 deterministic positive control: once the swallow launch
+    /// argument has consumed the first mode-button invocation, every later
+    /// invocation runs normally.
+    @State private var swallowedFirstModeTap = false
+    /// Issue #441 witness: set when the swallow actually consumed a mode tap.
+    /// Emitted as `swallowedModeTap=` so the UI test can prove the launch
+    /// argument was delivered and the deterministic control fired (the pins
+    /// are text-level and cannot observe runtime delivery).
+    @State private var didSwallowModeTap = false
     @State private var lifecycleStatus = LifecycleStatus.initial
     @State private var receivedInputHex = "none"
     @State private var linkFeedDelivered = false
@@ -146,6 +155,26 @@ struct TerminalKeyboardUITestHarness: View {
         Foundation.ProcessInfo.processInfo.arguments.contains(
             "--vvterm-ui-test-stale-light-accessory-cache-on-resume"
         )
+    }
+
+    /// Issue #441: with `--vvterm-ui-test-mode-buttons-swallow-first-tap` the
+    /// first mode-button invocation of the launch consumes the touch without
+    /// running its action (a delivered-but-lost tap), forcing
+    /// `TerminalKeyboardUITests`' mode-switch recovery to carry the switch
+    /// through its retry, marker and coordinate-tap path. One global swallow;
+    /// every other control is untouched.
+    private var swallowsFirstModeTap: Bool {
+        Foundation.ProcessInfo.processInfo.arguments.contains(
+            "--vvterm-ui-test-mode-buttons-swallow-first-tap"
+        )
+    }
+
+    private func consumeModeTap() -> Bool {
+        guard swallowsFirstModeTap else { return true }
+        guard !swallowedFirstModeTap else { return true }
+        swallowedFirstModeTap = true
+        didSwallowModeTap = true
+        return false
     }
 
     private let diagnosticTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
@@ -248,6 +277,7 @@ struct TerminalKeyboardUITestHarness: View {
             VStack(alignment: .trailing, spacing: 6) {
                 HStack(spacing: 8) {
                     Button("Terminal") {
+                        guard consumeModeTap() else { return }
                         terminalReady = false
                         showsTerminal = true
                         focusRequestID += 1
@@ -255,6 +285,7 @@ struct TerminalKeyboardUITestHarness: View {
                     .accessibilityIdentifier("vvterm.keyboardTest.mode.terminal")
 
                     Button("Other") {
+                        guard consumeModeTap() else { return }
                         terminalView?.releaseTerminalInput()
                         terminalView = nil
                         terminalReady = false
@@ -676,7 +707,13 @@ struct TerminalKeyboardUITestHarness: View {
 
     private func refreshDiagnostics() {
         guard let terminalView else {
-            diagnostics = "notReady ghostty=\(ghosttyApp.readiness.rawValue)"
+            // Issue #441: `harnessMode=` is the mode observable the UI test's
+            // mode-switch recovery is keyed on and must be emitted in BOTH
+            // branches — this is the `other` state (`showsTerminal` false,
+            // `terminalView` released) the recovery must detect. Derived from
+            // `showsTerminal`, the only state true iff the terminal mode is
+            // rendered (`terminalReady` is also false when switching back).
+            diagnostics = "notReady harnessMode=\(showsTerminal ? "terminal" : "other") swallowedModeTap=\(didSwallowModeTap ? "true" : "false") ghostty=\(ghosttyApp.readiness.rawValue)"
             return
         }
         let terminalDiagnostics = terminalView.keyboardUITestDiagnostics(
@@ -697,7 +734,7 @@ struct TerminalKeyboardUITestHarness: View {
         if feedsOSC8DoubleClick {
             deliverOSC8DoubleClickIfPossible()
         }
-        diagnostics = terminalDiagnostics + " " + keyboardAvoidanceDiagnostics(for: terminalView)
+        diagnostics = terminalDiagnostics + " harnessMode=\(showsTerminal ? "terminal" : "other") swallowedModeTap=\(didSwallowModeTap ? "true" : "false") " + keyboardAvoidanceDiagnostics(for: terminalView)
             + " keyboardPresentation=\(keyboardPresentationDescription)"
             + " cachedTerminalBackground=\(UserDefaults.standard.string(forKey: "terminalBackgroundColor") ?? "none")"
             + " userHidden=\(keyboardCoordinator.isUserHidden)"
