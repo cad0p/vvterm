@@ -29,10 +29,11 @@
 //       non-carrier probes;
 //    2. `axWaitBudget` is the only `TimeInterval` constant and its literal is
 //       30; no helper call carries a `budget:` token except the five
-//       enumerated non-carrier probe sites, each bound to its `reason:`
-//       string at the pre-existing 5 s (the plan §5 property 2 resolution of
-//       the §3 A1 scope rule), and a helper's own `budget:` tokens are its
-//       signature plus `tapControl`'s delegated existence wait;
+//       enumerated non-carrier probe sites, each keyed on its frozen
+//       `(identifier, reason)` pair at the pre-existing 5 s (the plan §5
+//       property 2 resolution of the §3 A1 scope rule), and a helper's own
+//       `budget:` tokens are its signature plus `tapControl`'s delegated
+//       existence wait;
 //    3. per wait helper: the deadline is textually bound to `budget`, the
 //       query is fresh INSIDE the loop, the pause is a `RunLoop` run (any
 //       value — 0.1 → 0.25 is an accepted variant), there is no
@@ -50,24 +51,29 @@
 //       child of the sheet `ZStack` (not inside `PhaseChainGateOverlay`),
 //       unconditionally.
 //
-//  SLICE RULE (plan §5 v4, CL-4): class-scope funcs anchor on the
-//  modifier-agnostic
-//  `(?m)^    (?:@[^\n]*\n\s*)?(?:private\s+)?(?:static\s+)?func (\w+)`,
-//  test bodies on `(?m)^    func (test\w+)\(`; a slice terminates at the
-//  EARLIEST of the next func anchor, the next test-body anchor, or the
-//  column-0 `}`. The v3 rule (next helper or `}`) swallowed all three test
-//  bodies into the last helper's slice, so any `contains` property could be
-//  satisfied by test-body content; the purity check (`func test` /
-//  `XCTAssert` inside a helper slice) and the terminator close that. Fail
-//  closed if the helper set, the test set or the all-`func` reconciliation
-//  drifts (a `private static func` — or any attributed or otherwise
-//  modifier-qualified helper — is caught by the name-set freeze; impl lens 2
-//  T2-4).
+//  SLICE RULE (plan §5 v4, CL-4): class-scope funcs anchor on
+//  `(?m)^    .*\bfunc\s+(\w+)` — EVERY class-indent line carrying a `func`
+//  keyword is collected, so `private static func`, `static private func`,
+//  `fileprivate func`, same-line `@MainActor private func` and any other
+//  modifier/attribute spelling are all caught; the extracted name multiset
+//  must equal the frozen helper ∪ test set, so an unrecognized spelling or
+//  an extra `func` reds closed rather than being skipped (closure lens CF-2
+//  folded the prior ordered-modifier regex). Test bodies on
+//  `(?m)^    func (test\w+)\(`; a slice terminates at the EARLIEST of the
+//  next func anchor, the next test-body anchor, or the column-0 `}`. The v3
+//  rule (next helper or `}`) swallowed all three test bodies into the last
+//  helper's slice, so any `contains` property could be satisfied by test-body
+//  content; the purity check (`func test` / `XCTAssert` inside a helper
+//  slice) and the terminator close that.
 //
 //  FORMATTING HEURISTIC, NOT A PROOF. These pins parse Swift as text. Honest
 //  defeat list: a computed-key re-expression (`String("isHittable")`,
 //  reflection, KVC) or an `XCTWaiter` re-expression of the recorded read; a
-//  string-literal decoy that satisfies a token check; the query receiver/type
+//  string-literal decoy that satisfies a token check (the budget readers
+//  normalize whitespace around the label and colon — `budget\s*:`,
+//  `budget\s*:\s*([0-9.]+)` — but do not skip string literals, so a reason
+//  string spelling `budget: 5` reds the frozen pair/multiset checks rather
+//  than passing them; closure lens CF-1); the query receiver/type
 //  is unpinned (`app.buttons[…]` and
 //  `app.descendants(matching: .any)[…]` both satisfy the in-loop
 //  `[identifier]` check — the shard-3 class run is the oracle; impl lens 2
@@ -112,10 +118,12 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     private static let harnessPath =
         "VVTerm/App/iOS/TeleportPhaseChainUITestHarness+iOS.swift"
 
-    /// The frozen `private func` set, in file order. The all-`func`
-    /// reconciliation below also reds a NON-private helper, so this is the
-    /// helper-set freeze and the slice map in one.
+    /// The frozen `func` set (class-scope helpers plus the XCTest lifecycle
+    /// override), in file order. The all-`func` reconciliation below also reds
+    /// a NON-private helper, so this is the helper-set freeze and the slice
+    /// map in one.
     private static let helperNames = [
+        "setUpWithError",
         "launch",
         "attachScreenshot",
         "waitForElement",
@@ -137,25 +145,31 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     /// The five frozen non-carrier probe call sites, each passing the
     /// pre-existing 5 s (plan §5 property 2 / §3 A1; CL-2). The multiset is
-    /// frozen as a secondary bound; the per-site binding below (probeReasons)
+    /// frozen as a secondary bound; the per-site binding below (probeBindings)
     /// is what makes a compensating carrier↔probe budget move red (impl
     /// lens 2 T2-1).
     private static let probeBudgetLiterals = ["5", "5", "5", "5", "5"]
 
-    /// The `reason:` strings of the five frozen probe sites. The three A3
-    /// `gateReleases` probes share one reason; the header-label and the
-    /// bootstrapBegins probes have their own. A helper call that carries any
-    /// `budget:` token must carry `budget: 5` AND one of these reasons; the
-    /// only other legal shape is a call with no `budget:` token at all.
-    private static let probeReasons = [
-        "bootstrap header must read 'Approve in Safari'",
-        "the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
-        "bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
+    /// The five frozen probe call sites, keyed on their `(identifier, reason)`
+    /// pair. The three A3 `gateReleases` probes share one pair; the
+    /// header-label and the bootstrapBegins probes have their own. A helper
+    /// call that carries any `budget:` token must carry `budget: 5` AND match
+    /// one of these pairs; the only other legal shape is a call with no
+    /// `budget:` token at all. Pair keying closes the reason-swap arm (a
+    /// carrier gains a probe reason while the real probe loses its budget)
+    /// that the reason-only binding accepted (closure lens CF-3).
+    private static let probeBindings = [
+        "Self.bootstrapHeaderIdentifier|bootstrap header must read 'Approve in Safari'",
+        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "Self.gateReleasesIdentifier|the gate-release counter must be exactly 1 after the gate tap (#444 A3)",
+        "Self.bootstrapBeginsIdentifier|bootstrap must run exactly once — a second (fallback) bootstrap would increment the count",
     ]
 
     /// `budget:` token counts per helper slice: the signature default and,
     /// for `tapControl`, the delegated existence wait.
     private static let helperBudgetTokens: [String: Int] = [
+        "setUpWithError": 0,
         "launch": 0,
         "attachScreenshot": 0,
         "waitForElement": 1,
@@ -203,7 +217,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         )
 
         let testBodyText = slices.testBodies.joined(separator: "\n")
-        let budgetTokens = testBodyText.components(separatedBy: "budget:").count - 1
+        let budgetTokens = Self.budgetTokenCount(in: testBodyText)
         let budgetLiterals = Self.budgetLiterals(in: testBodyText)
         // Secondary invariants: the token count and the literal multiset.
         // They cannot see WHICH call site carries each 5 (impl lens 2 T2-1: a
@@ -221,26 +235,34 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         // either carries `budget: 5` with an enumerated probe reason, or
         // carries no `budget:` token at all.
         let helperCalls = Self.helperCallArguments(in: testBodyText)
-        let budgetCalls = helperCalls.filter { $0.contains("budget:") }
+        let budgetCalls = helperCalls.filter(Self.containsBudgetToken)
         #expect(
             budgetCalls.count == Self.probeBudgetLiterals.count,
             "exactly \(Self.probeBudgetLiterals.count) helper calls may pass a `budget:` argument (the enumerated non-carrier probes) — found \(budgetCalls.count) budget-carrying calls (issue #444)"
         )
+        var boundPairs: [String] = []
         for call in budgetCalls {
             #expect(
-                call.contains("budget: 5"),
-                "a call-site `budget:` must be the frozen 5 s probe literal (`budget: 5`) — found `\(call)` (issue #444)"
+                Self.budgetLiterals(in: call).contains("5"),
+                "a call-site `budget:` must be the frozen 5 s probe literal (`budget: 5`, whitespace-insensitive) — found `\(call)` (issue #444)"
             )
+            let identifier = Self.identifierArgument(in: call)
             let reason = Self.reasonArgument(in: call)
+            let binding = (identifier != nil && reason != nil) ? "\(identifier!)|\(reason!)" : nil
+            if let binding { boundPairs.append(binding) }
             #expect(
-                reason.map { Self.probeReasons.contains($0) } == true,
-                "a budget-carrying helper call must be one of the five enumerated non-carrier probes, bound to its `reason:` string; a compensating carrier↔probe budget move reds here even when the token count and literal multiset still match — found reason \(reason ?? "<missing>") in `\(call)` (impl lens 2 T2-1) (issue #444)"
+                binding.map { Self.probeBindings.contains($0) } == true,
+                "a budget-carrying helper call must be one of the five enumerated non-carrier probes, keyed on its `(identifier, reason)` pair; a compensating carrier↔probe budget move or a reason-swap move reds here even when the token count and literal multiset still match — found pair \(binding ?? "<missing>") in `\(call)` (impl lens 2 T2-1 / closure lens CF-3) (issue #444)"
             )
         }
+        #expect(
+            boundPairs.sorted() == Self.probeBindings.sorted(),
+            "the five budget-carrying helper calls must be exactly the frozen `(identifier, reason)` probe multiset (3× gateReleases, 1× header label, 1× bootstrapBegins) — found \(boundPairs.sorted()) (closure lens CF-3) (issue #444)"
+        )
 
         for name in Self.helperNames {
             let body = slices.helperBodies[name] ?? ""
-            let tokens = body.components(separatedBy: "budget:").count - 1
+            let tokens = Self.budgetTokenCount(in: body)
             #expect(
                 tokens == Self.helperBudgetTokens[name],
                 "\(name) must carry exactly \(Self.helperBudgetTokens[name] ?? -1) `budget:` token(s) (its signature default, plus `tapControl`'s delegated existence wait) — found \(tokens) (issue #444)"
@@ -536,12 +558,16 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
     /// slice that contains test-body content.
     private static func classSlices() throws -> ClassSlices {
         let raw = Self.strippingComments(try Self.source(Self.classPath))
-        // Modifier-agnostic class-scope func anchors (impl lens 2 T2-4): a
-        // `private static func`, an attributed helper or any other qualified
-        // declaration is caught by the name-set freeze, and a helper after
-        // the last test can no longer hide inside the last test body's slice.
+        // Modifier-agnostic class-scope func anchors (impl lens 2 T2-4,
+        // closure lens CF-2): EVERY class-indent line carrying a `func`
+        // keyword is collected — `static private func`, `fileprivate func`
+        // and same-line `@MainActor private func` included — and the
+        // extracted name multiset must equal the frozen helper ∪ test set
+        // (fail closed on over-collection), so an unrecognized spelling reds
+        // rather than being skipped; a helper after the last test can no
+        // longer hide inside the last test body's slice.
         let funcs = try anchors(
-            pattern: #"(?m)^    (?:@[^\n]*\n\s*)?(?:private\s+)?(?:static\s+)?func (\w+)"#,
+            pattern: #"(?m)^    .*\bfunc\s+(\w+)"#,
             in: raw
         )
         let closers = try anchors(pattern: #"(?m)^(\})"#, in: raw)
@@ -549,7 +575,7 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         let allFuncNames = funcs.map(\.name)
         guard allFuncNames.sorted() == (helperNames + testNames).sorted() else {
             throw PinFailure(
-                "a `func` outside the frozen helper/test sets is at class scope: \(allFuncNames) — a modifier-qualified helper (`static`, attributed) or a 4th `func test…` reds the anchor-set freeze (issue #444)"
+                "a `func` outside the frozen helper/test set is at class scope: \(allFuncNames) — every class-indent `func` is collected (any modifier/attribute spelling), so a new, renamed or respelled helper or a 4th `func test…` reds the anchor-set freeze (impl lens 2 T2-4 / closure lens CF-2) (issue #444)"
             )
         }
         let helpers = funcs.filter { helperNames.contains($0.name) }
@@ -626,8 +652,30 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
         }
     }
 
+    /// Whitespace-insensitive `budget` token count (`budget:`, `budget :` and
+    /// `budget:5` all count; closure lens CF-1).
+    private static func budgetTokenCount(in source: String) -> Int {
+        matches(pattern: #"(budget\s*:)"#, in: source).count
+    }
+
+    /// Whether an argument list carries a `budget` argument token in any
+    /// whitespace spelling (closure lens CF-1).
+    private static func containsBudgetToken(_ call: String) -> Bool {
+        call.range(of: #"budget\s*:"#, options: .regularExpression) != nil
+    }
+
+    /// The single `Self.<name>Identifier` member reference in a helper call,
+    /// normalized (`Self.fooIdentifier`), or nil when the spelling is not
+    /// recognized (fail closed). `waitForElement` passes the identifier first,
+    /// `waitForLabel` second, but either way it is the call's only
+    /// `Identifier`-suffixed reference (closure lens CF-3).
+    private static func identifierArgument(in call: String) -> String? {
+        let names = matches(pattern: #"Self\s*\.\s*(\w+Identifier)"#, in: call)
+        return names.count == 1 ? "Self.\(names[0])" : nil
+    }
+
     private static func budgetLiterals(in source: String) -> [String] {
-        matches(pattern: #"budget: ([0-9.]+)"#, in: source)
+        matches(pattern: #"budget\s*:\s*([0-9.]+)"#, in: source)
     }
 
     /// Extract every `tapControl(`, `waitForElement(` or `waitForLabel(` call
@@ -683,8 +731,8 @@ struct TeleportPhaseTransitionWaitBudgetPinsTests {
 
     /// The `reason: "…"` string inside a helper call's argument list, if any.
     private static func reasonArgument(in call: String) -> String? {
-        let marker = "reason: \""
-        guard let markerRange = call.range(of: marker) else { return nil }
+        let marker = #"reason\s*:\s*""#
+        guard let markerRange = call.range(of: marker, options: .regularExpression) else { return nil }
         let remainder = call[markerRange.upperBound...]
         guard let end = remainder.firstIndex(of: "\"") else { return nil }
         return String(remainder[..<end])
