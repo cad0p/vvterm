@@ -655,7 +655,13 @@ pipeline hop lines (a post-quote or joined `|` counts, and an
 internal-pipe hop command is classified), decodes `$'…'` ANSI-C
 literals in the carrier-site word tests (`$'env'`, `$'-S'`, `$'xargs'`,
 `x$'\141'rgs`), and ships the wrapper-option
-census fixtures with the rest demoted to this list), the
+census fixtures with the rest demoted to this list); the #350f fold round
+3 closes the redirection/fd-prefix family structurally: the consumer
+consumes the `<<<` operator pair and the spaced `<<-` operator with its
+delimiter, distinguishes the recognized stdin-taking redirections
+(`("stdin",)`) from unresolved walks, and the `_xargs_unresolved_command`
+backstop refuses an unresolved segment that still carries an `xargs`
+word (see the fold-round-3 passage below), the
 no-mention job-env assembly (`s2a`), the created-or-aliased
 basename, and a `$(…)` body whose unmodelled heredoc hides the halves
 (a substitution-body heredoc is the scanner's named residual), and a
@@ -1125,9 +1131,57 @@ position (`if true; then xargs …; fi`, `for i in 1; do xargs …; done`),
 and the unlisted valid long option (`env --ignore-environment xargs …`,
 refused fail-closed). Both over-refusal controls are pinned
 (`env -S 'echo xargs'`, the blank-inflated pipe chain beyond the bound).
-Named residual: a split string assembled at runtime (`env -S "$CMD …"`)
-stays accepted and runtime-FLIPs (pinned by
-`accept-runid-github-env-write-xargs-env-split-string-variable`).
+Former named residual, now closed: a split string assembled at runtime
+(`env -S "$CMD …"`) stayed accepted and runtime-FLIPped at fold round 1;
+fold round 2 refuses `env -S`/`--split-string` unconditionally at any
+spelling, and the fixture was renamed to
+`reject-runid-github-env-write-xargs-env-split-string-variable.yml`.
+
+#350f fold round 3 (the redirection/fd-prefix fold) closes the C2 family
+**structurally** rather than operator by operator. Fold rounds 1 and 2
+closed each measured spelling (`2>`/`2>&1`/`&>`/`<&0`, then `{fd}>`), and
+round 2's closure re-lens then measured the here-string and spaced-`<<-`
+variants still accepting and runtime-FLIPping: `2<<<`/`3<<<`/`{fd}<<<`,
+spaced `2<<- EOF`/`3<<- EOF`/`{fd}<<- EOF`, including backslash-join and
+pipe-chain-hop placements (9 ACCEPT+FLIP rows in a 125-shape fd×op sweep,
+0 over-refusals). The causes were structural: `_shell_tokens` pairs only
+two characters, so `<<<` arrives as `<<` + `<` and
+`_redirection_prefix_end` demanded a word target after the first `<<`; the
+spaced `<<-` form arrived as `2` + `<<` + `-` + `EOF`, and the lone `-`
+word was consumed as the redirect *target*, leaving the delimiter `EOF`
+as the walk's command word. Fold round 3 extends the consumer instead:
+`_redirection_prefix_end` consumes the adjacent `<<`+`<` pair as one
+here-string (stdin-side when the fd is 0 or absent, non-stdin otherwise),
+consumes the adjacent `-` as the `<<-` operator and the word after it as
+the delimiter, and now reports the stdin-taking case explicitly as
+`(None, True)`; `_consume_leading_redirections` returns
+`(cursor, consumed, stdin_stop)` and shares one fd-spec path for the
+numeric and `{name}` spellings; `_effective_command_word` returns
+`("stdin",)` when a recognized stdin-taking redirection stops the walk
+(the pipeline feed is gone, so no carrier can receive the operand) and
+returns None when an fd-prefix word sits adjacent to a redirect operator
+the consumer could not place (the word is a prefix, not a command). The
+structural backstop `_xargs_unresolved_command` then refuses fail-closed
+when a segment's walk resolves no command word at all and the segment
+carries an `xargs` word literal/ANSI-C-decoded — so any *future*
+unmodelled operator spelling in a GITHUB_ENV-mentioning body refuses
+rather than silently accepting (it never fires on a definite command word
+— `echo xargs > file` stays accepted — or on a recognized stdin-taking
+redirection; the real tree stays green). The fold ships 17 fixtures (11
+rejects — here-string fd2/fd3/`{fd}`, spaced-heredoc fd2/fd3/`{fd}`,
+backslash-join and chain-hop placements, and the unresolved-command
+backstop — plus 6 benign twins: literal upstreams, a non-`xargs` command
+word, two stdin-replaced shapes and the definite-command-word control),
+every reject declaring `base_exit: 0`; the 125-shape sweep at the folded
+head measures 0 ACCEPT+FLIP rows and 0 over-refusals. Named limits stay
+as recorded above/below (unlisted wrappers such as `exec`/`ionice`/`chrt`/`taskset`, a
+runtime-assembled command word, grouped positions, `xargs … < pf`, an
+untraced `$`-word joined line incl. `${!v}`, a nested assignment body,
+the interpreter/script-file/stdin families, and the census demotions);
+a syntax-error operator pair the consumer does not model (`><`,
+`2><`) now refuses through the backstop instead of accepting — bash
+rejects those shapes with rc 2, so the refusal is fail-closed and not a
+measured over-refusal.
 
 Runtime values were
 verified offline against the published `@actions/workflow-parser` 0.3.61
