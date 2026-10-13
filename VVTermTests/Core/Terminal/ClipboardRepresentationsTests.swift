@@ -5,8 +5,9 @@
 //
 //  #431 unit coverage for the platform-neutral clipboard representation seam
 //  (`VVTerm/Core/Terminal/ClipboardRepresentations.swift`): mime selection
-//  (dedupe, unservable skip, caller order), the upstream path escape (the
-//  22-character table, single-pass, newline pass-through), the opinionated
+//  (dedupe, unservable skip, caller order), the path escape (the 23-character
+//  table — upstream's 22 plus the local CR divergence — single-pass, the
+//  odd-backslash CR guard, newline pass-through), the opinionated
 //  `text/plain` composition including the `isFileURL` filter, the RFC 2483
 //  URI list bytes, and the MIME → pasteboard-identifier mapping.
 //
@@ -62,21 +63,24 @@ struct ClipboardRepresentationsTests {
     // MARK: - ClipboardPathEscape
 
     @Test
-    func pathEscapeSetIsTheExactUpstreamTwentyTwoCharactersInWrittenOrder() {
+    func pathEscapeSetIsUpstreamTwentyTwoPlusLocalCRInWrittenOrder() {
         #expect(
-            ClipboardPathEscape.escapeCharacters == "\\ ()[]{}<>\"'`!#$&;|*?\t",
-            "the escape set is upstream's, backslash first — a reordered or pruned set changes which characters are escaped"
+            ClipboardPathEscape.escapeCharacters == "\\ ()[]{}<>\"'`!#$&;|*?\t\r",
+            "the set is upstream's 22 characters in written order plus a deliberate local CR at the end — a reordered or pruned set changes which characters are escaped"
         )
-        #expect(ClipboardPathEscape.escapeCharacters.count == 22, "upstream's set has 22 characters")
+        #expect(
+            ClipboardPathEscape.escapeCharacters.count == 23,
+            "upstream's set has 22 characters; the local CR divergence (issue #438) makes 23"
+        )
     }
 
     @Test
     func pathEscapeEscapesEveryCharacterInTheSetExactly() {
         let characters = [
             "\\", " ", "(", ")", "[", "]", "{", "}", "<", ">", "\"", "'",
-            "`", "!", "#", "$", "&", ";", "|", "*", "?", "\t",
+            "`", "!", "#", "$", "&", ";", "|", "*", "?", "\t", "\r",
         ]
-        #expect(characters.count == 22)
+        #expect(characters.count == 23)
         for character in characters {
             #expect(
                 ClipboardPathEscape.escaped(character) == "\\" + character,
@@ -95,8 +99,12 @@ struct ClipboardRepresentationsTests {
             ClipboardPathEscape.escaped("\\ ") == "\\\\\\ ",
             "backslash first means the inserted backslash before the space is not revisited by the backslash pass"
         )
+        #expect(
+            ClipboardPathEscape.escaped("\\\r") == "\\\\\\\r",
+            "CR is after `\\` in the set, so the extra guard backslash is inserted by the CR pass and never doubled by the backslash pass — the case that pins CR's position after `\\`"
+        )
 
-        let allCharacters = "\\ ()[]{}<>\"'`!#$&;|*?\t"
+        let allCharacters = "\\ ()[]{}<>\"'`!#$&;|*?\t\r"
         let expected = allCharacters.map { "\\" + String($0) }.joined()
         #expect(
             ClipboardPathEscape.escaped(allCharacters) == expected,
@@ -104,11 +112,60 @@ struct ClipboardRepresentationsTests {
         )
     }
 
+    /// #438: escaping does not remove the CR — it backslash-guards it, so the
+    /// invariant is guard parity: at every CR in the output, the run of
+    /// backslashes immediately before it has odd length. A "contains no CR"
+    /// assertion would be false by design and would pin the wrong mechanism.
+    @Test
+    func pathEscapeEscapesCarriageReturnAsABackslashGuard() {
+        #expect(
+            ClipboardPathEscape.escaped("/tmp/a\rb") == "/tmp/a\\\rb",
+            "a CR in a copied path is escaped as `\\`+CR, not left bare (the #438 divergence)"
+        )
+        #expect(
+            ClipboardPathEscape.escaped("\r") == "\\\r",
+            "a lone CR is guarded too"
+        )
+    }
+
+    @Test
+    func pathEscapeGuardsEveryCarriageReturnWithAnOddBackslashCount() {
+        let samples = [
+            "/tmp/a\rb",
+            "\r",
+            "\r\r",
+            "a\tb\rc",
+            "x\\\rz",
+            "x\\\\\rz",
+            "/tmp/dir with space/na\rme",
+        ]
+        for sample in samples {
+            let escaped = ClipboardPathEscape.escaped(sample)
+            let characters = Array(escaped)
+            for index in characters.indices where characters[index] == "\r" {
+                var guardCount = 0
+                var cursor = index - 1
+                while cursor >= 0, characters[cursor] == "\\" {
+                    guardCount += 1
+                    cursor -= 1
+                }
+                #expect(
+                    guardCount % 2 == 1,
+                    "every CR in the escaped output must be guarded by an odd number of backslashes; \(sample.debugDescription) escaped to \(escaped.debugDescription) with \(guardCount)"
+                )
+            }
+        }
+        #expect(
+            ClipboardPathEscape.escaped("/tmp/a\rb").contains("\r"),
+            "positive control: the escape guards the CR rather than removing it"
+        )
+    }
+
     @Test
     func pathEscapeLeavesNewlinesAndUnsafeFreePathsUnchanged() {
         #expect(
             ClipboardPathEscape.escaped("a\nb") == "a\nb",
-            "newline is not in the set — the core's unsafe-paste check and the #327 prompt own newline safety"
+            "newline is not in the set — an unbracketed LF paste trips the core's unsafe-paste check and the #327 prompt; bracketed LF pastes are framed and treated as safe by default"
         )
         #expect(ClipboardPathEscape.escaped("/usr/local/bin") == "/usr/local/bin")
         #expect(ClipboardPathEscape.escaped("") == "")
@@ -125,6 +182,18 @@ struct ClipboardRepresentationsTests {
         #expect(
             ClipboardOpinionatedText.compose([.fileURL(url), .text("plain")]) == "/tmp/a\\ b\\(c\\)/file.txt plain",
             "multiple elements are joined by a single space"
+        )
+
+        // #438: the CR divergence must show up in the composed representation
+        // the core actually serves, single-item and in the multi-item join.
+        let crURL = URL(fileURLWithPath: "/tmp/a\rb")
+        #expect(
+            ClipboardOpinionatedText.compose([.fileURL(crURL)]) == "/tmp/a\\\rb",
+            "a copied path with CR composes as the backslash-guarded form"
+        )
+        #expect(
+            ClipboardOpinionatedText.compose([.fileURL(crURL), .text("plain")]) == "/tmp/a\\\rb plain",
+            "the two-item case keeps the guarded CR path and the join space"
         )
     }
 
