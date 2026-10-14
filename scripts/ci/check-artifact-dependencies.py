@@ -7059,7 +7059,7 @@ def _run_id_payload_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job writes "
-        f"to `$GITHUB_ENV` (line {body.line}) with a payload the gate cannot extract "
+        f"to {_env_file_refusal_target(body)} (line {body.line}) with a payload the gate cannot extract "
         "(refusing rather than guessing)",
     )
 
@@ -7068,7 +7068,7 @@ def _run_id_name_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job "
-        f"writes an unextractable name to `$GITHUB_ENV` (line {body.line}) "
+        f"writes an unextractable name to {_env_file_refusal_target(body)} (line {body.line}) "
         "(refusing rather than guessing)",
     )
 
