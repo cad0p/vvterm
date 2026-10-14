@@ -643,10 +643,19 @@ refuses through the "references the env file without an extractable
 write" rule; a fabricated-literal write (`…/set_env_1234`, directly or
 through a variable) refuses; a harmless write behind an unresolvable
 substitution refuses; the case-insensitive `set_env_` collision class
-(`RESET_ENV_DIR`, `UNSET_ENV_HELPER`, `/tmp/set_env_notes.txt`) refuses;
-and a sibling command file (`set_output`, `add_path`, `add_matcher`) is an
-accepted over-refusal of the directory marker. Corpus occurrences of
-either spelling: 0, so the real tree stays green. The
+(`RESET_ENV_DIR`, `UNSET_ENV_HELPER`, `/tmp/set_env_notes.txt`) refuses
+and the same substring collision applies to the `_runner_file_commands`
+directory arm (`/tmp/old_runner_file_commands_backup`); a write with an
+unextractable payload to a sibling command file (`set_output`,
+`add_path`, `add_matcher`) refuses — an accepted over-refusal of the
+directory marker — while an extractable benign payload stays accepted,
+exactly `$GITHUB_ENV`-symmetric. The model is the POSIX spelling; the
+Windows form (`%RUNNER_TEMP%\\_runner_file_commands\\set_env_<guid>`) is
+caught only through the same `_runner_file_commands`/`set_env_`
+substrings, with no Windows-specific arm. Corpus occurrences of either
+spelling: 0 in the scanned real tree (`.github/` and `scripts/ci/*.sh`) —
+the 15 fixture files added this round are the only corpus occurrences —
+so the real tree stays green. The
 fold does not close: `-f` script bodies, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
 / process-substitution script operands, the xargs spellings the carrier table does not
@@ -8856,8 +8865,8 @@ def _refuse_github_env_run_id_write(
 ) -> None:
     """#342: a preceding same-job `run:` step that mentions the env file
     (`_mentions_github_env`: the `$GITHUB_ENV` name or the runner's own
-    `set_env_` path spelling) and writes a name an env-resolved `run-id:`
-    resolves through can flip the
+    `_runner_file_commands`/`set_env_` path spelling) and writes a name
+    an env-resolved `run-id:` resolves through can flip the
     runtime value to the current run's id, so the cross-run exclusion cannot
     be proven unless every such write's value classifies cross-run. Gated on
     `_env_reference(step.run_id)`: a direct expression cannot be affected by

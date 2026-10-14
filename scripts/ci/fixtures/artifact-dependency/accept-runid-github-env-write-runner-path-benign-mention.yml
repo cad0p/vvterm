@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Fixture: accept boundary / battery control: the runner path spelling only in a comment (stripped) plus a harmless scratch write
+# Fixture: accept boundary / battery control: the runner path spelling only in a comment (read by the mention test; ignored by the artifact pass) plus a harmless scratch write
 jobs:
   build:
     runs-on: ubuntu-latest
