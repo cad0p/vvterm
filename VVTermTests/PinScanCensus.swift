@@ -15,17 +15,25 @@
 //    `/* … */` comments inside an interpolation body) — and fails closed on
 //    anything it cannot resolve: an unterminated block comment, string or
 //    interpolation records a `cannot analyze` violation naming the file and
-//    opening line and restores the tail verbatim. Newline handling is
-//    grapheme-correct (`Character.isNewline`), and newline graphemes —
-//    including CRLF — are preserved verbatim, so a `//` comment can never
-//    blank past its terminator in a CRLF file (fold round 4, F1). This closes
-//    CR-1 (the 120-line blind region where a `/*` in a raw string was
-//    "closed" by a `*/` in another string), CR-2 (a `//` inside a string
-//    blanking a same-line declaration) and the fold-round-4 F2/F4
-//    interpolation-comment desync; the joined-text declaration scan (CL-3)
-//    runs over the masked text, so CR-3's cross-line literal false positive is
-//    gone too. Residual left on purpose: a bare Swift regex literal (`/…/`)
-//    is not modeled, and the check is still lexical, not semantic.
+//    opening line and restores the tail verbatim. Newline handling follows
+//    Swift's line-terminator set — LF, CRLF (one Character) and CR — and those
+//    terminators are preserved verbatim, so a `//` comment can never blank
+//    past its terminator in a CRLF file (fold round 4, F1). The set is
+//    deliberately NOT `Character.isNewline`: Swift keeps a `//` comment open
+//    through U+000B/U+000C/U+0085/U+2028/U+2029, and treating those as
+//    terminators let a comment end early and a following quote swallow real
+//    code with `unresolved == nil` (fold round 5, M1). This closes CR-1 (the
+//    120-line blind region where a `/*` in a raw string was "closed" by a
+//    `*/` in another string), CR-2 (a `//` inside a string blanking a
+//    same-line declaration) and the fold-round-4 F2/F4 interpolation-comment
+//    desync; the joined-text declaration scan (CL-3) runs over the masked
+//    text, so CR-3's cross-line literal false positive is gone too. Residual
+//    left on purpose: Swift regex literals are not modeled — neither bare
+//    `/…/` nor *extended* `#/…/#` (the latter needs no escaping, so a `/*`
+//    inside it opens a block comment that a later string's `*/` "closes",
+//    hiding a declaration with `unresolved == nil`; pre-existing and silent,
+//    not fail-closed, with no occurrence in `VVTermTests`) — and the check is
+//    still lexical, not semantic.
 //  - It cannot see the pre-existing inline depth-based root resolvers that
 //    never declared a migrated name and never read the hook
 //    (`TeleportLoginClientErrorShapeTests`, `StartupDeadlineTests`,
@@ -112,7 +120,10 @@ enum PinScanCensus {
     static let expectedCohortDigest = "bdc45b4f51478bbe"
 
     /// The fingerprint of the current `expectedCohort` (FNV-1a 64 over the
-    /// sorted, newline-joined paths, as 16-digit lowercase hex).
+    /// sorted, newline-joined paths, as 16-digit lowercase hex). The `"\n"`
+    /// below is the deliberate cohort-digest content separator — a fingerprint
+    /// over paths, not mask/newline logic — so it stays LF even though the mask
+    /// proper only ends constructs at Swift line terminators (fold round 5).
     static func cohortDigest() -> String {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in expectedCohort.sorted().joined(separator: "\n").utf8 {
@@ -265,16 +276,16 @@ enum PinScanCensus {
     /// passes the joined, string-and-comment-masked text (`PinScanCensus.maskedCode`),
     /// so a `func` keyword and its name split across a line break are still
     /// caught (fold round 2, CL-3) while the same tokens inside a literal are
-    /// invisible (fold round 3, CR-3). Newlines are counted grapheme-correctly,
-    /// so a CRLF line break counts once and matches the input's line numbers
-    /// (fold round 4, F1).
+    /// invisible (fold round 3, CR-3). Newlines are counted with Swift's own
+    /// terminator set, so a CRLF line break counts once, a lone CR counts, and
+    /// the result matches the input's line numbers (fold rounds 4-5, F1/N1).
     private static func declarationLineNumbers(in code: String, pattern: String) -> [Int] {
         var lineNumbers: [Int] = []
         var searchStart = code.startIndex
         while searchStart < code.endIndex,
               let match = code.range(of: pattern, options: .regularExpression, range: searchStart..<code.endIndex) {
             let lineNumber = code[..<match.lowerBound].reduce(into: 1) { count, character in
-                if character.isNewline { count += 1 }
+                if isSwiftLineTerminator(character) { count += 1 }
             }
             lineNumbers.append(lineNumber)
             searchStart = match.upperBound
@@ -283,11 +294,11 @@ enum PinScanCensus {
     }
 
     /// The `(1-based line, text)` pairs of `text`, for the per-line scans.
-    /// Every newline grapheme (LF, CR, CRLF) separates lines, and empty lines
-    /// are kept, so a CRLF file yields the same numbering its bytes imply
-    /// (fold round 4, F1).
+    /// Every Swift line terminator (LF, CR, CRLF — CRLF is one Character)
+    /// separates lines, and empty lines are kept, so a CRLF file yields the
+    /// same numbering its bytes imply (fold rounds 4-5, F1/N1).
     private static func lines(of text: String) -> [(Int, String)] {
-        text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        text.split(omittingEmptySubsequences: false, whereSeparator: { isSwiftLineTerminator($0) })
             .enumerated()
             .map { ($0.offset + 1, String($0.element)) }
     }
@@ -297,16 +308,28 @@ enum PinScanCensus {
         "cannot analyze: \(relative):\(lineNumber(at: offset, in: content)) opens an unterminated string, raw string or block comment; the census masks comments and strings and refuses to analyze past an unresolved construct — close the construct or record the residual deliberately (fail closed)."
     }
 
-    /// The 1-based line containing the character `offset`.
+    /// The 1-based line containing the character `offset`. Swift's own
+    /// terminators (LF, CRLF, CR) count; the over-broad `Character.isNewline`
+    /// would also count U+000B/U+000C/U+0085/U+2028/U+2029 and misreport
+    /// diagnostics in a file containing them (fold round 5, M1/N1).
     private static func lineNumber(at offset: Int, in content: String) -> Int {
         var line = 1
         var index = 0
         for character in content {
             if index >= offset { break }
-            if character.isNewline { line += 1 }
+            if isSwiftLineTerminator(character) { line += 1 }
             index += 1
         }
         return line
+    }
+
+    /// Swift source line terminators: LF, CRLF (one Character), CR.
+    /// Deliberately NOT `Character.isNewline`: Swift keeps a `//` comment open
+    /// through U+000B/U+000C/U+0085/U+2028/U+2029, and treating those as
+    /// terminators let a comment end early and a following quote swallow real
+    /// code with no `unresolved` signal (fold round 5, M1).
+    private static func isSwiftLineTerminator(_ character: Character) -> Bool {
+        character == "\n" || character == "\r\n" || character == "\r"
     }
 
     /// The string-and-comment-aware mask over `content`, with fail-closed
@@ -314,9 +337,9 @@ enum PinScanCensus {
     /// and (when true) string-literal interiors; the other mode keeps string
     /// interiors — including an interpolation body — verbatim so the
     /// `VVTERM_PINS_SOURCE_ROOT` key literal in a stray copy stays visible,
-    /// while still blanking comments string-awarely. Newline graphemes are
-    /// always preserved verbatim (LF and CRLF alike), so line numbers and
-    /// offsets stay aligned with the input (fold round 4, F1).
+    /// while still blanking comments string-awarely. Swift line terminators
+    /// (LF, CR, CRLF) are always preserved verbatim, so line numbers and
+    /// offsets stay aligned with the input (fold rounds 4-5, F1/M1).
     ///
     /// A construct the scanner cannot resolve (an unterminated block comment,
     /// string, raw string or interpolation at end-of-input) sets
@@ -368,9 +391,11 @@ enum PinScanCensus {
         while index < end {
             let character = characters[index]
             if inLineComment {
-                if character.isNewline {
+                if isSwiftLineTerminator(character) {
                     // Preserve the terminator grapheme verbatim: a CRLF is one
-                    // Character and must keep both of its bytes.
+                    // Character and must keep both of its bytes. The exotic
+                    // `Character.isNewline` characters are comment content
+                    // here, not terminators (fold round 5, M1).
                     out.append(character)
                     inLineComment = false
                 } else {
@@ -395,7 +420,7 @@ enum PinScanCensus {
                     if blockDepth == 0 { blockOpen = -1 }
                     continue
                 }
-                out.append(character.isNewline ? character : " ")
+                out.append(isSwiftLineTerminator(character) ? character : " ")
                 index += 1
                 continue
             }
@@ -588,7 +613,7 @@ enum PinScanCensus {
             let character = characters[index]
             if character == "/", index + 1 < end, characters[index + 1] == "/" {
                 index += 2
-                while index < end, !characters[index].isNewline { index += 1 }
+                while index < end, !isSwiftLineTerminator(characters[index]) { index += 1 }
                 continue
             }
             if character == "/", index + 1 < end, characters[index + 1] == "*" {
@@ -677,10 +702,11 @@ enum PinScanCensus {
         return nil
     }
 
-    /// Appends `count` characters from `start`, blanking every non-newline one
-    /// when `blanking` is set and copying them verbatim otherwise. Newline
-    /// graphemes (including CRLF) are copied verbatim even when blanking, so
-    /// the mask keeps the input's newline structure (fold round 4, F1).
+    /// Appends `count` characters from `start`, blanking every non-terminator
+    /// one when `blanking` is set and copying them verbatim otherwise. Swift
+    /// line terminators (LF, CR, CRLF) are copied verbatim even when blanking,
+    /// so the mask keeps the input's newline structure (fold rounds 4-5,
+    /// F1/M1).
     private static func appendMasked(
         _ count: Int,
         _ blanking: Bool,
@@ -692,7 +718,7 @@ enum PinScanCensus {
         for offset in 0..<count {
             let character = characters[start + offset]
             if blanking {
-                out.append(character.isNewline ? character : " ")
+                out.append(isSwiftLineTerminator(character) ? character : " ")
             } else {
                 out.append(character)
             }
