@@ -84,6 +84,11 @@ struct PinScanSupportGoldenTests {
             ("key: value\n# comment", "key: value\n         "),
             // A `#` inside a scalar is not a comment.
             ("run: |\n  echo '#hash'", "run: |\n  echo '#hash'"),
+            // A CRLF (or lone CR) ends the comment and is kept verbatim, with
+            // the next line visible (Swift line terminators, issue #455).
+            ("# c\r\nkey: value", "   \r\nkey: value"),
+            ("key: value # c\r\nnext: 1", "key: value    \r\nnext: 1"),
+            ("# c\rkey: value", "   \rkey: value"),
         ]
         for c in cases {
             #expect(
