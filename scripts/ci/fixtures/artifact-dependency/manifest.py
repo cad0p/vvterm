@@ -9618,4 +9618,165 @@ CASES = [
             "reject-overrefusal-runid-github-env-write-xargs-redirection-herestring-no-command.yml:30: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `xargs` with a command string that names the value the download resolves through (refusing rather than guessing)",
         ]
     },
+    # ------------------------------------------------------------------
+    # #350 round: the runner's own env-file path spelling
+    # (`_runner_file_commands` / `set_env_`). The enumerating shapes
+    # and the literal-rooted glob flip at runtime; the fabricated-
+    # literal and over-refusal cases are fail-closed costs (each
+    # fixture header carries its runtime class).
+    # ------------------------------------------------------------------
+    {
+        "id": "accept-runid-github-env-write-runner-path-benign-mention",
+        "files": [
+            "accept-runid-github-env-write-runner-path-benign-mention.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "accept-runid-github-env-write-runner-path-literal-crossrun-echo",
+        "files": [
+            "accept-runid-github-env-write-runner-path-literal-crossrun-echo.yml"
+        ],
+        "exit": 0,
+        "base_exit": 0,
+        "excluded": 1,
+        "diagnostics": [
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-setenv-glob",
+        "files": [
+            "reject-runid-github-env-write-runner-path-setenv-glob.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-setenv-glob.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `f` through `for`, which the extractor does not model (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-dir-glob",
+        "files": [
+            "reject-runid-github-env-write-runner-path-dir-glob.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-dir-glob.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes `f` through `for`, which the extractor does not model (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-find-split",
+        "files": [
+            "reject-runid-github-env-write-runner-path-find-split.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-find-split.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references the runner's env file (line 17) without an extractable write (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-substitution",
+        "files": [
+            "reject-runid-github-env-write-runner-path-substitution.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-substitution.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references the runner's env file (line 17) without an extractable write (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-literal-glob",
+        "files": [
+            "reject-runid-github-env-write-runner-path-literal-glob.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-literal-glob.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to the runner's env file (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-literal-exact",
+        "files": [
+            "reject-runid-github-env-write-runner-path-literal-exact.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-literal-exact.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to the runner's env file (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-literal-var-dir",
+        "files": [
+            "reject-runid-github-env-write-runner-path-literal-var-dir.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-literal-var-dir.yml:24: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to the runner's env file (line 18) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-runid-github-env-write-runner-path-bash-c",
+        "files": [
+            "reject-runid-github-env-write-runner-path-bash-c.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-runid-github-env-write-runner-path-bash-c.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job runs `bash` with a command string that names the value the download resolves through (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runner-path-explicit-literal",
+        "files": [
+            "reject-overrefusal-runner-path-explicit-literal.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runner-path-explicit-literal.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to the runner's env file (line 17) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runner-path-var-literal",
+        "files": [
+            "reject-overrefusal-runner-path-var-literal.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runner-path-var-literal.yml:23: run-id: '${{ env.SOURCE_RUN_ID }}' resolves through `env.SOURCE_RUN_ID`, and a preceding step in this job writes `SOURCE_RUN_ID` to the runner's env file (line 17) with a value that is not provably cross-run — that write can change the value at runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runner-path-mention-without-write",
+        "files": [
+            "reject-overrefusal-runner-path-mention-without-write.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runner-path-mention-without-write.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references the runner's env file (line 17) without an extractable write (refusing rather than guessing)",
+        ]
+    },
+    {
+        "id": "reject-overrefusal-runner-path-directory-listing",
+        "files": [
+            "reject-overrefusal-runner-path-directory-listing.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runner-path-directory-listing.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references the runner's env file (line 17) without an extractable write (refusing rather than guessing)",
+        ]
+    },
 ]

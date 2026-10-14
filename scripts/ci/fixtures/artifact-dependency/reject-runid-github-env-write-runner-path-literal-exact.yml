@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the LITERAL runner root + a fabricated exact name; base ACCEPT -> v3 REFUSE.
+# Runtime: NOFLIP detection gap (the runner never reads a made-up name).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+      - name: flip
+        run: |
+          printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" >> /home/runner/work/_temp/_runner_file_commands/set_env_1234
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
