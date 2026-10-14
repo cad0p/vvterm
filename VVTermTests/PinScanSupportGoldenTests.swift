@@ -32,18 +32,20 @@ struct PinScanSupportGoldenTests {
             // Nested block comments are tracked by depth.
             ("/* a /* nested */ b */ let x = 1", "                       let x = 1"),
             // A `//` inside a string literal is not a comment.
-            ("let s = \"a // b\"", "let s = \"a // b\""),            // A `/*` inside a string literal is not a comment.
+            ("let s = \"a // b\"", "let s = \"a // b\""),
+            // A `/*` inside a string literal is not a comment.
             ("let s = \"/*\"", "let s = \"/*\""),
             // An escaped quote does not close the string.
             ("let s = \"a\\\"b\" // c", "let s = \"a\\\"b\"     "),
             // An unterminated block comment blanks to end-of-input.
             ("let a = 1 /* open", "let a = 1        "),
-            // Raw-string limitation: `#"…"#` is read as a plain string, so a
-            // trailing comment after it is still blanked, but the raw-string
-            // body is copied verbatim.
+            // A raw string is read with its exact delimiter (`#"…"#`, any
+            // hash count), so a `//` in its body is not a comment and the
+            // body is copied verbatim; the trailing comment still blanks.
             ("let s = #\"a // b\"# // real", "let s = #\"a // b\"#        "),
-            // Interpolation and hashes are copied verbatim (the canonical
-            // scanner does not descend into `\( … )`).
+            // Interpolations and hashes are copied verbatim: the scanner
+            // descends into `\( … )` only far enough to find the literal end,
+            // and the interpolation text stays part of the copied literal.
             ("let s = \"\\(x) // c\"", "let s = \"\\(x) // c\""),
             ("let s = #\"\\#(x) // c\"#", "let s = #\"\\#(x) // c\"#"),
             // Divergent raw-string cases, fixed by issue #455: the canonical
@@ -267,6 +269,19 @@ struct PinScanSupportGoldenTests {
         #expect("let s = \"😀\" // tail".utf16.count == 20)
     }
 
+    /// The census mask's interpolation close skips nested string literals, so
+    /// a bracket inside one cannot close the interpolation early and swallow
+    /// the following line (`PinScanCensus.interpolationClose`'s
+    /// `stringDelimiter`/`stringSkipEnd` arm). Binds that arm to a named test.
+    @Test
+    func censusMaskNestedLiteralBracketDoesNotCloseInterpolation() {
+        let input = "let s = \"\\(d[\"x(y\"])\"\nlet y = 1"
+        let mask = PinScanCensus.maskedCode(input, blankingStringContents: true)
+        #expect(mask.unresolvedOffset == nil)
+        #expect(mask.text == "let s =    d[     ]  \nlet y = 1")
+        #expect(mask.text.hasSuffix("\nlet y = 1"))
+    }
+
     /// Issue #455: the post-fix rows are checked against the properties the
     /// fix must hold, independently of their exact expected strings — a body
     /// sentinel never leaks into blanked code, the terminator grapheme is
@@ -354,6 +369,35 @@ struct PinScanSupportGoldenTests {
                 #expect(!output.contains("tail"))
                 #expect(output.count == rawString.count)
             }
+        }
+        // Canonical/R1 CRLF and lone-CR comment rows: the terminator is kept
+        // verbatim, the next line stays visible and the comment identifier
+        // blanks. The canonical scanner runs the R1 worker (D5 alias).
+        for (input, terminator) in [
+            ("let a = 1 // tail\r\nlet b = 2", "\r\n"),
+            ("let a = 1 // tail\rlet b = 2", "\r"),
+        ] {
+            for output in [
+                PinScan.strippingComments(input),
+                PinScan.strippingCommentsKeepingLiterals(input),
+            ] {
+                #expect(output.hasSuffix("\(terminator)let b = 2"), "canonical/R1 \(input.debugDescription): \(output.debugDescription)")
+                #expect(!output.contains("tail"))
+                #expect(output.utf16.count == input.utf16.count)
+            }
+        }
+
+        // YAML CRLF/CR rows: the comment blanks, the terminator is kept
+        // verbatim and the next line stays visible.
+        for (input, suffix) in [
+            ("# c\r\nkey: value", "\r\nkey: value"),
+            ("key: value # c\r\nnext: 1", "\r\nnext: 1"),
+            ("# c\rkey: value", "\rkey: value"),
+        ] {
+            let output = PinScan.strippingYAMLComments(input)
+            #expect(output.hasSuffix(suffix), "YAML \(input.debugDescription): \(output.debugDescription)")
+            #expect(!output.contains("#"))
+            #expect(output.utf16.count == input.utf16.count)
         }
     }
 }

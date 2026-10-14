@@ -17,8 +17,9 @@
 //
 //  Scanner selection (callers → semantics). Pick deliberately:
 //
-//  - `strippingComments(_:)` — the canonical scanner (85 call sites). Since
-//    issue #455 it runs the shared worker's verbatim-string mode, so it is
+//  - `strippingComments(_:)` — the canonical scanner (85 call sites at
+//    #453). Since issue #455 it runs the shared worker's verbatim-string
+//    mode, so it is
 //    hash-aware (`#"…"#`, any hash count) and interpolation-aware; it is
 //    byte-identical to `strippingCommentsKeepingLiterals(_:)`.
 //  - `strippingCommentsKeepingLiterals(_:)` (R1) — the login-token scan in
@@ -521,7 +522,6 @@ enum PinScan {
         let quoteCount = delimiter.filter { $0 == "\"" }.count
         let hashes = delimiter.filter { $0 == "#" }.count
         var cursor = start + delimiter.count
-        var bracketStack: [Character] = []
         while cursor < characters.count {
             if isRaw {
                 let closingLength = quoteCount + hashes
@@ -548,32 +548,11 @@ enum PinScan {
                 }
             } else if characters[cursor] == "\"" {
                 return (cursor, Array("\""), cursor + 1)
-            } else if bracketStack.isEmpty {
-                cursor += 1
             } else {
-                let character = characters[cursor]
-                if character == "(" || character == "[" || character == "{" {
-                    bracketStack.append(character)
-                } else if character == ")" || character == "]" || character == "}" {
-                    if Self.matches(closing: character, opening: bracketStack.last) {
-                        bracketStack.removeLast()
-                    }
-                }
                 cursor += 1
             }
         }
         return (characters.count, [], characters.count)
-    }
-
-    /// Whether a closing bracket matches the current top of the interpolation
-    /// bracket stack.
-    static func matches(closing: Character, opening: Character?) -> Bool {
-        switch closing {
-        case ")": return opening == "("
-        case "]": return opening == "["
-        case "}": return opening == "{"
-        default: return false
-        }
     }
 
     /// `characters[from..<to]` with every character that is not a Swift line

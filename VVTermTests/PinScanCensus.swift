@@ -8,7 +8,7 @@
 //  Defeat list (what this check does NOT prove):
 //  - It is name-based. A residual copy that renames its helper (`func repoRoot`,
 //    `func stripComment`) or inlines a lexer body passes. The migrated workers
-//    (`scan`, `scanning`, `stringEnd`, `matches`, `blanked`, …) are
+//    (`scan`, `scanning`, `stringEnd`, `blanked`, …) are
 //    deliberately NOT tracked: their names are generic, a declaration in
 //    another file would false-positive, and a renamed worker copy is part of
 //    this same documented defeat.
