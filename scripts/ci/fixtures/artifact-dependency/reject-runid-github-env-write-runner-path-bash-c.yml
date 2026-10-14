@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Fixture: a two-step `bash -c` carrier; base ACCEPT -> v3 REFUSE (carrier rule).
-# Runtime: NOFLIP detection gap.
+# Runtime: FLIP (the inner bash expands the glob onto the step's rotated env file).
 jobs:
   build:
     runs-on: ubuntu-latest
