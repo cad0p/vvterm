@@ -15,11 +15,36 @@
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` — points every consumer at a mutated
 //  tree.
 //
-//  `PinScan.strippingComments(_:)` is the canonical hash-unaware scanner; it
-//  covers `"…"`, `"""…"""`, and `\` escapes, but not raw strings (`#"…"#`) or
-//  comments inside an interpolation. The hash/interpolation-aware scanner in
-//  `SSH/SSHProbeShellPinsTests.swift` deliberately stays local for that reason
-//  (it is allowlisted by `PinScanCensusPinsTests`).
+//  Scanner selection (callers → semantics → known limits). Pick deliberately:
+//
+//  - `strippingComments(_:)` — the canonical hash-unaware scanner (86 call
+//    sites); it covers `"…"`, `"""…"""` and `\` escapes, but not raw
+//    strings (`#"…"#`) or interpolations: a raw string with an embedded
+//    quote desynchronizes it, and a `//` inside an interpolation is not a
+//    comment it descends into. Correct for the token/whitespace pins that
+//    never see those forms.
+//  - `strippingCommentsKeepingLiterals(_:)` (R1) — the login-token scan in
+//    `SSH/SSHProbeShellPinsTests.swift` (5 calls): hash/interpolation-aware,
+//    string contents kept verbatim. Known limit: the comment-blind
+//    interpolation close can under-strip (issue #455).
+//  - `strippingCommentsAndStrings(_:)` (R2) — the SSH call-form scans (6
+//    calls): the same-aware lexer with string interiors blanked and
+//    interpolation bodies scanned as code. Known limit: the same desync can
+//    drop the tail and its newlines (issue #455).
+//  - `strippingCommentsAndStringsPreservingUTF16(_:)` (R3) — the declared-test
+//    attribution walk in `WorkflowShardSplitPinsTests.swift` (1 call), whose
+//    consumers index the result with `NSRange`/UTF-16 offsets: hash-prefix
+//    aware, UTF-16 length preserved on the real corpus. Known limit: a nested
+//    `"` inside an interpolation body leaks the inner token into code
+//    (issue #455).
+//  - `strippingYAMLComments(_:)`, `normalizedWhitespace(_:)`, `isInside(_:_:)`
+//    — the small shared helpers used by the census and whitespace pins.
+//
+//  All four scanners are fail-open lexers (the census's `maskedCode` is the
+//  fail-closed one); the measured defects above are pinned by
+//  `PinScanSupportGoldenTests` and tracked in issue #455. Migrating a scanner
+//  is a behavior change: the census's `sharedHelpers` list and the golden rows
+//  must move with it.
 
 import Foundation
 

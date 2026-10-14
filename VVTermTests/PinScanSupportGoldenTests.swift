@@ -47,9 +47,10 @@ struct PinScanSupportGoldenTests {
             ("let s = #\"\\#(x) // c\"#", "let s = #\"\\#(x) // c\"#"),
             // Divergent raw-string cases (issue #450 fold F2): the canonical
             // scanner desynchronizes after a raw string with an embedded
-            // quote, so the trailing `//` is kept as code. The allowlisted
-            // hash-aware wrapper blanks the comment instead, so these cases
-            // fail if the wrapper is ever substituted for the canonical lexer.
+            // quote, so the trailing `//` is kept as code. The shared
+            // hash-aware wrapper (`strippingCommentsKeepingLiterals`) blanks
+            // the comment instead, so these cases fail if the wrapper is ever
+            // substituted for the canonical lexer.
             ("#\"a \"b\"# // tail", "#\"a \"b\"# // tail"),
             ("##\"a#\"#b\"## // tail", "##\"a#\"#b\"## // tail"),
             // Triple-quoted raw string with a `//` inside: the literal is
