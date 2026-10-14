@@ -121,8 +121,8 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// together. Precedent: `WorkflowXcodebuildFlagPinsTests`.
     @Test
     func testUploadLegBudgetLeavesTheWorkflowAllowanceHeadroom() throws {
-        let workflow = Self.strippingYAMLComments(
-            try Self.source(".github/workflows/teleport-e2e.yml")
+        let workflow = PinScan.strippingYAMLComments(
+            try PinScan.source(".github/workflows/teleport-e2e.yml")
         )
         let allowances = Self.executionAllowances(in: workflow)
         #expect(
@@ -205,8 +205,8 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// `setConnectTimeout(` site, so no leg can reset the budget after it.
     @Test
     func testUploadSuiteBuildsItsClientThroughTheFactory() throws {
-        let text = Self.strippingComments(
-            try Self.source("VVTermTests/SSHUploadIntegrationTests.swift")
+        let text = PinScan.strippingComments(
+            try PinScan.source("VVTermTests/SSHUploadIntegrationTests.swift")
         )
 
         let suiteAnchor = try #require(
@@ -286,13 +286,13 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         let factoryBody = try Self.bracedBlock(after: factoryAnchor, in: text)
         if let construction = constructions.first {
             #expect(
-                Self.isInside(factoryBody, construction.lowerBound),
+                PinScan.isInside(factoryBody, construction.lowerBound),
                 "the suite's only client construction must live inside `makeUploadClient` — re-derive this pin (issue #356)"
             )
         }
         if let budgetCall = budgetCalls.first {
             #expect(
-                Self.isInside(factoryBody, budgetCall.lowerBound),
+                PinScan.isInside(factoryBody, budgetCall.lowerBound),
                 "the suite's only `setConnectTimeout(` call must live inside `makeUploadClient` — re-derive this pin (issue #356)"
             )
         }
@@ -307,7 +307,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// literals gone.
     @Test
     func testProductionWiringDerivesSessionCapsFromTheConnectBudget() throws {
-        let text = Self.strippingComments(try Self.source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
 
         // The config construction passes the caller's budget through. Count
         // every construction spelling — Pin A's regex family:
@@ -424,7 +424,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
         )
         if let watchdogInterrupt = watchdogInterrupts.first {
             #expect(
-                Self.isInside(connectBody, watchdogInterrupt.lowerBound),
+                PinScan.isInside(connectBody, watchdogInterrupt.lowerBound),
                 "the single `atomicSocket.interrupt(\"handshake-watchdog\")` must stay inside `SSHSession.connect()` (positive control for the resolved span) — re-derive this pin (issue #356)"
             )
         }
@@ -498,7 +498,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             "the `libssh2_session_set_timeout(` call must exist — re-derive this pin (issue #356)"
         )
         #expect(
-            Self.isInside(connectBody, sessionCall.lowerBound),
+            PinScan.isInside(connectBody, sessionCall.lowerBound),
             "the single `libssh2_session_set_timeout(` call must stay inside `SSHSession.connect()`'s branch (positive control for the resolved span) — re-derive this pin (issue #356)"
         )
         let sessionArgument = try Self.parenthesizedArgument(
@@ -590,8 +590,8 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// upload the snapshot.
     @Test
     func testFixtureSshdLogIsUploadedAsAReadableSnapshot() throws {
-        let workflow = Self.strippingYAMLComments(
-            try Self.source(".github/workflows/teleport-e2e.yml")
+        let workflow = PinScan.strippingYAMLComments(
+            try PinScan.source(".github/workflows/teleport-e2e.yml")
         )
         let liveLog = "vvterm-repro/sshd.log"
         let snapshot = "vvterm-repro/sshd-snapshot.log"
@@ -656,7 +656,7 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     /// post-start `chown`, which races sshd's first open and silently loses.
     @Test
     func testFixtureSetupPreCreatesTheSshdLogBeforeLaunch() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let preCreate = try #require(
             script.range(of: #": >> "$REPRO_DIR/sshd.log""#),
             "`repro-sshd-setup.sh` must pre-create `$REPRO_DIR/sshd.log` (append, never truncate) before starting sshd — `-E` creates a missing file root-owned 0600 (issue #356) — re-derive this pin"
@@ -691,45 +691,6 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
     }
 
     // MARK: - Fixtures
-
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
-    /// The repository root, derived by walking up from this file's location
-    /// (`VVTermTests/SSH/SSHUploadIntegrationConnectBudgetPinsTests.swift`)
-    /// until `VVTerm.xcodeproj` is found.
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source tree with a mutation applied. Never set in CI.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin (issue #356)"
-        )
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error) — re-derive this pin (issue #356)")
-        }
-    }
 
     /// Every `-default-test-execution-time-allowance <seconds>` value in a
     /// YAML-comment-stripped workflow, in file order.
@@ -778,182 +739,6 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
 
     // MARK: - Source helpers
 
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim. Duplicated from the merged pin suites
-    /// (`SSHUploadChannelFreePinsTests`, `SSHProxyChannelFreePinsTests`) so
-    /// each family's pin file is self-contained and reverts independently.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim. Duplicated from
-    /// `WorkflowXcodebuildFlagPinsTests` so each pin file is self-contained.
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
-
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.
     private static func bracedBlock(
@@ -990,12 +775,6 @@ struct SSHUploadIntegrationConnectBudgetPinsTests {
             "the pin anchor must be followed by a `{`"
         )
         return try bracedBlock(openingAt: open, in: text)
-    }
-
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
     }
 
     /// Every occurrence of `needle` in `text` (optionally within `range`),

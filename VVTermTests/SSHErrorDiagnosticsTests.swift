@@ -116,7 +116,7 @@ struct SSHErrorDiagnosticsTests {
         // `teleportInnerSessionPrepareFailureMessage`, never through
         // `error.localizedDescription`.
         let source = try String(
-            contentsOf: repositoryRoot()
+            contentsOf: PinScan.repositoryRoot()
                 .appendingPathComponent("VVTerm/Core/SSH/SSHClient.swift"),
             encoding: .utf8
         )
@@ -139,14 +139,6 @@ struct SSHErrorDiagnosticsTests {
             !window.contains("localizedDescription"),
             "the inner-session prepare failure must not log the unredacted localizedDescription: \(window)"
         )
-    }
-
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSHErrorDiagnosticsTests.swift`).
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHErrorDiagnosticsTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
     }
 
     @Test

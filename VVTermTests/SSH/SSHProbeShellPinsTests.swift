@@ -108,26 +108,6 @@ struct SSHProbeShellPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSH/SSHProbeShellPinsTests.swift`).
-    private func repositoryRoot() -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHProbeShellPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     /// The Swift source roots that compile into the `VVTerm` app target,
     /// enumerated live from `VVTerm.xcodeproj`: the root groups in the
     /// `VVTerm` native target's `fileSystemSynchronizedGroups`. Today this is
@@ -144,8 +124,8 @@ struct SSHProbeShellPinsTests {
     /// The app target's Swift source roots, read from the Xcode project. An
     /// empty result (project unreadable, target not found) fails the roots
     /// pin and the sweep's missing-file checks, never a vacuous pass.
-    private func appTargetSourceRoots() -> [String] {
-        let projectURL = repositoryRoot()
+    private func appTargetSourceRoots() throws -> [String] {
+        let projectURL = try PinScan.repositoryRoot()
             .appendingPathComponent("VVTerm.xcodeproj/project.pbxproj")
         guard let project = try? String(contentsOf: projectURL, encoding: .utf8) else {
             return []
@@ -233,10 +213,10 @@ struct SSHProbeShellPinsTests {
     /// requires to be empty. The paths are the fail-closed scope: a new file
     /// anywhere in the app target must be consciously allowlisted before it
     /// can emit a login shell or reference the login wrapper.
-    private func allSwiftFiles() -> [ScannedFile] {
+    private func allSwiftFiles() throws -> [ScannedFile] {
         var result: [ScannedFile] = []
-        for root in appTargetSourceRoots() {
-            let directory = repositoryRoot().appendingPathComponent(root)
+        for root in try appTargetSourceRoots() {
+            let directory = try PinScan.repositoryRoot().appendingPathComponent(root)
             guard let enumerator = FileManager.default.enumerator(atPath: directory.path) else {
                 continue
             }
@@ -247,7 +227,7 @@ struct SSHProbeShellPinsTests {
                 )
             }
         }
-        for path in appTargetNonSynchronizedSwiftFileReferences().paths {
+        for path in try appTargetNonSynchronizedSwiftFileReferences().paths {
             result.append(ScannedFile(path: path, isSynchronized: false))
         }
         return result.sorted { $0.path < $1.path }
@@ -272,8 +252,8 @@ struct SSHProbeShellPinsTests {
         let resolved: Bool
     }
 
-    private func appTargetNonSynchronizedSwiftFileReferences() -> NonSynchronizedSources {
-        let projectURL = repositoryRoot()
+    private func appTargetNonSynchronizedSwiftFileReferences() throws -> NonSynchronizedSources {
+        let projectURL = try PinScan.repositoryRoot()
             .appendingPathComponent("VVTerm.xcodeproj/project.pbxproj")
         guard let project = try? String(contentsOf: projectURL, encoding: .utf8) else {
             return NonSynchronizedSources(paths: [], resolved: false)
@@ -630,14 +610,14 @@ struct SSHProbeShellPinsTests {
     /// assertion fails closed if the target's `buildPhases` or its
     /// `PBXSourcesBuildPhase` cannot be resolved at all.
     @Test
-    func testAppTargetSweepRootsArePinned() {
-        let roots = appTargetSourceRoots()
+    func testAppTargetSweepRootsArePinned() throws {
+        let roots = try appTargetSourceRoots()
         #expect(
             roots == Self.expectedAppTargetSourceRoots,
             "the VVTerm app target's synchronized Swift roots are \(roots); a new root must be consciously added to expectedAppTargetSourceRoots (it is already swept, this is the tripwire)"
         )
 
-        let nonSynchronized = appTargetNonSynchronizedSwiftFileReferences()
+        let nonSynchronized = try appTargetNonSynchronizedSwiftFileReferences()
         #expect(
             nonSynchronized.resolved,
             "the VVTerm app target's `buildPhases`/`PBXSourcesBuildPhase` could not be resolved from VVTerm.xcodeproj, so the non-synchronized-sources assertion cannot run; failing closed because the Sources phase is the scan-scope tripwire"
@@ -652,12 +632,12 @@ struct SSHProbeShellPinsTests {
     /// intentional-login allowlists, recursively across every app-target root.
     @Test
     func testOnlyAllowlistedSitesEmitLoginShellTokensOrEmitters() throws {
-        let files = allSwiftFiles()
+        let files = try allSwiftFiles()
 
         // The recursive, fail-closed sweep: a new file (or a new literal in an
         // existing file) cannot adopt login semantics silently.
         for file in files {
-            let text = Self.strippingComments(try source(file.path))
+            let text = Self.strippingComments(try PinScan.source(file.path))
             let tokenCount = Self.shFamilyLoginTokenCount(in: text)
             if tokenCount > 0 {
                 #expect(
@@ -677,7 +657,7 @@ struct SSHProbeShellPinsTests {
         // The sh-family file allowlist is exact: the enumerated functions, the
         // in-body occurrence count, and the whole-file count must all hold.
         for (path, allowed) in Self.expectedLoginShellSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingComments(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -716,7 +696,7 @@ struct SSHProbeShellPinsTests {
         // declaration-only allowance (the `defaultLoginShellCommand`
         // declaration is the one emitter reference outside a func body).
         for (path, allowed) in Self.expectedLoginShellEmitterSites {
-            let text = Self.strippingComments(try source(path))
+            let text = Self.strippingComments(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -773,7 +753,7 @@ struct SSHProbeShellPinsTests {
     /// for the defeats that remain).
     @Test
     func testOnlyAllowlistedFilesAndFunctionsReferenceTheLoginWrapper() throws {
-        let files = allSwiftFiles()
+        let files = try allSwiftFiles()
         let knownFiles = Set(Self.expectedLoginWrapperSites.keys)
         let sweptPaths = Set(files.map(\.path))
         let missing = knownFiles.subtracting(sweptPaths)
@@ -783,7 +763,7 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let text = Self.strippingCommentsAndStrings(try source(file.path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(file.path))
             if Self.loginWrapperCallCount(in: text) > 0 {
                 #expect(
                     Self.expectedLoginWrapperSites[file.path] != nil,
@@ -793,7 +773,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedLoginWrapperSites {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -842,7 +822,7 @@ struct SSHProbeShellPinsTests {
     @Test
     func testConvertedProbeFilesUseTheNonLoginWrapperAtEverySite() throws {
         for (path, expected) in Self.expectedProbeWrapperOccurrences {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let probeCount = Self.occurrences(of: "wrapPOSIXProbeCommand(", in: text).count
             #expect(
                 probeCount == expected,
@@ -855,7 +835,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for builder in Self.probeBuilders {
-            let text = Self.strippingCommentsAndStrings(try source(builder.path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(builder.path))
             let bodies = try Self.functionBodies(in: text)
             let matches = bodies.filter { $0.name == builder.function }
             #expect(
@@ -885,7 +865,7 @@ struct SSHProbeShellPinsTests {
         #expect(command.contains(RemoteTerminalBootstrap.shellSystemPathExport()))
         #expect(!command.contains("$HOME/.local/bin"))
 
-        let text = Self.strippingComments(try source(path))
+        let text = Self.strippingComments(try PinScan.source(path))
         let bodies = try Self.functionBodies(in: text)
         let matches = bodies.filter { $0.name == "wrapPOSIXProbeCommand" }
         #expect(
@@ -915,7 +895,7 @@ struct SSHProbeShellPinsTests {
     /// variable or an interpolation) remain invisible to this scan.
     @Test
     func testOnlyAllowlistedBodiesSelfExportTheUserLocalPath() throws {
-        let files = allSwiftFiles()
+        let files = try allSwiftFiles()
         let knownFiles = Set(Self.expectedShellPathExportSites.keys)
         let sweptPaths = Set(files.map(\.path))
         let missing = knownFiles.subtracting(sweptPaths)
@@ -925,7 +905,7 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let fileText = try source(file.path)
+            let fileText = try PinScan.source(file.path)
             // The call form is invisible inside a blanked string literal, so
             // the reference count reads the string-blanked copy; the
             // `$HOME/.local/bin` literal can only live inside a string, so its
@@ -945,7 +925,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedShellPathExportSites {
-            let text = Self.strippingCommentsAndStrings(try source(path))
+            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {

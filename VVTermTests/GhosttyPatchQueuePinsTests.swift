@@ -47,31 +47,16 @@ struct GhosttyPatchQueuePinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/GhosttyPatchQueuePinsTests.swift`).
-    ///
-    /// Counterfactual hook: mutation runs point `VVTERM_PINS_SOURCE_ROOT` at a
-    /// mutated tree to prove the pins fail there. Never set in CI.
-    private func repositoryRoot() -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // GhosttyPatchQueuePinsTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func patchText() throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(Self.patchPath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(Self.patchPath),
             encoding: .utf8
         )
     }
 
     private func baseText() throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(Self.basePath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(Self.basePath),
             encoding: .utf8
         )
     }
@@ -233,7 +218,7 @@ struct GhosttyPatchQueuePinsTests {
         // fail-closed loop, with the interpolated drift message naming the
         // failing patch (not a hard-coded custom-io.patch).
         let buildScript = try String(
-            contentsOf: repositoryRoot().appendingPathComponent(Self.buildScriptPath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(Self.buildScriptPath),
             encoding: .utf8
         )
         let orderLine = try #require(
@@ -250,7 +235,7 @@ struct GhosttyPatchQueuePinsTests {
 
         // (b) The patch carries exactly the five pinned paths and the CR bytes.
         let patch = try String(
-            contentsOf: repositoryRoot().appendingPathComponent(Self.pasteSafetyPatchPath),
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(Self.pasteSafetyPatchPath),
             encoding: .utf8
         )
         let parsed = Self.patchPaths(in: patch)

@@ -156,134 +156,7 @@ struct StatsIsolatedDeinitPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/Features/Stats/StatsIsolatedDeinitReleaseTests.swift`).
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of
-        // the source with a marker removed to prove the pin fails there.
-        // NOTE: the variable must actually reach the test process. The
-        // measured-working form is
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported
-        // into xcodebuild's own environment (the `TEST_RUNNER_` prefix is
-        // consumed by the test runner and forwarded without it); a plain
-        // `VVTERM_PINS_SOURCE_ROOT` is inert here.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // StatsIsolatedDeinitReleaseTests.swift
-            .deletingLastPathComponent()  // Stats/
-            .deletingLastPathComponent()  // Features/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
-
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.
@@ -371,8 +244,8 @@ struct StatsIsolatedDeinitPinsTests {
     /// one `nonisolated deinit {}` in its body.
     @Test
     func testStatsCollectionContextCarriesExactlyOneNonisolatedDeinit() throws {
-        let text = Self.strippingComments(
-            try source("VVTerm/Features/Stats/Infrastructure/Platforms/PlatformStatsCollector.swift")
+        let text = PinScan.strippingComments(
+            try PinScan.source("VVTerm/Features/Stats/Infrastructure/Platforms/PlatformStatsCollector.swift")
         )
         let anchor = try #require(
             text.range(of: "final class StatsCollectionContext: @unchecked Sendable"),
@@ -409,8 +282,8 @@ struct StatsIsolatedDeinitPinsTests {
     /// `nonisolated deinit {}` in its body.
     @Test
     func testServerStatsCollectorCarriesExactlyOneNonisolatedDeinit() throws {
-        let text = Self.strippingComments(
-            try source("VVTerm/Features/Stats/Application/ServerStatsCollector.swift")
+        let text = PinScan.strippingComments(
+            try PinScan.source("VVTerm/Features/Stats/Application/ServerStatsCollector.swift")
         )
         let anchor = try #require(
             text.range(of: "final class ServerStatsCollector: ObservableObject"),
@@ -448,8 +321,8 @@ struct StatsIsolatedDeinitPinsTests {
     /// here means all three are guarded by the same CI-visible gate.
     @Test
     func testViewTabConfigurationManagerCarriesExactlyOneNonisolatedDeinit() throws {
-        let text = Self.strippingComments(
-            try source("VVTerm/Features/ConnectionViews/Application/ViewTabConfigurationManager.swift")
+        let text = PinScan.strippingComments(
+            try PinScan.source("VVTerm/Features/ConnectionViews/Application/ViewTabConfigurationManager.swift")
         )
         let anchor = try #require(
             text.range(of: "final class ViewTabConfigurationManager: ObservableObject"),

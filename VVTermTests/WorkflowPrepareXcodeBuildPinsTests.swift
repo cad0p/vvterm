@@ -742,12 +742,6 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         return nil
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
     /// The one step containing `needle`, or a fail-closed `PinFailure`.
     /// Content signatures (not step names) identify steps, so a benign rename
     /// of a step stays green; a deleted or duplicated step reds.
@@ -872,40 +866,10 @@ struct WorkflowPrepareXcodeBuildPinsTests {
     }
 
     private static func commentCutLines(of relativePath: String) throws -> [String] {
-        let source = try workflowSource(relativePath)
-        return Self.strippingYAMLComments(source)
+        let source = try PinScan.source(relativePath)
+        return PinScan.strippingYAMLComments(source)
             .components(separatedBy: "\n")
             .map(Self.cuttingLineComment)
-    }
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error) — re-derive this pin (issue #109)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the composite action and/or the OTA workflow mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin (issue #109)"
-        )
     }
 
     /// Cuts one YAML/bash-style trailing comment from a single line: a `#`
@@ -954,83 +918,4 @@ struct WorkflowPrepareXcodeBuildPinsTests {
         return result
     }
 
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim, so a `#` inside a scalar is not
-    /// read as a comment. Duplicated from `WorkflowXcodebuildFlagPinsTests`
-    /// (each pin file is self-contained so it reverts independently).
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        // YAML single-quote escape: `''` stays inside the scalar.
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
 }

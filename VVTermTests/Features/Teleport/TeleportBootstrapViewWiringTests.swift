@@ -808,26 +808,9 @@ final class TeleportBootstrapViewWiringTests: XCTestCase {
 
     // MARK: - Source pins (the call sites a behavioural test cannot see)
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/Features/Teleport/TeleportBootstrapViewWiringTests.swift`).
-    /// The `VVTERM_PINS_SOURCE_ROOT` override points the scan at a mutated tree
-    /// to prove the pin fails there (`TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT`
-    /// reaches the test process; never set in CI).
-    private func repositoryRoot() -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // TeleportBootstrapViewWiringTests.swift
-            .deletingLastPathComponent()  // Teleport/
-            .deletingLastPathComponent()  // Features/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
     private func bootstrapViewSource() throws -> String {
         try String(
-            contentsOf: repositoryRoot().appendingPathComponent(
+            contentsOf: PinScan.repositoryRoot().appendingPathComponent(
                 "VVTerm/Features/Teleport/UI/TeleportBootstrapView.swift"
             ),
             encoding: .utf8

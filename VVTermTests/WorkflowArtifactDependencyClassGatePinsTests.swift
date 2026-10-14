@@ -1329,14 +1329,14 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testGateScriptFixturesAndManifestExistWithLicenseHeader() throws {
-        let root = try Self.repositoryRoot()
+        let root = try PinScan.repositoryRoot()
 
         let scriptURL = root.appendingPathComponent(Self.scriptPath)
         #expect(
             FileManager.default.fileExists(atPath: scriptURL.path),
             "the artifact-dependency gate must exist at \(Self.scriptPath) (issue #316)"
         )
-        let script = try Self.source(Self.scriptPath)
+        let script = try PinScan.source(Self.scriptPath)
         #expect(
             script.hasPrefix("#!/usr/bin/env python3\n# SPDX-License-Identifier: MIT"),
             "\(Self.scriptPath) must keep its shebang and its `# SPDX-License-Identifier: MIT` header on the first two lines (scripts/ci/check-license-headers.sh is the first step of the required build job)"
@@ -1352,7 +1352,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             fixturesExist,
             "the fixture directory must exist at \(Self.fixturesDirectory) (issue #316)"
         )
-        let manifest = try Self.source(Self.manifestPath)
+        let manifest = try PinScan.source(Self.manifestPath)
         #expect(
             manifest.hasPrefix("# SPDX-License-Identifier: MIT"),
             "\(Self.manifestPath) must carry the SPDX header"
@@ -1367,8 +1367,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testBuildJobRunsTheGateAfterLicenseHeadersWithTheExactStep() throws {
-        let source = try Self.workflowSource()
-        let stripped = Self.strippingYAMLComments(source)
+        let source = try PinScan.source(Self.workflowPath)
+        let stripped = PinScan.strippingYAMLComments(source)
         let job = try Self.jobBlock(named: "build", in: stripped)
 
         let steps = Self.stepBlocks(in: job)
@@ -1474,8 +1474,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testWorkflowJobBlocksParseInTheCanonicalShape() throws {
-        let source = try Self.workflowSource()
-        let stripped = Self.strippingYAMLComments(source)
+        let source = try PinScan.source(Self.workflowPath)
+        let stripped = PinScan.strippingYAMLComments(source)
         let blocks = try Self.jobBlocks(in: stripped)
 
         #expect(!blocks.isEmpty, "the workflow must contain at least one job block")
@@ -1498,9 +1498,9 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testFixtureInventoryCoversTheRequiredCases() throws {
-        let root = try Self.repositoryRoot()
-        let manifest = try Self.source(Self.manifestPath)
-        let script = try Self.source(Self.scriptPath)
+        let root = try PinScan.repositoryRoot()
+        let manifest = try PinScan.source(Self.manifestPath)
+        let script = try PinScan.source(Self.scriptPath)
 
         for fixture in Self.requiredFixtures {
             let url = root.appendingPathComponent(Self.fixturesDirectory).appendingPathComponent(fixture)
@@ -1613,7 +1613,7 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
 
     @Test
     func testGateDiagnosticContractIsPresentAsCode() throws {
-        let script = Self.strippingPythonComments(try Self.source(Self.scriptPath))
+        let script = Self.strippingPythonComments(try PinScan.source(Self.scriptPath))
 
         // The rule diagnostic (plan §4.4): the manifest asserts these exact
         // strings, so they must exist as executable text, not prose.
@@ -1728,49 +1728,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         var text: String { lines.joined(separator: "\n") }
     }
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
-    private static func workflowSource() throws -> String {
-        try source(workflowPath)
-    }
-
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the workflow mutated. The measured-working form is
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported into
-        // xcodebuild's own environment (the `TEST_RUNNER_` prefix is consumed
-        // by the test runner and forwarded without it).
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
-
     // MARK: - Workflow parsing
 
     /// The lines of the workflow after the top-level `jobs:` key.
@@ -1864,83 +1821,6 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
         }
         if !current.isEmpty { steps.append(current) }
         return steps
-    }
-
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim.
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
     }
 
     /// Strips Python comments line-by-line so the P5 diagnostic fragments are

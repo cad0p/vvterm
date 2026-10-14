@@ -69,135 +69,7 @@ struct SSHShellLoopLivenessPinsTests {
 
     // MARK: - Fixtures
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSH/SSHShellLoopLivenessPinsTests.swift`).
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated tree to prove the pins fail there. Never set in CI. NOTE:
-        // the variable must actually reach the test process. Measured on this
-        // runner (2026-09-28, iOS Simulator destination): a plain env var is
-        // inert (a mutated root → all pins green), while exporting
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` into
-        // xcodebuild's own environment reaches the test process (the mutated
-        // pin goes red at its assert); the same token passed as a
-        // command-line build setting did not reach it here. So use the
-        // `TEST_RUNNER_` env form, or hand-mutate the worktree and restore it.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHShellLoopLivenessPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     // MARK: - Source helpers
-
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes) and `"""…"""`
-    /// but not raw strings (`#"…"#`) or comments inside an interpolation.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 
     /// The body span `{ … }` of the brace-delimited block that opens at
     /// `open`, found by a character-level depth walk.
@@ -252,12 +124,6 @@ struct SSHShellLoopLivenessPinsTests {
             searchStart = found.upperBound
         }
         return result
-    }
-
-    /// The whitespace-normalized form of `text`: every run of whitespace
-    /// collapses to a single space (empty for an all-whitespace span).
-    private static func normalizedWhitespace(_ text: Substring) -> String {
-        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     /// The range of the first whitespace-flexible occurrence of `needle`
@@ -319,7 +185,7 @@ struct SSHShellLoopLivenessPinsTests {
     /// statement, before the `libssh2_channel_write_ex` call.
     @Test
     func testShellWriteLoopRechecksChannelLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func write(_ data: Data, to shellId: UUID) async throws",
@@ -338,7 +204,7 @@ struct SSHShellLoopLivenessPinsTests {
     /// `libssh2_channel_request_pty_size_ex` call.
     @Test
     func testShellResizeLoopRechecksChannelLivenessAtTheLoopTop() throws {
-        let text = Self.strippingComments(try source("VVTerm/Core/SSH/SSHClient.swift"))
+        let text = PinScan.strippingComments(try PinScan.source("VVTerm/Core/SSH/SSHClient.swift"))
         let actorSpan = try Self.sshSessionSpan(in: text)
         try Self.assertLoopTopGuard(
             functionAnchor: "func resize(",
@@ -441,7 +307,7 @@ struct SSHShellLoopLivenessPinsTests {
             rangeOfWhitespaceFlexible(expectedGuard, in: text, range: loopBody),
             "the `\(loopAnchor)` loop body must contain the exact guard `\(expectedGuard)` at its top"
         )
-        let prefix = normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
+        let prefix = PinScan.normalizedWhitespace(text[loopBody.lowerBound..<guardRange.lowerBound])
         #expect(
             prefix.isEmpty || prefix == "try Task.checkCancellation()",
             "the guard must be the loop body's first statement after `try Task.checkCancellation()`; found `\(prefix)` between the loop open and the guard in `\(loopAnchor)`"

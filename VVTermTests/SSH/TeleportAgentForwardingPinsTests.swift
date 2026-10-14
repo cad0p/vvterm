@@ -28,26 +28,6 @@ import TeleportCore
 @MainActor
 struct TeleportAgentForwardingPinsTests {
 
-    private func repositoryRoot() -> URL {
-        // Counterfactual hook: the guard-sensitivity runs point this at a
-        // mutated /tmp tree to prove the pins fail there. Never set in CI.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // TeleportAgentForwardingPinsTests.swift
-            .deletingLastPathComponent()  // SSH/
-            .deletingLastPathComponent()  // VVTermTests/
-    }
-
-    private func source(_ relativePath: String) throws -> String {
-        try String(
-            contentsOf: repositoryRoot().appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
-    }
-
     /// The SSHSession prepare implementation region, which holds the agent
     /// request/subsystem ordering. There is also an `SSHClient` actor wrapper
     /// with the same signature, so this anchors on the SSHSession body's first
@@ -81,7 +61,7 @@ struct TeleportAgentForwardingPinsTests {
 
     @Test
     func prepareRequestsTheAgentAndInstallsTheCallbackBeforeTheSubsystem() throws {
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let body = try prepareBody(in: source)
         let install = try installRegion(in: source)
 
@@ -114,7 +94,7 @@ struct TeleportAgentForwardingPinsTests {
         // The callback runs inside libssh2's packet-receive path (possibly
         // while the bridge pump holds the non-reentrant SessionMutex), so it
         // must never call into libssh2 or the mutex.
-        let source = try source("VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift")
+        let source = try PinScan.source("VVTerm/Features/Teleport/Infrastructure/TeleportAgentForwarding.swift")
         let start = try #require(source.range(of: "private let teleportAuthAgentCallback"))
         let rest = source[start.lowerBound...]
         let end = try #require(rest.range(of: "// MARK:", range: rest.index(after: rest.startIndex)..<rest.endIndex))
@@ -198,7 +178,7 @@ struct TeleportAgentForwardingPinsTests {
         ]
 
         for file in agentFiles {
-            let source = try source(file)
+            let source = try PinScan.source(file)
             for call in loggerCalls(in: source) {
                 for interpolation in interpolations(in: call) {
                     let expression = interpolation.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -219,7 +199,7 @@ struct TeleportAgentForwardingPinsTests {
         // out-of-bounds read on a full buffer) and threw a payload-free
         // `.shellRequestFailed`, which the shell-start guard masked as
         // `.notConnected`.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let body = try prepareBody(in: source)
         #expect(body.contains("TeleportSubsystemStderrCapture.capture"))
         #expect(body.contains("TeleportSubsystemFailureMessage.display"))
@@ -237,7 +217,7 @@ struct TeleportAgentForwardingPinsTests {
         // workflow uploads the simulator log and the ring merges into the
         // shareable report. Only the code and byte count are logged, and the
         // success line carries no payload at all.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let lines = source.components(separatedBy: "\n")
 
         let failureLines = lines.indices.filter { lines[$0].contains("teleport_proxy_subsystem_failed") }
@@ -259,7 +239,7 @@ struct TeleportAgentForwardingPinsTests {
     @Test
     func execStderrLogIsPayloadFree() throws {
         // Same class of sink: remote exec stderr is arbitrary server text.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let lines = source.components(separatedBy: "\n")
         let markerLines = lines.indices.filter { lines[$0].contains("Exec command stderr") }
         #expect(markerLines.count == 1, "expected exactly one exec-stderr log line")
@@ -275,7 +255,7 @@ struct TeleportAgentForwardingPinsTests {
         // recorded in the on-device ring. The ring message must go through
         // `SSHError.diagnosticsMessage` (case-only for the payload-bearing
         // case), never `localizedDescription`.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let lines = source.components(separatedBy: "\n")
         let markerLines = lines.indices.filter {
             lines[$0].contains("teleportPrepareFailed \\(")
@@ -289,7 +269,7 @@ struct TeleportAgentForwardingPinsTests {
 
     @Test
     func innerAuthenticationReusesTheAgentIdentityMaterial() throws {
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
 
         // authenticateInner must not resolve the credential material itself:
         // a second resolution could pair a different certificate with the
@@ -322,7 +302,7 @@ struct TeleportAgentForwardingPinsTests {
         // #268: `remoteEnvironment()` swallows the prepare failure, so every
         // shell/exec mask point must rethrow the stored SSHError instead of
         // masking it as `.notConnected`.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
         let rethrow = "throw lastTeleportPrepareFailure ?? SSHError.notConnected"
 
         // Three guard rethrows: SSHSession.startShell and execute()'s
@@ -377,7 +357,7 @@ struct TeleportAgentForwardingPinsTests {
         // per-session lock-protected box read without a hop. A client-owned
         // shared box is forbidden: it would be stale across sessions and
         // miss SSHSession.connect()'s clear.
-        let source = try source("VVTerm/Core/SSH/SSHClient.swift")
+        let source = try PinScan.source("VVTerm/Core/SSH/SSHClient.swift")
 
         #expect(
             source.contains(
@@ -405,7 +385,7 @@ struct TeleportAgentForwardingPinsTests {
         // wait hidden behind a helper the body calls, and a vestigial
         // `ownedChannelCount` mention with the real wait removed — the behavioral
         // wait on the count is the primary guard.
-        let source = try source("VVTermTests/SSH/TeleportAgentForwardingTests.swift")
+        let source = try PinScan.source("VVTermTests/SSH/TeleportAgentForwardingTests.swift")
         let header = try #require(
             source.range(of: "func serviceEndsOnEOFWithoutFreeingTheChannel()")
         )

@@ -293,7 +293,7 @@ struct TerminalReconnectTapDeliveryPinsTests {
     /// A10: the fixture emits `DEV212_INPUT_Z_1` only from the probe command.
     @Test
     func testA10TheFixtureEmitsZOnlyFromTheProbe() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let helloLines = script.split(separator: "\n", omittingEmptySubsequences: false).filter { $0.contains("hello() {") }
         #expect(
             helloLines.count == 1,
@@ -337,7 +337,7 @@ struct TerminalReconnectTapDeliveryPinsTests {
     /// dotfiles (issue #414).
     @Test
     func testA11ReproRigFragmentIsShellCorrectAndGated() throws {
-        let script = try Self.source("scripts/ci/repro-sshd-setup.sh")
+        let script = try PinScan.source("scripts/ci/repro-sshd-setup.sh")
         let zshMarker = "TITLE_FRAGMENT_ZSH+=\"$(cat <<'ZSH'"
         let zshStart = script.range(of: zshMarker)
         #expect(
@@ -480,7 +480,7 @@ struct TerminalReconnectTapDeliveryPinsTests {
     }
 
     private static func normalizedSource() throws -> String {
-        let stripped = Self.strippingComments(try Self.source(Self.uiTestsPath))
+        let stripped = PinScan.strippingComments(try PinScan.source(Self.uiTestsPath))
         return stripped.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
@@ -488,139 +488,4 @@ struct TerminalReconnectTapDeliveryPinsTests {
         )
     }
 
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the UI test file mutated. The measured-working form is
-        // `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported into
-        // xcodebuild's own environment (the `TEST_RUNNER_` prefix is consumed
-        // by the test runner and forwarded without it).
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
-
-    /// A comment-stripped copy of `source`: characters inside `//` line
-    /// comments and nested `/* … */` block comments become spaces; newlines
-    /// are preserved, so slice anchors still resolve. String contents are
-    /// copied verbatim. Duplicated from the merged pin suites so each family's
-    /// pin file is self-contained and reverts independently.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
 }

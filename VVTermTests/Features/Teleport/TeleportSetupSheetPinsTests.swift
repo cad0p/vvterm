@@ -14,19 +14,9 @@
 //  but adding a bypass `switch chain.phase`, or a restored private wrapper)
 //  would silently re-create the mirror #369 closed.
 //
-//  This is the sixth copy of the `repositoryRoot()` /
-//  `VVTERM_PINS_SOURCE_ROOT` pin idiom after the five workflow-pin files
-//  (`WorkflowArtifactDependencyPinsTests`,
-//  `WorkflowArtifactDependencyClassGatePinsTests`,
-//  `WorkflowXcodebuildFlagPinsTests`, `WorkflowPerPREventGatePinsTests` and
-//  `WorkflowShardSplitPinsTests`; those five use the YAML comment stripper,
-//  while this file strips Swift comments). Measured at the fold head: 6
-//  `VVTermTests` files call `strippingYAMLComments`, and the
-//  `VVTERM_PINS_SOURCE_ROOT` override itself appears in 25 files across the
-//  other pin families. Extraction is DELIBERATELY DEFERRED for the same
-//  reason `WorkflowShardSplitPinsTests` deferred the fifth: the idiom is
-//  small, and extraction would span six independent pin suites. Re-evaluate
-//  when a seventh pin file lands.
+//  The `repositoryRoot()` / `VVTERM_PINS_SOURCE_ROOT` pin idiom now lives in
+//  the shared `PinScan` support (`VVTermTests/PinScanSupport.swift`, issue
+//  #450), so the ordinal copy framing is dropped.
 //
 //  COUNTERFACTUAL HOOK: `VVTERM_PINS_SOURCE_ROOT` points the scans at a copy
 //  of the tree; set it from the test process by exporting
@@ -45,11 +35,6 @@ import Testing
 @Suite
 @MainActor
 struct TeleportSetupSheetPinsTests {
-
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-        init(_ description: String) { self.description = description }
-    }
 
     // MARK: - Paths
 
@@ -221,126 +206,12 @@ struct TeleportSetupSheetPinsTests {
     }
 
     private func strippedSource(at relativePath: String) throws -> String {
-        let url = try Self.repositoryRoot().appendingPathComponent(relativePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(relativePath)
         do {
-            return Self.strippingComments(try String(contentsOf: url, encoding: .utf8))
+            return PinScan.strippingComments(try String(contentsOf: url, encoding: .utf8))
         } catch {
             throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
         }
     }
 
-    private static func repositoryRoot() throws -> URL {
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
-
-    /// A Swift comment-stripped copy of `source`: `//` and `/* … */` comments
-    /// are blanked (newlines preserved) while string-literal contents are kept.
-    /// Duplicated from the other pin suites (each pin file is self-contained
-    /// until the shared helper extraction lands).
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 }

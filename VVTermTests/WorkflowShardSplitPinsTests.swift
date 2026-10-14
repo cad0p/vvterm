@@ -39,23 +39,11 @@
 //  wider than the current deltas so a calibration refresh has room, and
 //  deliberately narrower than any real method move).
 //
-//  THIS IS THE FIFTH COPY of the workflow-pin idiom (`repositoryRoot()`
-//  honouring `VVTERM_PINS_SOURCE_ROOT`, YAML comment stripping) — after
-//  `WorkflowArtifactDependencyPinsTests`,
-//  `WorkflowArtifactDependencyClassGatePinsTests`,
-//  `WorkflowXcodebuildFlagPinsTests` and `WorkflowPerPREventGatePinsTests`.
-//  `WorkflowArtifactDependencyClassGatePinsTests`'s header says a fifth pin
-//  file justifies extracting a shared helper. This PR DELIBERATELY DEFERS
-//  that extraction: the new pin needs a `matrix.shard` block slicer that the
-//  other four do not share, and this PR is a record refresh (no behaviour
-//  change), so a refactor of four pin suites would be an unrelated risk. The
-//  #362 allowlist extension defers it a SECOND time: the declaration scanner
-//  is scanner-local by design (hash-prefix-aware string blanking, `#if`
-//  polarity), and extraction would still span the five Swift pin suites, plus
-//  the ledger schema/loader. Re-evaluate when this
-//  file passes ~1500 lines (the ClassGate pin is the 1416-line precedent).
-//  Any parser/comment-strip fix for the shared idiom must be applied to all
-//  five files until the extraction lands.
+//  The `repositoryRoot()` / `VVTERM_PINS_SOURCE_ROOT` / YAML-comment-strip
+//  idiom now lives in the shared `PinScan` support
+//  (`VVTermTests/PinScanSupport.swift`, issue #450). This suite keeps only its
+//  scanner-local `matrix.shard` block slicer; a fix to the shared idiom is
+//  applied once, in `PinScanSupport.swift`.
 //
 //  REFRESH PATH (adding, removing or renaming any declared UI test). A PR
 //  that changes the declared-test set must, in the SAME PR, do ONE of:
@@ -690,7 +678,7 @@ struct WorkflowShardSplitPinsTests {
     /// returned UNATTRIBUTED and fails assertion 7 closed; `extension
     /// XCTestCase` is never a test class.
     private static func declaredUITestMethods() throws -> DeclarationScan {
-        let directory = try repositoryRoot().appendingPathComponent(uiTestsDirectory)
+        let directory = try PinScan.repositoryRoot().appendingPathComponent(uiTestsDirectory)
         let files = try swiftFiles(under: directory)
 
         var declarationsByFile: [String: [TypeDeclaration]] = [:]
@@ -1045,7 +1033,7 @@ struct WorkflowShardSplitPinsTests {
     }
 
     private static func allowlistFixture() throws -> AllowlistFixture {
-        let url = try repositoryRoot().appendingPathComponent(allowlistPath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(allowlistPath)
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -1097,8 +1085,8 @@ struct WorkflowShardSplitPinsTests {
     /// `needs-fixture`, or an `only-testing:` that is not a single-line
     /// double-quoted scalar throws instead of returning a partial parse.
     private static func uiTestsShardBlocks() throws -> [ShardBlock] {
-        let source = try workflowSource(workflowPath)
-        let stripped = strippingYAMLComments(source)
+        let source = try PinScan.source(workflowPath)
+        let stripped = PinScan.strippingYAMLComments(source)
         let lines = stripped.components(separatedBy: "\n")
         guard let jobStart = lines.firstIndex(where: {
             $0.range(of: #"^  ui-tests:\s*$"#, options: .regularExpression) != nil
@@ -1265,7 +1253,7 @@ struct WorkflowShardSplitPinsTests {
     }
 
     private static func fixture() throws -> Fixture {
-        let url = try repositoryRoot().appendingPathComponent(fixturePath)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(fixturePath)
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -1309,7 +1297,7 @@ struct WorkflowShardSplitPinsTests {
     /// `VVTermUITests/`, strip comments, and return the class body (from the
     /// declaration to the next top-level `final class`, or EOF).
     private static func classBody(className: String, cache: inout [String: String]) throws -> String {
-        let directory = try repositoryRoot().appendingPathComponent(uiTestsDirectory)
+        let directory = try PinScan.repositoryRoot().appendingPathComponent(uiTestsDirectory)
         for file in try swiftFiles(under: directory) {
             let source: String
             if let cached = cache[file.path] {
@@ -1319,7 +1307,7 @@ struct WorkflowShardSplitPinsTests {
                 cache[file.path] = source
             }
             guard !source.isEmpty else { continue }
-            let stripped = strippingComments(source)
+            let stripped = PinScan.strippingComments(source)
             let lines = stripped.components(separatedBy: "\n")
             guard let declaration = lines.firstIndex(where: {
                 $0.range(
@@ -1376,214 +1364,4 @@ struct WorkflowShardSplitPinsTests {
 
     // MARK: - Filesystem / shared idiom
 
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the workflow/fixture mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
-
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Duplicated from the other workflow pin suites (each pin
-    /// file is self-contained so it reverts independently until the shared
-    /// helper extraction lands).
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
-
-    /// A Swift comment-stripped copy of `source`: text inside `//` line
-    /// comments and nested `/* … */` block comments becomes spaces; newlines
-    /// are preserved. String contents are copied verbatim (so a `//` inside a
-    /// literal is not read as a comment). Duplicated from
-    /// `SSHShellLoopLivenessPinsTests` (each pin file is self-contained).
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
 }

@@ -109,7 +109,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         ]
         for relativePath in relativePaths {
             let source = try String(
-                contentsOf: repositoryRoot().appendingPathComponent(relativePath),
+                contentsOf: PinScan.repositoryRoot().appendingPathComponent(relativePath),
                 encoding: .utf8
             )
             let rawPumpCloses = source
@@ -336,7 +336,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         // Line-level scans run on the comment-stripped copy, as in the TLS
         // pin: a commented-out token cannot satisfy them and the line numbers
         // are unchanged.
-        let codeLines = Self.strippingComments(source).components(separatedBy: .newlines)
+        let codeLines = PinScan.strippingComments(source).components(separatedBy: .newlines)
 
         // The closer stays declared exactly once, in this file (the package
         // owns its own copy in `SSHTLSTransport.swift`).
@@ -381,7 +381,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             cancelTail.range(of: "\n    // MARK: - Pump internals"),
             "cancelPumpSync() slice end not found"
         )
-        let cancelCode = Self.strippingComments(String(cancelTail[cancelTail.startIndex..<cancelEnd.lowerBound]))
+        let cancelCode = PinScan.strippingComments(String(cancelTail[cancelTail.startIndex..<cancelEnd.lowerBound]))
         XCTAssertFalse(
             cancelCode.contains("closeOnce("),
             "cancelPumpSync() must only wake the pump end; the release belongs to runPump after the join"
@@ -402,7 +402,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             runPumpTail.range(of: "\n    nonisolated private static func pumpChannelToFD("),
             "runPump body end not found"
         )
-        let runPumpCode = Self.strippingComments(String(runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]))
+        let runPumpCode = PinScan.strippingComments(String(runPumpTail[runPumpTail.startIndex..<runPumpEnd.lowerBound]))
         let joinAnchor = try XCTUnwrap(
             runPumpCode.range(of: "await group.waitForAll()"),
             "runPump must join both loops before releasing the descriptor"
@@ -426,7 +426,7 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
             pumpStartTail.range(of: "pumpTask = task"),
             "pump-start closure slice end not found"
         )
-        let pumpStartCode = Self.strippingComments(String(pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]))
+        let pumpStartCode = PinScan.strippingComments(String(pumpStartTail[pumpStartTail.startIndex..<pumpStartEnd.lowerBound]))
         XCTAssertFalse(
             pumpStartCode.contains("weak self"),
             "the pump body must not capture the actor weakly"
@@ -471,7 +471,6 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         }
     }
 
-
     /// The nearest preceding declaration-shaped `func name(` line for a call
     /// site (line index based). Only a line whose preamble before `func` is
     /// empty or modifier-shaped (identifiers, `@` attributes, whitespace) can
@@ -511,106 +510,6 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         return tail[tail.startIndex..<end.lowerBound]
     }
 
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so line numbers and slice anchors still
-    /// resolve. String contents are copied verbatim (so a `//` inside a
-    /// literal is not read as a comment); the scanner covers `"…"` (with `\`
-    /// escapes) and `"""…"""`, not raw strings (``#"…"#``) or comments
-    /// inside an interpolation. FORMATTING HEURISTIC class, like the other
-    /// pins: a token inside a string literal can still satisfy a scan.
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
     /// The body span `{ … }` of the first brace-delimited block after `anchor`,
     /// found by a character-level depth walk from its opening brace.
     ///
@@ -644,18 +543,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
         return text.index(after: open)..<blockClose
     }
 
-    /// Whether `index` falls strictly inside the `block` span (the span
-    /// returned by `bracedBlock` excludes the braces themselves).
-    private static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
-        block.lowerBound < index && index < block.upperBound
-    }
-
     /// Assert `syscall` occurs only inside the `state.withLock { … }` body of
     /// `body` — the lexical stand-in for the preemption window the in-lock
     /// syscalls close. The body is comment-stripped first, so a commented-out
     /// syscall cannot satisfy (or trip) the assertion.
     private static func assertSyscallInsideLock(body: Substring, syscall: String, label: String) throws {
-        let text = Self.strippingComments(String(body))
+        let text = PinScan.strippingComments(String(body))
         let lock = try XCTUnwrap(text.range(of: "state.withLock {"), "\(label): no state.withLock found")
 
         var depth = 0
@@ -700,19 +593,12 @@ final class SSHTLSTransportPumpFDCloserTests: XCTestCase {
     /// The proxy transport source (the closer's declaration + the proxy pump).
     private func proxySource() throws -> String {
         try String(
-            contentsOf: repositoryRoot()
+            contentsOf: PinScan.repositoryRoot()
                 .appendingPathComponent("VVTerm/Features/Teleport/Infrastructure/SSHProxySubsystemTransport.swift"),
             encoding: .utf8
         )
     }
 
-    /// The repository root, derived from this file's location
-    /// (`VVTermTests/SSHTLSTransportPumpFDCloserTests.swift`).
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SSHTLSTransportPumpFDCloserTests.swift
-            .deletingLastPathComponent()  // VVTermTests/
-    }
 }
 
 #endif // canImport(Network)

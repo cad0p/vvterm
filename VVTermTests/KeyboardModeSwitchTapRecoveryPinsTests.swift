@@ -75,16 +75,10 @@
 //  brace matcher cannot follow (e.g. braces inside the body's string
 //  literals) reds as a missing or oversized slice rather than passing.
 //
-//  This is one more copy of the `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT`
-//  source-scan idiom (the #450 census lists 7; this worktree carries 33
-//  `VVTermTests` files with the `VVTERM_PINS_SOURCE_ROOT` + `repositoryRoot()`
-//  shape, 23 with `strippingComments` (the intersection with the
-//  `VVTERM_PINS_SOURCE_ROOT` set) and 20 with the `VVTerm.xcodeproj`
-//  walk), so the ordinal framing is dropped; #450 tracks the shared-scanner
-//  extraction. The #444 note's "re-evaluate at the eighth" trigger is
-//  discharged by an explicit decision to defer again: the #441 plan §4
-//  specifies a self-contained pin suite, and a shared scanner would refactor
-//  six landed pin suites inside a flake fix. Recorded as a residual on the PR.
+//  The `repositoryRoot()` + `VVTERM_PINS_SOURCE_ROOT` source-scan idiom now
+//  lives in the shared `PinScan` support (`VVTermTests/PinScanSupport.swift`,
+//  issue #450), so the ordinal framing is dropped and the #444 note's
+//  extraction trigger is discharged.
 //
 //  Counterfactual hook: `VVTERM_PINS_SOURCE_ROOT` points the scan at a
 //  mutated tree copy. The variable reaches the test process only as
@@ -445,7 +439,7 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
     }
 
     private static func firstEffectiveLine(of relativePath: String) throws -> String {
-        let raw = try source(relativePath)
+        let raw = try PinScan.source(relativePath)
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty {
@@ -456,7 +450,7 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
     }
 
     private static func normalizedSource(_ relativePath: String) throws -> String {
-        let stripped = Self.strippingComments(try Self.source(relativePath))
+        let stripped = PinScan.strippingComments(try PinScan.source(relativePath))
         return stripped.replacingOccurrences(
             of: #"\s+"#,
             with: " ",
@@ -464,140 +458,4 @@ struct KeyboardModeSwitchTapRecoveryPinsTests {
         )
     }
 
-    private static func source(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with the UI test / harness files mutated. The measured-working
-        // form is `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT=<mutated tree>` exported
-        // into xcodebuild's own environment (the `TEST_RUNNER_` prefix is
-        // consumed by the test runner and forwarded without it).
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
-    }
-
-    /// A comment-stripped copy of `source`: characters inside `//` line
-    /// comments and nested `/* … */` block comments become spaces; newlines
-    /// are preserved, so slice anchors still resolve. String contents are
-    /// copied verbatim. Duplicated from the merged pin suites so each family's
-    /// pin file is self-contained and reverts independently (#450 tracks the
-    /// shared-scanner extraction).
-    private static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
-    }
 }

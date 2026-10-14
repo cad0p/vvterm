@@ -279,8 +279,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// the job it exists for silently disappeared.
     @Test
     func testTheDebugTestJobInvokesXcodebuildWithAnAcceptedDiagnosticValue() throws {
-        let source = try Self.workflowSource(".github/workflows/vvterm-pr-ci.yml")
-        let stripped = Self.strippingYAMLComments(source)
+        let source = try PinScan.source(".github/workflows/vvterm-pr-ci.yml")
+        let stripped = PinScan.strippingYAMLComments(source)
         let lines = stripped.components(separatedBy: "\n")
 
         let jobIndex = try #require(
@@ -319,8 +319,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheUITestStepDelegatesToTheScriptAndStaysSmall() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let scriptPath = "scripts/ci/run-ui-tests.sh"
-        let workflow = try Self.workflowSource(workflowPath)
-        let script = try Self.workflowSource(scriptPath)
+        let workflow = try PinScan.source(workflowPath)
+        let script = try PinScan.source(scriptPath)
 
         // Exactly one `Run UI tests (` step, and it is a `run: |` block scalar.
         let nameLines = workflow.components(separatedBy: "\n").enumerated()
@@ -388,7 +388,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // rationale comments quote `-collect-test-diagnostics never` and
         // `-test-timeouts-enabled YES` verbatim, so an unstripped contains()
         // would pass even with the real flags gone.
-        let strippedScript = Self.strippingYAMLComments(script)
+        let strippedScript = PinScan.strippingYAMLComments(script)
         let scriptLines = strippedScript.components(separatedBy: "\n")
         let invocationLines = scriptLines.enumerated().filter {
             $0.element.contains("xcodebuild test-without-building")
@@ -574,7 +574,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheUnitTestsJobRunsThePrebuiltBundleAndGuardsTheCounts() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let guardPath = "scripts/ci/assert-unit-tests-ran.sh"
-        let workflow = try Self.workflowSource(workflowPath)
+        let workflow = try PinScan.source(workflowPath)
         let jobLines = try Self.jobBlock(named: "unit-tests", in: workflow)
         let jobText = jobLines.joined(separator: "\n")
 
@@ -766,8 +766,8 @@ struct WorkflowXcodebuildFlagPinsTests {
         // 4. The script carries the count-floor predicates on its running
         // `grep -E` lines — a bare presence check anywhere (the error message
         // echoes the same literal) is not the predicate that executes.
-        let guardSource = try Self.workflowSource(guardPath)
-        let strippedGuard = Self.strippingYAMLComments(guardSource)
+        let guardSource = try PinScan.source(guardPath)
+        let strippedGuard = PinScan.strippingYAMLComments(guardSource)
         let guardScriptLines = strippedGuard.components(separatedBy: "\n")
         let xctestPredicateLines = guardScriptLines.filter {
             $0.contains("grep -E '^[[:space:]]*[^[:alnum:]]*Executed [1-9][0-9]* tests'")
@@ -823,7 +823,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheBuildArchiveTarsOnlyTheRuntimeProducts() throws {
         let workflowPath = ".github/workflows/vvterm-pr-ci.yml"
         let stepName = "Archive build products"
-        let workflow = try Self.workflowSource(workflowPath)
+        let workflow = try PinScan.source(workflowPath)
 
         // The step must stay unique and stay a `run: |` literal block scalar,
         // so A1–A3 read the body GitHub actually runs.
@@ -1010,8 +1010,8 @@ struct WorkflowXcodebuildFlagPinsTests {
         let workflowPath = ".github/workflows/ghostty-upstream-probe.yml"
         let scriptPath = "scripts/ci/ghostty-bump-pr.sh"
         let stepName = "Commit artifacts, push bump branch, create or reuse bump PR"
-        let workflow = try Self.workflowSource(workflowPath)
-        let script = try Self.workflowSource(scriptPath)
+        let workflow = try PinScan.source(workflowPath)
+        let script = try PinScan.source(scriptPath)
 
         // Exactly one step with the pinned name, and it is a `run: |` literal
         // block scalar. Fail closed with a re-derive message otherwise.
@@ -1093,7 +1093,7 @@ struct WorkflowXcodebuildFlagPinsTests {
 
         // Invariant pair: the alarm step must still read the marker the script
         // writes (the script's 3 write sites are asserted below).
-        let strippedWorkflow = Self.strippingYAMLComments(workflow)
+        let strippedWorkflow = PinScan.strippingYAMLComments(workflow)
         #expect(
             strippedWorkflow.contains(#"[[ -f "$RUNNER_TEMP/ghostty-probe-ok" ]]"#),
             "the alarm step must still read `$RUNNER_TEMP/ghostty-probe-ok`: without it the script's post-PR markers are dead and pre-PR failures file false alarms — re-derive this pin (issue #396)"
@@ -1102,7 +1102,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // Script load-bearing lines, in the comment-stripped script,
         // occurrence bound: a duplicated or dropped statement is how a bad
         // edit hides.
-        let strippedScript = Self.strippingYAMLComments(script)
+        let strippedScript = PinScan.strippingYAMLComments(script)
         let scriptLines = strippedScript.components(separatedBy: "\n")
 
         func expectExactlyOneLine(containing needle: String, _ reason: String) {
@@ -1416,8 +1416,8 @@ struct WorkflowXcodebuildFlagPinsTests {
     func testTheGhosttyProbeBumpGateIsResolvedByTheScriptAndConsumedByBothSteps() throws {
         let workflowPath = ".github/workflows/ghostty-upstream-probe.yml"
         let ciWorkflowPath = ".github/workflows/vvterm-pr-ci.yml"
-        let workflow = try Self.workflowSource(workflowPath)
-        let ciWorkflow = try Self.workflowSource(ciWorkflowPath)
+        let workflow = try PinScan.source(workflowPath)
+        let ciWorkflow = try PinScan.source(ciWorkflowPath)
         let expectedConsumerGate = "${{ steps.noop-gate.outputs.noop != 'true' && steps.bump-gate.outputs.enabled == 'true' }}"
 
         // (1) Exactly one `Resolve bump-PR gate` step: the `bump-gate` id, the
@@ -1435,7 +1435,7 @@ struct WorkflowXcodebuildFlagPinsTests {
             gateIdLines.count == 1,
             "the `Resolve bump-PR gate` step must carry exactly one `id: bump-gate`, found \(gateIdLines.count) — the consumers read `steps.bump-gate.outputs.enabled`, so a renamed id leaves them permanently false — re-derive this pin (issue #435)"
         )
-        let workflowWideIdLines = Self.strippingYAMLComments(workflow)
+        let workflowWideIdLines = PinScan.strippingYAMLComments(workflow)
             .components(separatedBy: "\n")
             .map { Self.cuttingLineComment($0) }
             .filter { $0.trimmingCharacters(in: .whitespaces) == "id: bump-gate" }
@@ -1628,7 +1628,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         // diagnostic echo and the alarm body's validation-dispatch hint). A
         // comparison spelling (dotted, bracket, `contains(...)`, …) lands in
         // none and reds, with no separate needle per spelling.
-        let codeLines = Self.strippingYAMLComments(workflow)
+        let codeLines = PinScan.strippingYAMLComments(workflow)
             .components(separatedBy: "\n")
             .map { Self.cuttingLineComment($0) }
         let gateEnvOccurrences = codeLines.filter {
@@ -1776,7 +1776,7 @@ struct WorkflowXcodebuildFlagPinsTests {
         var scanned: [(file: String, step: String, escaped: Int)] = []
         for file in workflowFiles {
             let path = ".github/workflows/\(file)"
-            let source = try Self.workflowSource(path)
+            let source = try PinScan.source(path)
             let lines = source.components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -1843,8 +1843,8 @@ struct WorkflowXcodebuildFlagPinsTests {
 
         var occurrences: [FlagOccurrence] = []
         for path in paths {
-            let source = try workflowSource(path)
-            let stripped = Self.strippingYAMLComments(source)
+            let source = try PinScan.source(path)
+            let stripped = PinScan.strippingYAMLComments(source)
             for (index, line) in stripped.components(separatedBy: "\n").enumerated() {
                 guard let range = line.range(
                     of: #"-collect-test-diagnostics\s+(\S+)"#,
@@ -1862,7 +1862,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     }
 
     private static func listFiles(in directory: String, extensions: Set<String>) throws -> [String] {
-        let url = try repositoryRoot().appendingPathComponent(directory)
+        let url = try PinScan.repositoryRoot().appendingPathComponent(directory)
         do {
             return try FileManager.default
                 .contentsOfDirectory(atPath: url.path)
@@ -1871,12 +1871,6 @@ struct WorkflowXcodebuildFlagPinsTests {
         } catch {
             throw PinFailure("could not list \(directory) at \(url.path): \(error) — re-derive this pin")
         }
-    }
-
-    private struct PinFailure: Error, CustomStringConvertible {
-        let description: String
-
-        init(_ description: String) { self.description = description }
     }
 
     /// Slices one top-level job block out of a workflow by its exact
@@ -1889,7 +1883,7 @@ struct WorkflowXcodebuildFlagPinsTests {
     /// round 1, impl lens 2). A trailing comment on the job key itself is
     /// cut before matching, so `  unit-tests:  # note` still resolves.
     private static func jobBlock(named job: String, in source: String) throws -> [String] {
-        let lines = Self.strippingYAMLComments(source)
+        let lines = PinScan.strippingYAMLComments(source)
             .components(separatedBy: "\n")
             .map(Self.cuttingLineComment)
         let keyLine = "  \(job):"
@@ -2050,36 +2044,6 @@ struct WorkflowXcodebuildFlagPinsTests {
         }
         return pieces.joined(separator: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-    }
-
-    private static func workflowSource(_ relativePath: String) throws -> String {
-        let url = try repositoryRoot().appendingPathComponent(relativePath)
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw PinFailure("could not read \(relativePath) at \(url.path): \(error)")
-        }
-    }
-
-    private static func repositoryRoot() throws -> URL {
-        // Counterfactual hook: the mutation runs point this at a copy of the
-        // source with a workflow and/or script mutated.
-        if let override = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        var url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while url.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: url.appendingPathComponent("VVTerm.xcodeproj").path
-            ) {
-                return url
-            }
-            url.deleteLastPathComponent()
-        }
-        throw PinFailure(
-            "could not locate the repository root (no VVTerm.xcodeproj above \(#filePath)) — re-derive this pin"
-        )
     }
 
     /// Returns the dedented value of the `run: |` literal block scalar that
@@ -2255,84 +2219,4 @@ struct WorkflowXcodebuildFlagPinsTests {
             .joined(separator: "\n")
     }
 
-    /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
-    /// (at line start or preceded by whitespace, outside a quoted scalar)
-    /// blanks the rest of the line; newlines are preserved, so line anchors
-    /// still resolve. Single-quoted (`''` escapes) and double-quoted (`\`
-    /// escapes) scalars are copied verbatim, so a `#` inside a scalar is not
-    /// read as a comment. Duplicated from `WorkflowArtifactDependencyPinsTests`
-    /// (each pin file is self-contained so it reverts independently). The
-    /// bash-corpus divergence is documented in the file header.
-    private static func strippingYAMLComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var inSingleQuoted = false
-        var inDoubleQuoted = false
-        var escaped = false
-        var atLineStart = true
-        var previousWasWhitespace = true
-        while index < characters.count {
-            let character = characters[index]
-            if inSingleQuoted {
-                result.append(character)
-                index += 1
-                if character == "'" {
-                    if index < characters.count, characters[index] == "'" {
-                        // YAML single-quote escape: `''` stays inside the scalar.
-                        result.append("'")
-                        index += 1
-                    } else {
-                        inSingleQuoted = false
-                    }
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if inDoubleQuoted {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if character == "\"" {
-                    inDoubleQuoted = false
-                }
-                atLineStart = false
-                previousWasWhitespace = false
-                continue
-            }
-            if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
-                    result.append(" ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "\n" {
-                result.append("\n")
-                index += 1
-                atLineStart = true
-                previousWasWhitespace = true
-                continue
-            }
-            if character == "'" {
-                inSingleQuoted = true
-            } else if character == "\"" {
-                inDoubleQuoted = true
-            }
-            result.append(character)
-            index += 1
-            atLineStart = false
-            previousWasWhitespace = character.isWhitespace
-        }
-        return result
-    }
 }

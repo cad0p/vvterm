@@ -190,7 +190,7 @@ struct TeleportE2EPhaseFailureTests {
         // through a block-buffered `tee` pipe, and a process kill must not lose
         // the last `begin`, so the sink must print + flush per line and stay the
         // default for both wrappers.
-        let wrapper = URL(fileURLWithPath: Self.wrapperSourcePath())
+        let wrapper = URL(fileURLWithPath: try Self.wrapperSourcePath())
         let source = try String(contentsOf: wrapper, encoding: .utf8)
         #expect(source.contains("fflush(stdout)"))
         #expect(
@@ -212,13 +212,9 @@ struct TeleportE2EPhaseFailureTests {
 
     /// The wrapper source next to this file, honouring the pin-root override so
     /// a mutated tree can drive the source-shape counterfactual.
-    private static func wrapperSourcePath() -> String {
-        if let root = ProcessInfo.processInfo.environment["VVTERM_PINS_SOURCE_ROOT"] {
-            return root + "/VVTermTests/SSH/TeleportE2EPhase.swift"
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("TeleportE2EPhase.swift")
+    private static func wrapperSourcePath() throws -> String {
+        try PinScan.repositoryRoot()
+            .appendingPathComponent("VVTermTests/SSH/TeleportE2EPhase.swift")
             .path
     }
 }
