@@ -15,36 +15,43 @@
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` — points every consumer at a mutated
 //  tree.
 //
-//  Scanner selection (callers → semantics → known limits). Pick deliberately:
+//  Scanner selection (callers → semantics). Pick deliberately:
 //
-//  - `strippingComments(_:)` — the canonical hash-unaware scanner (85 call
-//    sites); it covers `"…"`, `"""…"""` and `\` escapes, but not raw
-//    strings (`#"…"#`) or interpolations: a raw string with an embedded
-//    quote desynchronizes it, and a `//` inside an interpolation is not a
-//    comment it descends into. Correct for the token/whitespace pins that
-//    never see those forms.
+//  - `strippingComments(_:)` — the canonical scanner (85 call sites at
+//    #453). Since issue #455 it runs the shared worker's verbatim-string
+//    mode, so it is
+//    hash-aware (`#"…"#`, any hash count) and interpolation-aware; it is
+//    byte-identical to `strippingCommentsKeepingLiterals(_:)`.
 //  - `strippingCommentsKeepingLiterals(_:)` (R1) — the login-token scan in
-//    `SSH/SSHProbeShellPinsTests.swift` (5 calls): hash/interpolation-aware,
-//    string contents kept verbatim. Known limit: the comment-blind
-//    interpolation close can under-strip (issue #455).
+//    `SSH/SSHProbeShellPinsTests.swift` (5 calls): a documented alias of
+//    `strippingComments(_:)` with string contents kept verbatim. The name
+//    stays because it declares the scanner's role at those call sites;
+//    retiring it is a deliberate follow-up, not part of #455.
 //  - `strippingCommentsAndStrings(_:)` (R2) — the SSH call-form scans (6
-//    calls): the same-aware lexer with string interiors blanked and
-//    interpolation bodies scanned as code. Known limit: the same desync can
-//    drop the tail and its newlines (issue #455).
+//    calls): the shared worker with string interiors blanked and
+//    interpolation bodies scanned as code. The #453 shrink is fixed; the
+//    documented residual is the raw-string close search, which can still exit
+//    early on a `"#` inside a raw interpolation body (pinned by the
+//    `raw-string-interp-embedded-close` golden row).
 //  - `strippingCommentsAndStringsPreservingUTF16(_:)` (R3) — the declared-test
 //    attribution walk in `WorkflowShardSplitPinsTests.swift` (1 call), whose
 //    consumers index the result with `NSRange`/UTF-16 offsets: hash-prefix
-//    aware, UTF-16 length preserved on the real corpus. Known limit: a nested
-//    `"` inside an interpolation body leaks the inner token into code
-//    (issue #455).
+//    aware, its literal end skips interpolation bodies through nested strings
+//    and comments, and per-unit blanking preserves the UTF-16 length on every
+//    input.
 //  - `strippingYAMLComments(_:)`, `normalizedWhitespace(_:)`, `isInside(_:_:)`
 //    — the small shared helpers used by the census and whitespace pins.
 //
 //  All four scanners are fail-open lexers (the census's `maskedCode` is the
-//  fail-closed one); the measured defects above are pinned by
-//  `PinScanSupportGoldenTests` and tracked in issue #455. Migrating a scanner
-//  is a behavior change: the census's `sharedHelpers` list and the golden rows
-//  must move with it.
+//  fail-closed one). The #453 defects are fixed in place by issue #455 (D1–D3,
+//  D5): comment-aware interpolation close, Swift-exact line terminators with
+//  the terminator kept verbatim, hash-exact nested-quote-proof R3 literal
+//  ends, and a hash-aware canonical scanner that delegates to the same worker
+//  as R1 (which stays declared as its alias). The shared predicate
+//  `PinScan.isSwiftLineTerminator` is the single home for the terminator set;
+//  `PinScanCensus` delegates to it and the census's shared-helper list records
+//  the name. Migrating a scanner is a behavior change: the golden rows must
+//  move with it.
 
 import Foundation
 
@@ -100,101 +107,16 @@ enum PinScan {
     }
 
     /// A comment-stripped copy of `source`: characters inside `//` line
-    /// comments and nested `/* … */` block comments become spaces; newlines are
-    /// preserved, so slice anchors still resolve. String contents are copied
-    /// verbatim (so a `//` inside a literal is not read as a comment); the
-    /// scanner covers `"…"` (with `\` escapes) and `"""…"""` but not raw
-    /// strings (`#"…"#`) or comments inside an interpolation.
+    /// comments and nested `/* … */` block comments become spaces; Swift line
+    /// terminators (LF, CRLF, CR) are preserved verbatim, so slice anchors
+    /// still resolve. String contents are copied verbatim (so a `//` inside a
+    /// literal is not read as a comment), hash-aware (`#"…"#`, `##"…"##`)
+    /// and interpolation-descent aware. This is the shared worker in
+    /// `blankingStringContents: false` mode, which makes the canonical scanner
+    /// byte-identical to `strippingCommentsKeepingLiterals(_:)` (issue #455);
+    /// both names are kept because each names a caller-facing role.
     static func strippingComments(_ source: String) -> String {
-        let characters = Array(source)
-        var result = ""
-        result.reserveCapacity(characters.count)
-        var index = 0
-        var blockCommentDepth = 0
-        var inLineComment = false
-        var stringDelimiter: Int? = nil  // 1 for `"…"`, 3 for `"""…"""`
-        var escaped = false
-        while index < characters.count {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append("  ")
-                    index += 2
-                } else if character == "*", index + 1 < characters.count, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append("  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if let delimiter = stringDelimiter {
-                result.append(character)
-                index += 1
-                if escaped {
-                    escaped = false
-                    continue
-                }
-                if character == "\\" {
-                    escaped = true
-                    continue
-                }
-                if delimiter == 1, character == "\"" {
-                    stringDelimiter = nil
-                    continue
-                }
-                if delimiter == 3,
-                   character == "\"",
-                   index + 1 < characters.count,
-                   characters[index] == "\"",
-                   characters[index + 1] == "\"" {
-                    result.append("\"\"")
-                    index += 2
-                    stringDelimiter = nil
-                }
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < characters.count, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append("  ")
-                index += 2
-                continue
-            }
-            if character == "\"" {
-                if index + 2 < characters.count, characters[index + 1] == "\"", characters[index + 2] == "\"" {
-                    stringDelimiter = 3
-                    result.append("\"\"\"")
-                    index += 3
-                } else {
-                    stringDelimiter = 1
-                    result.append("\"")
-                    index += 1
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
+        scanning(source, blankingStringContents: false)
     }
 
     /// A YAML comment-stripped copy of `source`: a `#` that starts a comment
@@ -250,14 +172,14 @@ enum PinScan {
                 continue
             }
             if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
+                while index < characters.count, !PinScan.isSwiftLineTerminator(characters[index]) {
                     result.append(" ")
                     index += 1
                 }
                 continue
             }
-            if character == "\n" {
-                result.append("\n")
+            if PinScan.isSwiftLineTerminator(character) {
+                result.append(character)
                 index += 1
                 atLineStart = true
                 previousWasWhitespace = true
@@ -290,19 +212,19 @@ enum PinScan {
     /// verbatim: characters inside `//` line comments and nested `/* … */`
     /// block comments become spaces, while string contents — including raw
     /// strings (`#"…"#`, any hash count) and interpolations — are copied with
-    /// the literal, so a `//` inside a string is not read as a comment. LF
-    /// characters are preserved so slice anchors resolve. This is R1, the
-    /// scanner behind the login-token scan in `SSH/SSHProbeShellPinsTests`.
+    /// the literal, so a `//` inside a string is not read as a comment. Swift
+    /// line terminators (LF, CRLF, CR) are preserved verbatim so slice anchors
+    /// resolve. This is R1, the scanner behind the login-token scan in
+    /// `SSH/SSHProbeShellPinsTests`.
     ///
-    /// Known limits (measured and pinned by `PinScanSupportGoldenTests`, not
-    /// fixed by the #453 move — the fix is tracked in issue #455): the
-    /// interpolation close search is comment-blind, so a `(` inside an
-    /// interpolation comment inflates the bracket depth and the tail is copied
-    /// verbatim (a following `//` stays as code — under-strip); and a `\r\n`
-    /// inside a `//` comment is blanked as one `Character`, so the line break
-    /// disappears from the output.
+    /// Documented alias (issue #455): the canonical `strippingComments(_:)`
+    /// runs the same worker (`blankingStringContents: false`), so the two
+    /// scanners are byte-identical. The name stays because it declares this
+    /// scanner's role at the 5 login-token call sites (the census's
+    /// `expectedCallSites` count is unchanged); retiring it is a deliberate
+    /// follow-up, not part of the unification.
     static func strippingCommentsKeepingLiterals(_ source: String) -> String {
-        scanning(source, blankingStringContents: false)
+        strippingComments(source)
     }
 
     /// A comment-stripped copy of `source` whose string-literal *contents* are
@@ -313,23 +235,24 @@ enum PinScan {
     /// and keeps interpolation bodies (`\( … )`, `\#( … )`) as code by
     /// scanning them recursively.
     ///
-    /// Known limits (measured and pinned by `PinScanSupportGoldenTests`, not
-    /// fixed by the #453 move — the fix is tracked in issue #455): the same
-    /// comment-blind interpolation close desynchronizes the scan, and the tail
-    /// — with its newlines — is dropped, so the output can shrink; a `\r\n`
-    /// inside a `//` comment is blanked as one `Character` like R1.
+    /// Known limits (measured and pinned by `PinScanSupportGoldenTests`): the
+    /// escaped-triple-quote form (`"""a \""" b"""`) still closes at the first
+    /// `"""` sequence, so the escaped quote and the following text can leak;
+    /// the escaped-triple-quote golden row is the fixed-output record of that
+    /// residual (issue #455).
     static func strippingCommentsAndStrings(_ source: String) -> String {
         Self.scanning(source, blankingStringContents: true)
     }
 
-    /// The single worker behind `strippingCommentsKeepingLiterals` and
-    /// `strippingCommentsAndStrings`. Comments become spaces in both; LF
-    /// characters are preserved so slice anchors and range arithmetic resolve.
-    /// When blanking string contents, an interpolation (`\( … )`) is kept as
-    /// code — its body is scanned recursively, because a real call inside an
-    /// interpolation is not a string decoy. When copying strings verbatim the
-    /// whole literal, interpolation included, is kept as text, so the
-    /// login-token scan keeps seeing tokens inside interpolated literals.
+    /// The single worker behind `strippingComments`,
+    /// `strippingCommentsKeepingLiterals` and `strippingCommentsAndStrings`.
+    /// Comments become spaces in both modes; Swift line terminators (LF,
+    /// CRLF, CR) are preserved verbatim so slice anchors and range arithmetic
+    /// resolve. When blanking string contents, an interpolation (`\( … )`) is
+    /// kept as code — its body is scanned recursively, because a real call
+    /// inside an interpolation is not a string decoy. When copying strings
+    /// verbatim the whole literal, interpolation included, is kept as text, so
+    /// the login-token scan keeps seeing tokens inside interpolated literals.
     static func scanning(
         _ source: String,
         blankingStringContents: Bool
@@ -361,9 +284,9 @@ enum PinScan {
         while index < end {
             let character = characters[index]
             if inLineComment {
-                if character == "\n" {
+                if PinScan.isSwiftLineTerminator(character) {
                     inLineComment = false
-                    result.append("\n")
+                    result.append(character)
                 } else {
                     result.append(" ")
                 }
@@ -380,7 +303,7 @@ enum PinScan {
                     result.append(contentsOf: "  ")
                     index += 2
                 } else {
-                    result.append(character == "\n" ? "\n" : " ")
+                    result.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
                     index += 1
                 }
                 continue
@@ -417,6 +340,17 @@ enum PinScan {
             index += 1
         }
         return result
+    }
+
+    /// Whether `character` is one of Swift's own line terminators: LF, CRLF
+    /// (one `Character`) or CR. Deliberately NOT `Character.isNewline`:
+    /// Swift keeps a `//` comment open through U+000B/U+000C/U+0085/U+2028/
+    /// U+2029, and treating those as terminators would let a comment end
+    /// early and a following quote swallow real code. This is the scanners'
+    /// single home for the predicate; `PinScanCensus` delegates here so the
+    /// scanners and the census cannot drift apart (issue #455).
+    static func isSwiftLineTerminator(_ character: Character) -> Bool {
+        character == "\n" || character == "\r\n" || character == "\r"
     }
 
     /// The string-delimiter sequence beginning at `start` (`"`, `"""`, `#"`,
@@ -500,7 +434,7 @@ enum PinScan {
                     continue
                 }
             }
-            result.append(character == "\n" ? "\n" : " ")
+            result.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
             cursor += 1
         }
         result.append(contentsOf: characters[close.contentEnd..<close.index])
@@ -510,9 +444,12 @@ enum PinScan {
     /// The end of an interpolation whose body starts at `start`: the body
     /// (returned as `openDepth..<closeDepth`) ends at the matching `)` at
     /// bracket depth zero; a `)` inside a string literal inside the body does
-    /// not close it, and a nested interpolation is skipped along with its own
-    /// string. A body that never closes runs to `end` and returns an empty
-    /// span (fail-closed: nothing is executed, the text stays blanked).
+    /// not close it, a nested interpolation is skipped along with its own
+    /// string, and a `//` or nested `/* … */` comment inside the body is
+    /// skipped so a `(` or `)` in comment text is never a bracket. A body
+    /// that never closes (including an unterminated block comment) runs to
+    /// `end` and returns an empty span (fail-open: nothing is executed, the
+    /// text stays blanked).
     static func interpolationEnd(
         in characters: [Character],
         from start: Int,
@@ -522,6 +459,30 @@ enum PinScan {
         var depth = 0
         while cursor < end {
             let character = characters[cursor]
+            if character == "/", cursor + 1 < end, characters[cursor + 1] == "/" {
+                cursor += 2
+                while cursor < end, !PinScan.isSwiftLineTerminator(characters[cursor]) {
+                    cursor += 1
+                }
+                continue
+            }
+            if character == "/", cursor + 1 < end, characters[cursor + 1] == "*" {
+                var blockDepth = 1
+                cursor += 2
+                while cursor < end, blockDepth > 0 {
+                    if characters[cursor] == "/", cursor + 1 < end, characters[cursor + 1] == "*" {
+                        blockDepth += 1
+                        cursor += 2
+                    } else if characters[cursor] == "*", cursor + 1 < end, characters[cursor + 1] == "/" {
+                        blockDepth -= 1
+                        cursor += 2
+                    } else {
+                        cursor += 1
+                    }
+                }
+                if blockDepth > 0 { return (end, end) }
+                continue
+            }
             if character == "(" || character == "[" || character == "{" {
                 depth += 1
                 cursor += 1
@@ -561,7 +522,6 @@ enum PinScan {
         let quoteCount = delimiter.filter { $0 == "\"" }.count
         let hashes = delimiter.filter { $0 == "#" }.count
         var cursor = start + delimiter.count
-        var bracketStack: [Character] = []
         while cursor < characters.count {
             if isRaw {
                 let closingLength = quoteCount + hashes
@@ -588,43 +548,23 @@ enum PinScan {
                 }
             } else if characters[cursor] == "\"" {
                 return (cursor, Array("\""), cursor + 1)
-            } else if bracketStack.isEmpty {
-                cursor += 1
             } else {
-                let character = characters[cursor]
-                if character == "(" || character == "[" || character == "{" {
-                    bracketStack.append(character)
-                } else if character == ")" || character == "]" || character == "}" {
-                    if Self.matches(closing: character, opening: bracketStack.last) {
-                        bracketStack.removeLast()
-                    }
-                }
                 cursor += 1
             }
         }
         return (characters.count, [], characters.count)
     }
 
-    /// Whether a closing bracket matches the current top of the interpolation
-    /// bracket stack.
-    static func matches(closing: Character, opening: Character?) -> Bool {
-        switch closing {
-        case ")": return opening == "("
-        case "]": return opening == "["
-        case "}": return opening == "{"
-        default: return false
-        }
-    }
-
-    /// `characters[from..<to]` with every non-newline character replaced by a
-    /// space (LF characters are preserved so the scan keeps line structure).
+    /// `characters[from..<to]` with every character that is not a Swift line
+    /// terminator replaced by a space (LF, CRLF and CR are preserved verbatim
+    /// so the scan keeps the input's line structure).
     static func blanked(
         _ characters: [Character],
         from: Int,
         to: Int
     ) -> [Character] {
         guard from < to else { return [] }
-        return characters[from..<to].map { $0 == "\n" ? "\n" : " " }
+        return characters[from..<to].map { PinScan.isSwiftLineTerminator($0) ? $0 : " " }
     }
 
     /// Blanks `//` and nested `/* */` comments plus string interiors while
@@ -635,16 +575,18 @@ enum PinScan {
     /// in `WorkflowShardSplitPinsTests`, whose consumers index the result with
     /// `NSRange`/UTF-16 offsets.
     ///
-    /// Known limit (measured and pinned by `PinScanSupportGoldenTests`, not
-    /// fixed by the #453 move — the fix is tracked in issue #455): a nested
-    /// `"` inside an interpolation body exits the literal early (nested-quote
-    /// desync), leaking the inner token into code; the output's UTF-16 length
-    /// still matches the input's.
+    /// The literal end (issue #455) uses the delimiter's exact hash count for
+    /// a raw interpolation escape (`\#(` for `#"…"#`, `\##(` for `##"…"##`)
+    /// and skips the interpolation body with a bracket stack that looks through
+    /// nested string literals and `//`/nested `/* … */` comments, so a nested
+    /// `"`, `(` or `)` cannot exit the literal early. Blanking is per UTF-16
+    /// unit with LF units kept, so the output's length always matches.
     static func strippingCommentsAndStringsPreservingUTF16(_ source: String) -> String {
         let units = Array(source.utf16)
         let slash: UInt16 = 0x2F
         let star: UInt16 = 0x2A
         let newline: UInt16 = 0x0A
+        let carriageReturn: UInt16 = 0x0D
         let space: UInt16 = 0x20
         var result: [UInt16] = []
         result.reserveCapacity(units.count)
@@ -657,6 +599,11 @@ enum PinScan {
                 if unit == newline {
                     inLineComment = false
                     result.append(unit)
+                } else if unit == carriageReturn {
+                    // A lone CR ends the comment like LF does; Swift keeps a
+                    // comment open through U+2028/U+2029 but not through CR.
+                    inLineComment = false
+                    result.append(space)
                 } else {
                     result.append(space)
                 }
@@ -713,11 +660,16 @@ enum PinScan {
 
     /// End (exclusive UTF-16 offset) of the string literal opening at `start`
     /// (a `"` or the first `#` of a raw prefix), or nil when `start` opens no
-    /// literal. Unterminated literals run to EOF, which fails the count closed.
+    /// literal. A non-raw `\` escapes the next unit; an interpolation escape
+    /// must carry the delimiter's exact hash count (`\(`, `\#(`, `\##(`), and
+    /// its body is skipped with `interpolationClose` so nested strings and
+    /// comments cannot terminate the literal. Unterminated literals run to EOF,
+    /// which fails the count closed.
     static func stringLiteralEnd(in units: [UInt16], at start: Int) -> Int? {
         let hash: UInt16 = 0x23
         let quote: UInt16 = 0x22
         let backslash: UInt16 = 0x5C
+        let parenOpen: UInt16 = 0x28
         var cursor = start
         var hashes = 0
         while cursor < units.count, units[cursor] == hash {
@@ -730,8 +682,25 @@ enum PinScan {
             && units[cursor + 2] == quote
         var index = cursor + (triple ? 3 : 1)
         while index < units.count {
-            if hashes == 0, units[index] == backslash {
-                index += 2
+            if units[index] == backslash {
+                var escapeIndex = index + 1
+                var escapeHashes = 0
+                while escapeIndex < units.count, escapeHashes < hashes, units[escapeIndex] == hash {
+                    escapeHashes += 1
+                    escapeIndex += 1
+                }
+                if escapeHashes == hashes, escapeIndex < units.count, units[escapeIndex] == parenOpen {
+                    guard let close = interpolationClose(in: units, from: escapeIndex + 1) else {
+                        return units.count
+                    }
+                    index = close + 1
+                    continue
+                }
+                if hashes == 0 {
+                    index += 2
+                    continue
+                }
+                index += 1
                 continue
             }
             if units[index] == quote {
@@ -749,6 +718,67 @@ enum PinScan {
             index += 1
         }
         return units.count
+    }
+
+    /// The index of the `)` matching the interpolation whose body starts at
+    /// `start`, or nil when it never closes. Nested brackets are tracked, and
+    /// a string literal or `//`/nested `/* … */` comment inside the body is
+    /// skipped wholesale, so a `"`, `(` or `)` there cannot close the outer
+    /// interpolation. Mirrors `PinScanCensus.interpolationClose`.
+    static func interpolationClose(in units: [UInt16], from start: Int) -> Int? {
+        let slash: UInt16 = 0x2F
+        let star: UInt16 = 0x2A
+        let newline: UInt16 = 0x0A
+        let carriageReturn: UInt16 = 0x0D
+        var depth = 0
+        var index = start
+        while index < units.count {
+            let unit = units[index]
+            if unit == slash, index + 1 < units.count, units[index + 1] == slash {
+                index += 2
+                while index < units.count, units[index] != newline, units[index] != carriageReturn {
+                    index += 1
+                }
+                continue
+            }
+            if unit == slash, index + 1 < units.count, units[index + 1] == star {
+                var blockDepth = 1
+                index += 2
+                while index < units.count, blockDepth > 0 {
+                    if units[index] == slash, index + 1 < units.count, units[index + 1] == star {
+                        blockDepth += 1
+                        index += 2
+                    } else if units[index] == star, index + 1 < units.count, units[index + 1] == slash {
+                        blockDepth -= 1
+                        index += 2
+                    } else {
+                        index += 1
+                    }
+                }
+                if blockDepth > 0 { return nil }
+                continue
+            }
+            if unit == 0x28 || unit == 0x5B || unit == 0x7B {
+                depth += 1
+                index += 1
+            } else if unit == 0x29 {
+                if depth == 0 { return index }
+                depth -= 1
+                index += 1
+            } else if unit == 0x5D || unit == 0x7D {
+                if depth > 0 { depth -= 1 }
+                index += 1
+            } else if unit == 0x22 || unit == 0x23 {
+                if let end = stringLiteralEnd(in: units, at: index) {
+                    index = end
+                } else {
+                    index += 1
+                }
+            } else {
+                index += 1
+            }
+        }
+        return nil
     }
 
     static func matchesHashSuffix(_ units: [UInt16], at index: Int, count: Int) -> Bool {
