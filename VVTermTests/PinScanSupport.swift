@@ -15,37 +15,42 @@
 //  `TEST_RUNNER_VVTERM_PINS_SOURCE_ROOT` — points every consumer at a mutated
 //  tree.
 //
-//  Scanner selection (callers → semantics → known limits). Pick deliberately:
+//  Scanner selection (callers → semantics). Pick deliberately:
 //
-//  - `strippingComments(_:)` — the canonical hash-unaware scanner (85 call
-//    sites); it covers `"…"`, `"""…"""` and `\` escapes, but not raw
-//    strings (`#"…"#`) or interpolations: a raw string with an embedded
-//    quote desynchronizes it, and a `//` inside an interpolation is not a
-//    comment it descends into. Correct for the token/whitespace pins that
-//    never see those forms.
+//  - `strippingComments(_:)` — the canonical scanner (85 call sites). Since
+//    issue #455 it runs the shared worker's verbatim-string mode, so it is
+//    hash-aware (`#"…"#`, any hash count) and interpolation-aware; it is
+//    byte-identical to `strippingCommentsKeepingLiterals(_:)`.
 //  - `strippingCommentsKeepingLiterals(_:)` (R1) — the login-token scan in
-//    `SSH/SSHProbeShellPinsTests.swift` (5 calls): hash/interpolation-aware,
-//    string contents kept verbatim. Known limit: the comment-blind
-//    interpolation close can under-strip (issue #455).
+//    `SSH/SSHProbeShellPinsTests.swift` (5 calls): a documented alias of
+//    `strippingComments(_:)` with string contents kept verbatim. The name
+//    stays because it declares the scanner's role at those call sites;
+//    retiring it is a deliberate follow-up, not part of #455.
 //  - `strippingCommentsAndStrings(_:)` (R2) — the SSH call-form scans (6
-//    calls): the same-aware lexer with string interiors blanked and
-//    interpolation bodies scanned as code. Known limit: the same desync can
-//    drop the tail and its newlines (issue #455).
+//    calls): the shared worker with string interiors blanked and
+//    interpolation bodies scanned as code. The #453 shrink is fixed; the
+//    documented residual is the raw-string close search, which can still exit
+//    early on a `"#` inside a raw interpolation body (pinned by the
+//    `raw-string-interp-embedded-close` golden row).
 //  - `strippingCommentsAndStringsPreservingUTF16(_:)` (R3) — the declared-test
 //    attribution walk in `WorkflowShardSplitPinsTests.swift` (1 call), whose
 //    consumers index the result with `NSRange`/UTF-16 offsets: hash-prefix
-//    aware, UTF-16 length preserved on the real corpus. Known limit: a nested
-//    `"` inside an interpolation body leaks the inner token into code
-//    (issue #455).
+//    aware, its literal end skips interpolation bodies through nested strings
+//    and comments, and per-unit blanking preserves the UTF-16 length on every
+//    input.
 //  - `strippingYAMLComments(_:)`, `normalizedWhitespace(_:)`, `isInside(_:_:)`
 //    — the small shared helpers used by the census and whitespace pins.
 //
 //  All four scanners are fail-open lexers (the census's `maskedCode` is the
-//  fail-closed one); their line-comment terminator handling, interpolation
-//  close and R3 literal end are shared with the census's predicate
-//  (`PinScan.isSwiftLineTerminator`) — see issue #455. Migrating a scanner
-//  is a behavior change: the census's `sharedHelpers` list and the golden rows
-//  must move with it.
+//  fail-closed one). The #453 defects are fixed in place by issue #455 (D1–D3,
+//  D5): comment-aware interpolation close, Swift-exact line terminators with
+//  the terminator kept verbatim, hash-exact nested-quote-proof R3 literal
+//  ends, and a hash-aware canonical scanner that delegates to the same worker
+//  as R1 (which stays declared as its alias). The shared predicate
+//  `PinScan.isSwiftLineTerminator` is the single home for the terminator set;
+//  `PinScanCensus` delegates to it and the census's shared-helper list records
+//  the name. Migrating a scanner is a behavior change: the golden rows must
+//  move with it.
 
 import Foundation
 
@@ -238,14 +243,15 @@ enum PinScan {
         Self.scanning(source, blankingStringContents: true)
     }
 
-    /// The single worker behind `strippingCommentsKeepingLiterals` and
-    /// `strippingCommentsAndStrings`. Comments become spaces in both; LF
-    /// characters are preserved so slice anchors and range arithmetic resolve.
-    /// When blanking string contents, an interpolation (`\( … )`) is kept as
-    /// code — its body is scanned recursively, because a real call inside an
-    /// interpolation is not a string decoy. When copying strings verbatim the
-    /// whole literal, interpolation included, is kept as text, so the
-    /// login-token scan keeps seeing tokens inside interpolated literals.
+    /// The single worker behind `strippingComments`,
+    /// `strippingCommentsKeepingLiterals` and `strippingCommentsAndStrings`.
+    /// Comments become spaces in both modes; Swift line terminators (LF,
+    /// CRLF, CR) are preserved verbatim so slice anchors and range arithmetic
+    /// resolve. When blanking string contents, an interpolation (`\( … )`) is
+    /// kept as code — its body is scanned recursively, because a real call
+    /// inside an interpolation is not a string decoy. When copying strings
+    /// verbatim the whole literal, interpolation included, is kept as text, so
+    /// the login-token scan keeps seeing tokens inside interpolated literals.
     static func scanning(
         _ source: String,
         blankingStringContents: Bool

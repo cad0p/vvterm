@@ -2,7 +2,7 @@
 //  PinScanSupportGoldenTests.swift
 //
 //  The committed golden corpus for the shared pin-scan lexers (issues #450,
-//  #453). This is the permanent contract for `PinScan.strippingComments`,
+//  #453, #455). This is the permanent contract for `PinScan.strippingComments`,
 //  `PinScan.strippingCommentsKeepingLiterals`,
 //  `PinScan.strippingCommentsAndStrings`,
 //  `PinScan.strippingCommentsAndStringsPreservingUTF16`,
@@ -10,10 +10,12 @@
 //  `PinScan.isInside`, now that the per-suite copies are gone. A deliberate
 //  lexer change updates this file in the same commit.
 //
-//  The #453 rows for the three migrated scanners pin their measured fail-open
-//  limits as documented defeats (R1 under-strip, R2 shrink, R3 nested-quote
-//  leak, R1/R2 CRLF swallow) with the fix tracked in issue #455; a fix must
-//  update these rows in the same commit.
+//  Issue #455 fixed the #453 defects in place and turned the defeat rows into
+//  fixed-output assertions: R1/R2 under-strip/shrink, CRLF/CR swallow,
+//  R3 nested-quote leak and the canonical raw-string desync. The remaining
+//  residuals (R2's raw-interpolation close, the escaped-triple-quote close and
+//  the fabricated close of an unterminated interpolation) are pinned here with
+//  their measured output.
 
 import Foundation
 import Testing
@@ -183,6 +185,20 @@ struct PinScanSupportGoldenTests {
             // UTF-16 units instead of collapsing to one space.
             ("crlf-in-block-comment", "let a = 1 /* x\r\ny */ let b = 2\r\n", "let a = 1     \r\n     let b = 2\r\n"),
             ("crlf-in-string", "let s = \"a\r\nb\" // c\nlet x = 1", "let s = \" \r\n \"     \nlet x = 1"),
+            // A `\` + CRLF inside a string keeps the backslash and the whole
+            // CRLF grapheme (the `blanked()` worker no longer collapses it).
+            ("backslash-crlf-in-string", "let s = \"a\\\r\nb\" // c\nlet x = 1", "let s = \" \\\r\n \"     \nlet x = 1"),
+            // Residual (#455): a `"#` inside a raw interpolation body closes
+            // `stringEnd`'s raw literal early, so the output shrinks. Recorded
+            // here so the next construct cannot adopt it silently.
+            ("raw-string-interp-embedded-close", "let s = #\"\\#(d[\"#\"]) // c\"#", "let s = #\"\\#()\"#\"       \"#"),
+            // Residual (#455): the escaped-triple-quote form closes at the
+            // first `"""` sequence, so ` b` and the final quotes stay as code.
+            // The escaped-triple-quote row is the fixed-output record of it.
+            ("escaped-triple-quote-leak", "let s = \"\"\"a \\\"\"\" b\"\"\"", "let s = \"\"\"   \"\"\" b\"\"\""),
+            // Residual (#455): an unterminated interpolation fabricates a `)`
+            // and shrinks (lens 1 m3). Pinned so the shrink stays visible.
+            ("fabricated-close-unterminated-interp", "let s = \"\\(open", "let s = \"\\()"),
             ("non-ascii", "let s = \"é😀\" // c\nlet x = 1", "let s = \"  \"     \nlet x = 1"),
         ]
         for c in cases {
@@ -244,5 +260,95 @@ struct PinScanSupportGoldenTests {
         }
         // The non-BMP row is the non-vacuity case for the length property.
         #expect("let s = \"😀\" // tail".utf16.count == 20)
+    }
+
+    /// Issue #455: the post-fix rows are checked against the properties the
+    /// fix must hold, independently of their exact expected strings — a body
+    /// sentinel never leaks into blanked code, the terminator grapheme is
+    /// preserved verbatim with the next line visible, the per-scanner string
+    /// semantics hold (canonical/R1 verbatim, R2/R3 blanked) and R3 keeps the
+    /// UTF-16 length on every row.
+    @Test
+    func pinScanPostFixRowsPreserveTheirProperties() {
+        // R1: the under-strip is gone — the literal (interpolation included)
+        // stays verbatim and the tail blanks, with no leaked `tail` identifier.
+        let r1UnderStrip = PinScan.strippingCommentsKeepingLiterals(
+            "let s = \"\\(a /* ( */ + b)\" // tail\nlet y = 1"
+        )
+        #expect(r1UnderStrip == "let s = \"\\(a /* ( */ + b)\"        \nlet y = 1")
+        #expect(!r1UnderStrip.contains("tail"))
+        #expect(r1UnderStrip.hasSuffix("\nlet y = 1"))
+        #expect(r1UnderStrip.count == "let s = \"\\(a /* ( */ + b)\" // tail\nlet y = 1".count)
+
+        // R2: the shrink is gone — no fabricated close, the tail survives and
+        // the interpolation-comment code stays; the interior blanks.
+        let r2Shrink = PinScan.strippingCommentsAndStrings(
+            "let s = \"\\(a /* ( */ + b)\"\nfunc repositoryRoot()"
+        )
+        #expect(r2Shrink == "let s = \"\\(a         + b)\"\nfunc repositoryRoot()")
+        #expect(r2Shrink.hasSuffix("\nfunc repositoryRoot()"))
+        #expect(!r2Shrink.contains("/*"))
+        #expect(r2Shrink.utf16.count == "let s = \"\\(a /* ( */ + b)\"\nfunc repositoryRoot()".utf16.count)
+
+        // R1/R2 terminators: CRLF and lone CR are kept verbatim, the next line
+        // stays visible and the comment identifier blanks.
+        for scanner in ["R1", "R2"] {
+            let crlf = scanner == "R1"
+                ? PinScan.strippingCommentsKeepingLiterals("let a = 1 // tail\r\nlet b = 2")
+                : PinScan.strippingCommentsAndStrings("let a = 1 // tail\r\nlet b = 2")
+            #expect(crlf.hasSuffix("\r\nlet b = 2"), "\(scanner) CRLF row: \(crlf.debugDescription)")
+            #expect(!crlf.contains("tail"))
+            let loneCR = scanner == "R1"
+                ? PinScan.strippingCommentsKeepingLiterals("let a = 1 // tail\rlet b = 2")
+                : PinScan.strippingCommentsAndStrings("let a = 1 // tail\rlet b = 2")
+            #expect(loneCR.hasSuffix("\rlet b = 2"), "\(scanner) lone-CR row: \(loneCR.debugDescription)")
+            #expect(!loneCR.contains("tail"))
+        }
+
+        // R2: a CRLF inside a block comment or a blanked string keeps both
+        // UTF-16 units and the next line stays visible.
+        let r2BlockCRLF = PinScan.strippingCommentsAndStrings("let a = 1 /* x\r\ny */ let b = 2\r\n")
+        #expect(r2BlockCRLF.hasSuffix("let b = 2\r\n"))
+        #expect(r2BlockCRLF.contains("\r\n"))
+        let r2StringCRLF = PinScan.strippingCommentsAndStrings("let s = \"a\r\nb\" // c\nlet x = 1")
+        #expect(r2StringCRLF.contains("\" \r\n \""))
+        #expect(!r2StringCRLF.contains("a\r\nb"))
+        #expect(r2StringCRLF.hasSuffix("\nlet x = 1"))
+
+        // R3: the nested-quote leak is gone (no `k`), the UTF-16 length is
+        // preserved and the following line stays visible on every row. The raw
+        // `\#(` row has a `"#` in its body and the nested-interpolation and
+        // interpolation-comment rows carry a `"`/`(`/`)` inside the body.
+        let r3Rows: [(name: String, input: String, leaked: [String])] = [
+            ("nested-quote", "let s = \"\\(d[\"k\"]) // c\"\nlet y = 1", ["k", "d["]),
+            ("raw-interp-hash1", "let s = #\"\\#(d[\"#\"]) // c\"#", ["d[", "c\""]),
+            ("nested-interpolation", "let s = \"\\(d[\"\\(x)\"])\"\nlet y = 1", ["\\(x)", "d["]),
+            ("interp-block-comment", "let s = \"\\(a /* \" */ + b)\"\nlet y = 1", ["*/", "+ b)"]),
+            ("interp-line-comment", "let s = \"\\(x // \" )\n + 2)\"\nlet y = 1", [" + 2)", "x //"]),
+            ("lone-cr-in-comment", "let a = 1 // tail\rlet b = 2", ["tail"]),
+        ]
+        for row in r3Rows {
+            let output = PinScan.strippingCommentsAndStringsPreservingUTF16(row.input)
+            #expect(
+                output.utf16.count == row.input.utf16.count,
+                "R3 \(row.name) UTF-16 length \(output.utf16.count) != \(row.input.utf16.count)"
+            )
+            for leaked in row.leaked {
+                #expect(!output.contains(leaked), "R3 \(row.name) leaked \(leaked.debugDescription): \(output.debugDescription)")
+            }
+            if row.input.contains("\n") {
+                #expect(output.hasSuffix("\nlet y = 1") || output.hasSuffix("let b = 2"), "R3 \(row.name) swallowed the next line: \(output.debugDescription)")
+            }
+        }
+
+        // Canonical/R1: string contents stay verbatim, the trailing comment
+        // blanks, and the output keeps the input's Character count.
+        for rawString in ["#\"a \"b\"# // tail", "##\"a#\"#b\"## // tail"] {
+            for output in [PinScan.strippingComments(rawString), PinScan.strippingCommentsKeepingLiterals(rawString)] {
+                #expect(output.contains(rawString.prefix(8)))
+                #expect(!output.contains("tail"))
+                #expect(output.count == rawString.count)
+            }
+        }
     }
 }
