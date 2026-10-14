@@ -8,18 +8,19 @@
 //  Defeat list (what this check does NOT prove):
 //  - It is name-based. A residual copy that renames its helper (`func repoRoot`,
 //    `func scan`) or inlines a lexer body passes.
-//  - The comment stripper is the minimal line-based one below, not the
-//    raw-string-aware `PinScan.strippingComments`. The unterminated-`/*`-inside-
-//    a-string-literal desync is closed (fold round 2, CL-1): a `/*` starts a
-//    block comment only when a closing `*/` exists later in the file, so an
-//    unterminated one cannot swallow the remainder, and the declaration scan
-//    runs over the joined stripped text (CL-3), so a `func` and its name split
-//    across a line break are still caught. Residuals left on purpose: a `/*`
-//    inside a string literal that *is* later "closed" by any `*/` in the file
-//    still enters block mode and can hide the lines in between, and a `//`-like
-//    sequence inside a string still blanks the rest of that line; a real
-//    declaration is always in code, and the golden lexer corpus carries the
-//    string-aware semantic contract.
+//  - The mask is the compact scanner below, not a Swift parser. It models the
+//    string and comment forms the corpus uses — `//`, nested `/* … */`, `"…"`,
+//    `"""…"""`, raw strings (`#"…"#`, `##"…"##`, `#"""…"""#`) and
+//    interpolations (`\( … )`, `\#( … )`) — and fails closed on anything it
+//    cannot resolve: an unterminated block comment, string or interpolation
+//    records a `cannot analyze` violation naming the file and opening line and
+//    restores the tail verbatim. This closes CR-1 (the 120-line blind region
+//    where a `/*` in a raw string was "closed" by a `*/` in another string) and
+//    CR-2 (a `//` inside a string blanking a same-line declaration); the
+//    joined-text declaration scan (CL-3) runs over the masked text, so CR-3's
+//    cross-line literal false positive is gone too. Residual left on purpose:
+//    a bare Swift regex literal (`/…/`) is not modeled, and the check is still
+//    lexical, not semantic.
 //  - It cannot see the pre-existing inline depth-based root resolvers that
 //    never declared a migrated name and never read the hook
 //    (`TeleportLoginClientErrorShapeTests`, `StartupDeadlineTests`,
@@ -154,11 +155,13 @@ enum PinScanCensus {
         // the shared definition would otherwise stay green.
         let supportURL = repositoryRoot.appendingPathComponent(supportFile)
         if FileManager.default.fileExists(atPath: supportURL.path) {
-            let supportCode = strippingLineComments(
-                try String(contentsOf: supportURL, encoding: .utf8)
-            ).map(\.1).joined(separator: "\n")
+            let supportContent = try String(contentsOf: supportURL, encoding: .utf8)
+            let supportMask = maskedCode(supportContent, blankingStringContents: true)
+            if let offset = supportMask.unresolvedOffset {
+                failures.append(unresolvedViolation(relative: supportFile, offset: offset, content: supportContent))
+            }
             for helper in sharedHelpers
-            where supportCode.range(of: "func\\s+" + helper + "\\s*\\(", options: .regularExpression) == nil {
+            where supportMask.text.range(of: "func\\s+" + helper + "\\s*\\(", options: .regularExpression) == nil {
                 failures.append(
                     "missing shared declaration: \(supportFile) does not declare `func \(helper)(`. The shared helper was deleted or renamed; restore it or update the census deliberately."
                 )
@@ -175,27 +178,37 @@ enum PinScanCensus {
             if censusFiles.contains(relative) { continue }
 
             let allowed = allowlist[relative]?.helpers ?? []
-            let strippedLines = strippingLineComments(content)
-            let joinedCode = strippedLines.map(\.1).joined(separator: "\n")
+            let codeMask = maskedCode(content, blankingStringContents: true)
+            let hookMask = maskedCode(content, blankingStringContents: false)
+            if let offset = codeMask.unresolvedOffset ?? hookMask.unresolvedOffset {
+                failures.append(unresolvedViolation(relative: relative, offset: offset, content: content))
+                continue
+            }
+            // The declaration scan runs on the string-blanked mask, so a
+            // declaration-like token inside a literal is invisible and a `//`
+            // inside a literal cannot blank the rest of the line (CR-1/CR-2).
             for helper in migratedHelpers where !allowed.contains(helper) {
                 let pattern = "func\\s+" + helper + "\\s*\\("
-                for lineNumber in declarationLineNumbers(in: joinedCode, pattern: pattern) {
+                for lineNumber in declarationLineNumbers(in: codeMask.text, pattern: pattern) {
                     failures.append(
                         "unexpected declaration: \(relative):\(lineNumber) declares `func \(helper)(`. \(remedy(for: helper))"
                     )
                 }
             }
-            for (lineNumber, line) in strippedLines {
+            for (lineNumber, line) in lines(of: codeMask.text) {
                 if line.range(of: "struct\\s+PinFailure\\b", options: .regularExpression) != nil {
                     failures.append(
                         "unexpected declaration: \(relative):\(lineNumber) declares `struct PinFailure`. Use the shared `PinFailure` in \(supportFile)."
                     )
                 }
-                if line.contains(hookNeedle) {
-                    failures.append(
-                        "unexpected hook use: \(relative):\(lineNumber) reads `\(hookNeedle)`. Route it through `PinScan.repositoryRoot()` (it is honored there), not a local copy."
-                    )
-                }
+            }
+            // The hook needle is a string-literal key, so this scan keeps string
+            // contents (comments still blanked, string-aware) to catch a stray
+            // `environment["VVTERM_PINS_SOURCE_ROOT"]` copy.
+            for (lineNumber, line) in lines(of: hookMask.text) where line.contains(hookNeedle) {
+                failures.append(
+                    "unexpected hook use: \(relative):\(lineNumber) reads `\(hookNeedle)`. Route it through `PinScan.repositoryRoot()` (it is honored there), not a local copy."
+                )
             }
         }
 
@@ -206,8 +219,12 @@ enum PinScanCensus {
                 continue
             }
             let content = try String(contentsOf: url, encoding: .utf8)
-            let code = strippingLineComments(content).map(\.1).joined(separator: "\n")
-            if !code.contains("PinScan.repositoryRoot(") && !code.contains("PinScan.source(") {
+            let codeMask = maskedCode(content, blankingStringContents: true)
+            if let offset = codeMask.unresolvedOffset {
+                failures.append(unresolvedViolation(relative: path, offset: offset, content: content))
+                continue
+            }
+            if !codeMask.text.contains("PinScan.repositoryRoot(") && !codeMask.text.contains("PinScan.source(") {
                 failures.append(
                     "cohort file no longer resolves its root through PinScan: \(path) has neither a `PinScan.repositoryRoot(` nor a `PinScan.source(` call in code; the migration for this file was reverted or rewritten."
                 )
@@ -240,11 +257,10 @@ enum PinScanCensus {
     }
 
     /// The 1-based line numbers in `code` where `pattern` matches. The caller
-    /// passes the joined, comment-stripped text (the same form as the
-    /// support-file presence check), so a `func` keyword and its name split
-    /// across a line break are still caught (fold round 2, CL-3). The pattern
-    /// is not string-aware, so a literal `"func <helper>("` would be a false
-    /// positive — the fail-closed direction the census wants.
+    /// passes the joined, string-and-comment-masked text (`PinScanCensus.maskedCode`),
+    /// so a `func` keyword and its name split across a line break are still
+    /// caught (fold round 2, CL-3) while the same tokens inside a literal are
+    /// invisible (fold round 3, CR-3).
     private static func declarationLineNumbers(in code: String, pattern: String) -> [Int] {
         var lineNumbers: [Int] = []
         var searchStart = code.startIndex
@@ -259,57 +275,387 @@ enum PinScanCensus {
         return lineNumbers
     }
 
-    /// A minimal line-based comment stripper: returns `(lineNumber, code)` with
-    /// `//` line comments and `/* … */` block comments removed. It deliberately
-    /// does NOT try to understand string literals — the census scans for
-    /// declaration and environment-variable tokens that only ever appear in
-    /// code, and a string-aware stripper (the shared lexer) can desynchronize
-    /// on raw strings and silently hide code. An unterminated `/*` (including
-    /// one inside a string literal) starts a block comment only when a `*/`
-    /// exists later in the file; otherwise it is left as literal text, so it
-    /// cannot swallow the rest of the file (fold round 2, CL-1).
-    private static func strippingLineComments(_ content: String) -> [(Int, String)] {
-        let lines = content.components(separatedBy: "\n")
-        var out: [(Int, String)] = []
-        var inBlockComment = false
-        for (index, raw) in lines.enumerated() {
-            var line = raw
-            if inBlockComment {
-                if let end = line.range(of: "*/") {
-                    line = String(line[end.upperBound...])
-                    inBlockComment = false
-                } else {
-                    out.append((index + 1, ""))
-                    continue
-                }
-            }
-            while true {
-                let blockStart = line.range(of: "/*")
-                let lineComment = line.range(of: "//")
-                if let lc = lineComment, blockStart == nil || lc.lowerBound < blockStart!.lowerBound {
-                    line = String(line[..<lc.lowerBound])
-                    break
-                }
-                guard let bs = blockStart else { break }
-                if let end = line.range(of: "*/", range: bs.upperBound..<line.endIndex) {
-                    line = String(line[..<bs.lowerBound]) + String(line[end.upperBound...])
-                    continue
-                }
-                // No `*/` on this line: only a block that actually closes later in
-                // the file may swallow the following lines. An unterminated `/*`
-                // (e.g. inside a string literal) is left as literal text and must
-                // not hide the rest of the file.
-                let tail = String(line[bs.upperBound...]) + "\n"
-                    + lines[(index + 1)...].joined(separator: "\n")
-                if tail.contains("*/") {
-                    line = String(line[..<bs.lowerBound])
-                    inBlockComment = true
-                }
-                break
-            }
-            out.append((index + 1, line))
+    /// The `(1-based line, text)` pairs of `text`, for the per-line scans.
+    private static func lines(of text: String) -> [(Int, String)] {
+        text.components(separatedBy: "\n").enumerated().map { ($0.offset + 1, $0.element) }
+    }
+
+    /// The fail-closed diagnostic for an input the mask could not resolve.
+    private static func unresolvedViolation(relative: String, offset: Int, content: String) -> String {
+        "cannot analyze: \(relative):\(lineNumber(at: offset, in: content)) opens an unterminated string, raw string or block comment; the census masks comments and strings and refuses to analyze past an unresolved construct — close the construct or record the residual deliberately (fail closed)."
+    }
+
+    /// The 1-based line containing the character `offset`.
+    private static func lineNumber(at offset: Int, in content: String) -> Int {
+        var line = 1
+        var index = 0
+        for character in content {
+            if index >= offset { break }
+            if character == "\n" { line += 1 }
+            index += 1
         }
-        return out
+        return line
+    }
+
+    /// The string-and-comment-aware mask over `content`, with fail-closed
+    /// uncertainty reporting. `blankingStringContents` blanks comment contents
+    /// and (when true) string-literal interiors; the other mode keeps string
+    /// interiors — including an interpolation body — verbatim so the
+    /// `VVTERM_PINS_SOURCE_ROOT` key literal in a stray copy stays visible,
+    /// while still blanking comments string-awarely. Newlines are always
+    /// preserved, so line numbers and offsets stay aligned with the input.
+    ///
+    /// A construct the scanner cannot resolve (an unterminated block comment,
+    /// string, raw string or interpolation at end-of-input) sets
+    /// `unresolvedOffset`; the mask then restores the tail verbatim, so the
+    /// census can never silently blank past an unresolved construct.
+    struct MaskedCode {
+        /// The masked text; same length and newline structure as the input.
+        let text: String
+        /// The character offset at which an unterminated construct opened, or
+        /// nil when the whole input resolved.
+        let unresolvedOffset: Int?
+    }
+
+    /// A Swift string delimiter: `N` `#`s followed by one or three `"`s.
+    private struct StringDelimiter {
+        let hashCount: Int
+        let quoteCount: Int
+        var length: Int { hashCount + quoteCount }
+        var isRaw: Bool { hashCount > 0 }
+    }
+
+    static func maskedCode(_ content: String, blankingStringContents: Bool) -> MaskedCode {
+        let characters = Array(content)
+        var out: [Character] = []
+        out.reserveCapacity(characters.count)
+        var unresolved: Int? = nil
+        _ = maskRange(characters, 0, characters.count, blankingStringContents, &out, &unresolved)
+        if let offset = unresolved, offset < characters.count {
+            // Never leave a construct we could not resolve blanked: restore the
+            // tail verbatim so no code can hide behind the uncertainty.
+            out.replaceSubrange(offset..<out.count, with: characters[offset..<characters.count])
+        }
+        return MaskedCode(text: String(out), unresolvedOffset: unresolved)
+    }
+
+    @discardableResult
+    private static func maskRange(
+        _ characters: [Character],
+        _ start: Int,
+        _ end: Int,
+        _ blankingStringContents: Bool,
+        _ out: inout [Character],
+        _ unresolved: inout Int?
+    ) -> Int {
+        var index = start
+        var inLineComment = false
+        var blockDepth = 0
+        var blockOpen = -1
+        while index < end {
+            let character = characters[index]
+            if inLineComment {
+                if character == "\n" {
+                    out.append("\n")
+                    inLineComment = false
+                } else {
+                    out.append(" ")
+                }
+                index += 1
+                continue
+            }
+            if blockDepth > 0 {
+                if character == "/", index + 1 < end, characters[index + 1] == "*" {
+                    blockDepth += 1
+                    out.append(" ")
+                    out.append(" ")
+                    index += 2
+                    continue
+                }
+                if character == "*", index + 1 < end, characters[index + 1] == "/" {
+                    blockDepth -= 1
+                    out.append(" ")
+                    out.append(" ")
+                    index += 2
+                    if blockDepth == 0 { blockOpen = -1 }
+                    continue
+                }
+                out.append(character == "\n" ? "\n" : " ")
+                index += 1
+                continue
+            }
+            if character == "/", index + 1 < end, characters[index + 1] == "/" {
+                inLineComment = true
+                out.append(" ")
+                out.append(" ")
+                index += 2
+                continue
+            }
+            if character == "/", index + 1 < end, characters[index + 1] == "*" {
+                blockDepth = 1
+                blockOpen = index
+                out.append(" ")
+                out.append(" ")
+                index += 2
+                continue
+            }
+            if stringDelimiter(at: index, in: characters, to: end) != nil {
+                index = maskString(
+                    characters,
+                    at: index,
+                    to: end,
+                    blankingStringContents,
+                    &out,
+                    &unresolved
+                )
+                continue
+            }
+            out.append(character)
+            index += 1
+        }
+        if blockDepth > 0, unresolved == nil { unresolved = blockOpen }
+        return index
+    }
+
+    private static func stringDelimiter(
+        at start: Int,
+        in characters: [Character],
+        to end: Int
+    ) -> StringDelimiter? {
+        var cursor = start
+        while cursor < end, characters[cursor] == "#" { cursor += 1 }
+        guard cursor < end, characters[cursor] == "\"" else { return nil }
+        let hashCount = cursor - start
+        let quoteCount = (cursor + 2 < end
+            && characters[cursor + 1] == "\""
+            && characters[cursor + 2] == "\"") ? 3 : 1
+        return StringDelimiter(hashCount: hashCount, quoteCount: quoteCount)
+    }
+
+    /// Masks the string literal opening at `start`, blanking its interior when
+    /// `blankingStringContents` is set and recursing into interpolation bodies
+    /// (`\( … )` for quoted strings, `\#( … )` for raw strings) so their code
+    /// stays visible. Returns the index just past the closing delimiter, or
+    /// `end` for an unterminated literal (recorded in `unresolved`).
+    private static func maskString(
+        _ characters: [Character],
+        at start: Int,
+        to end: Int,
+        _ blankingStringContents: Bool,
+        _ out: inout [Character],
+        _ unresolved: inout Int?
+    ) -> Int {
+        guard let delimiter = stringDelimiter(at: start, in: characters, to: end) else {
+            return start
+        }
+        appendMasked(delimiter.length, blankingStringContents, from: characters, at: start, to: &out)
+        var index = start + delimiter.length
+        while index < end {
+            if let closeLength = closingDelimiterLength(delimiter, at: index, in: characters, to: end) {
+                appendMasked(closeLength, blankingStringContents, from: characters, at: index, to: &out)
+                return index + closeLength
+            }
+            let character = characters[index]
+            if character == "\\" {
+                if delimiter.isRaw {
+                    var cursor = index + 1
+                    var hashes = 0
+                    while cursor < end, hashes < delimiter.hashCount, characters[cursor] == "#" {
+                        hashes += 1
+                        cursor += 1
+                    }
+                    if hashes == delimiter.hashCount, cursor < end, characters[cursor] == "(" {
+                        index = maskInterpolation(
+                            characters,
+                            openingBackslash: index,
+                            bodyStart: cursor + 1,
+                            to: end,
+                            stringStart: start,
+                            blankingStringContents,
+                            &out,
+                            &unresolved
+                        )
+                        continue
+                    }
+                    appendMasked(1, blankingStringContents, from: characters, at: index, to: &out)
+                    index += 1
+                    continue
+                }
+                if index + 1 < end, characters[index + 1] == "(" {
+                    index = maskInterpolation(
+                        characters,
+                        openingBackslash: index,
+                        bodyStart: index + 2,
+                        to: end,
+                        stringStart: start,
+                        blankingStringContents,
+                        &out,
+                        &unresolved
+                    )
+                    continue
+                }
+                let count = min(2, end - index)
+                appendMasked(count, blankingStringContents, from: characters, at: index, to: &out)
+                index += count
+                continue
+            }
+            appendMasked(1, blankingStringContents, from: characters, at: index, to: &out)
+            index += 1
+        }
+        if unresolved == nil { unresolved = start }
+        return end
+    }
+
+    private static func maskInterpolation(
+        _ characters: [Character],
+        openingBackslash: Int,
+        bodyStart: Int,
+        to end: Int,
+        stringStart: Int,
+        _ blankingStringContents: Bool,
+        _ out: inout [Character],
+        _ unresolved: inout Int?
+    ) -> Int {
+        guard let close = interpolationClose(characters, from: bodyStart, to: end) else {
+            if unresolved == nil { unresolved = stringStart }
+            appendMasked(
+                end - openingBackslash,
+                blankingStringContents,
+                from: characters,
+                at: openingBackslash,
+                to: &out
+            )
+            return end
+        }
+        appendMasked(
+            bodyStart - openingBackslash,
+            blankingStringContents,
+            from: characters,
+            at: openingBackslash,
+            to: &out
+        )
+        // The interpolation body is code: mask it recursively in the same mode.
+        _ = maskRange(characters, bodyStart, close, blankingStringContents, &out, &unresolved)
+        appendMasked(1, blankingStringContents, from: characters, at: close, to: &out)
+        return close + 1
+    }
+
+    /// The length of the closing delimiter of `delimiter` at `start`, or nil.
+    private static func closingDelimiterLength(
+        _ delimiter: StringDelimiter,
+        at start: Int,
+        in characters: [Character],
+        to end: Int
+    ) -> Int? {
+        let closeLength = delimiter.quoteCount + delimiter.hashCount
+        guard start + closeLength <= end else { return nil }
+        for offset in 0..<delimiter.quoteCount where characters[start + offset] != "\"" { return nil }
+        for offset in 0..<delimiter.hashCount where characters[start + delimiter.quoteCount + offset] != "#" {
+            return nil
+        }
+        return closeLength
+    }
+
+    /// The index of the `)` matching the interpolation whose body starts at
+    /// `start`, or nil when it never closes. Strings inside the body are
+    /// skipped so a `"` or `)` in a nested literal cannot close the outer
+    /// interpolation.
+    private static func interpolationClose(
+        _ characters: [Character],
+        from start: Int,
+        to end: Int
+    ) -> Int? {
+        var depth = 0
+        var index = start
+        while index < end {
+            let character = characters[index]
+            if character == "(" || character == "[" || character == "{" {
+                depth += 1
+                index += 1
+            } else if character == ")" {
+                if depth == 0 { return index }
+                depth -= 1
+                index += 1
+            } else if character == "]" || character == "}" {
+                if depth > 0 { depth -= 1 }
+                index += 1
+            } else if let delimiter = stringDelimiter(at: index, in: characters, to: end) {
+                guard let after = stringSkipEnd(characters, at: index, delimiter: delimiter, to: end) else {
+                    return nil
+                }
+                index = after
+            } else {
+                index += 1
+            }
+        }
+        return nil
+    }
+
+    /// The index just past the string literal opening at `start`, or nil when
+    /// it is unterminated. Used only to skip nested literals.
+    private static func stringSkipEnd(
+        _ characters: [Character],
+        at start: Int,
+        delimiter: StringDelimiter,
+        to end: Int
+    ) -> Int? {
+        var index = start + delimiter.length
+        while index < end {
+            if let closeLength = closingDelimiterLength(delimiter, at: index, in: characters, to: end) {
+                return index + closeLength
+            }
+            let character = characters[index]
+            if character == "\\" {
+                if delimiter.isRaw {
+                    var cursor = index + 1
+                    var hashes = 0
+                    while cursor < end, hashes < delimiter.hashCount, characters[cursor] == "#" {
+                        hashes += 1
+                        cursor += 1
+                    }
+                    if hashes == delimiter.hashCount, cursor < end, characters[cursor] == "(" {
+                        guard let close = interpolationClose(characters, from: cursor + 1, to: end) else {
+                            return nil
+                        }
+                        index = close + 1
+                        continue
+                    }
+                    index += 1
+                    continue
+                }
+                if index + 1 < end, characters[index + 1] == "(" {
+                    guard let close = interpolationClose(characters, from: index + 2, to: end) else {
+                        return nil
+                    }
+                    index = close + 1
+                    continue
+                }
+                index += 2
+                continue
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    /// Appends `count` characters from `start`, blanking every non-newline one
+    /// when `blanking` is set and copying them verbatim otherwise.
+    private static func appendMasked(
+        _ count: Int,
+        _ blanking: Bool,
+        from characters: [Character],
+        at start: Int,
+        to out: inout [Character]
+    ) {
+        guard count > 0 else { return }
+        for offset in 0..<count {
+            let character = characters[start + offset]
+            if blanking {
+                out.append(character == "\n" ? "\n" : " ")
+            } else {
+                out.append(character)
+            }
+        }
     }
 
     private static func swiftFiles(under directory: URL, root: URL) throws -> [URL] {
