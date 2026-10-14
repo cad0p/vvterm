@@ -17,7 +17,8 @@
 //  multi-hash closing; fold round 5, M1/M2: Swift's own line terminators —
 //  the Unicode characters `Character.isNewline` also accepts are comment
 //  content — and the CRLF block-comment/interpolation arms). The line-number
-//  diagnostics are pinned separately against a probe tree (fold round 5, N1).
+//  diagnostics are pinned separately against a probe tree (fold rounds 5-6,
+//  N1/F1).
 
 import Foundation
 import Testing
@@ -33,15 +34,17 @@ struct PinScanCensusPinsTests {
         )
     }
 
-    /// The mask's permanent semantic contract (fold rounds 3-5). CR-1's `/*` in
+    /// The mask's permanent semantic contract (fold rounds 3-6). CR-1's `/*` in
     /// a raw string, CR-2's `//` in a string, CR-3's multiline-literal tokens,
     /// the interpolation boundary, CRLF line endings (F1), comments inside an
     /// interpolation body (F2/F4), the raw-string `\#(`/multi-hash closing
     /// semantics (F3), Swift's actual line-terminator set (M1: U+000B/U+000C/
-    /// U+0085/U+2028/U+2029 do not end a `//` comment) and the CRLF
-    /// block-comment/interpolation arms (M2) are all pinned here, so the
-    /// census cannot silently regress to the comment-only scanner that hid
-    /// `WorkflowPrepareXcodeBuildPinsTests.swift` lines 351-479.
+    /// U+0085/U+2028/U+2029 do not end a `//` comment), the CRLF
+    /// block-comment/interpolation arms (M2) and the interpolation-body
+    /// line-comment skip through an exotic separator (F1/N1w) are all pinned
+    /// here, so the census cannot silently regress to the comment-only
+    /// scanner that hid `WorkflowPrepareXcodeBuildPinsTests.swift` lines
+    /// 351-479.
     ///
     /// A `(name, input, expectedMask)` case is resolved: the mask must equal
     /// `expectedMask` with no unresolved offset. The fail-closed table below
@@ -102,6 +105,16 @@ struct PinScanCensusPinsTests {
             // body (multiline-string form); an LF-only skip runs to EOF and
             // fails the whole interpolation closed (`unresolved != nil`).
             ("interp-line-comment-crlf", "let s = \"\"\"\r\n\\(x // c\r\n) + 2\r\n\"\"\"", "let s =    \r\n  x     \r\n     \r\n   "),
+            // F1/N1w: the same skip through an exotic separator (Swift keeps
+            // the comment open through U+000B/U+000C/U+0085/U+2028/U+2029), so
+            // the interpolation body's code on the next line (`+ y`) stays
+            // visible; a site-local `Character.isNewline` runs the comment to
+            // the string's end and blanks it (fold round 6, F2).
+            ("interp-body-code-vt", "let s = \"\"\"\n\\(x // c\u{000B})\n+ y\n)\n\"\"\"", "let s =    \n  x       \n+ y\n \n   "),
+            ("interp-body-code-ff", "let s = \"\"\"\n\\(x // c\u{000C})\n+ y\n)\n\"\"\"", "let s =    \n  x       \n+ y\n \n   "),
+            ("interp-body-code-nel", "let s = \"\"\"\n\\(x // c\u{0085})\n+ y\n)\n\"\"\"", "let s =    \n  x       \n+ y\n \n   "),
+            ("interp-body-code-ls", "let s = \"\"\"\n\\(x // c\u{2028})\n+ y\n)\n\"\"\"", "let s =    \n  x       \n+ y\n \n   "),
+            ("interp-body-code-ps", "let s = \"\"\"\n\\(x // c\u{2029})\n+ y\n)\n\"\"\"", "let s =    \n  x       \n+ y\n \n   "),
         ]
         for c in resolved {
             let mask = PinScanCensus.maskedCode(c.input, blankingStringContents: true)
@@ -170,9 +183,14 @@ struct PinScanCensusPinsTests {
     /// N1: the census's line diagnostics count Swift line terminators (LF,
     /// CRLF, CR), so a probe tree with CRLF or lone-CR line endings names the
     /// real declaration (or hook) line and a CRLF fail-closed construct names
-    /// its opening line. An LF-only counter (`character == "\n"`),
-    /// `components(separatedBy: "\n")`, or the over-broad
-    /// `Character.isNewline` turns this test red (fold round 5, N1/M1).
+    /// its opening line. The exotic characters `Character.isNewline` also
+    /// accepts are pinned against each counter: U+000B code whitespace ahead
+    /// of a declaration (`declarationLineNumbers`), a U+2028 single-line
+    /// string ahead of a hook (`lines(of:)`) and a U+2028 separator inside a
+    /// comment ahead of a fail-closed construct (`lineNumber(at:)`). An
+    /// LF-only counter (`character == "\n"`), `components(separatedBy: "\n")`,
+    /// or the over-broad `Character.isNewline` turns this test red (fold
+    /// rounds 5-6, N1/M1/F1).
     @Test
     func censusLineNumberDiagnosticsCountSwiftLineTerminators() throws {
         let root = FileManager.default.temporaryDirectory
@@ -208,6 +226,19 @@ struct PinScanCensusPinsTests {
             "let s = \"open",
         ].joined(separator: "\r\n")
             .write(to: testsRoot.appendingPathComponent("ProbeCRLFUnresolved.swift"), atomically: true, encoding: .utf8)
+        // F1: one probe per counter site, each with the exotic character
+        // `Character.isNewline` accepts. U+2028 inside the leading `//`
+        // comment is comment content (the unterminated string is on line 2,
+        // `lineNumber(at:)`); U+000B is code whitespace before `func
+        // repositoryRoot(` (still line 1, `declarationLineNumbers`); U+2028
+        // inside a single-line string is string content (the hook is on line
+        // 2, `lines(of:)`).
+        try "let a = 1 // c\u{2028}\"\nlet s = \"open\n"
+            .write(to: testsRoot.appendingPathComponent("ProbeExoticUnresolved.swift"), atomically: true, encoding: .utf8)
+        try "let a = 1;\u{000B}func repositoryRoot() throws -> URL { fatalError() }\n"
+            .write(to: testsRoot.appendingPathComponent("ProbeVTDecl.swift"), atomically: true, encoding: .utf8)
+        try "let s = \"a\u{2028}b\"\nlet h = environment[\"VVTERM_PINS_SOURCE_ROOT\"]\n"
+            .write(to: testsRoot.appendingPathComponent("ProbeLSStringHook.swift"), atomically: true, encoding: .utf8)
 
         let violations = try PinScanCensus.violations(repositoryRoot: root)
         #expect(
@@ -225,6 +256,18 @@ struct PinScanCensusPinsTests {
         #expect(
             violations.contains { $0.contains("cannot analyze: VVTermTests/ProbeCRLFUnresolved.swift:3 opens") },
             "a CRLF unterminated string opened on line 3 must be named :3 (`lineNumber(at:)`); got:\n\(violations.filter { $0.contains("ProbeCRLFUnresolved") }.joined(separator: "\n"))"
+        )
+        #expect(
+            violations.contains { $0.contains("cannot analyze: VVTermTests/ProbeExoticUnresolved.swift:2 opens") },
+            "a U+2028 separator in a comment must not count as a line before the line-2 unterminated string (`lineNumber(at:)`); got:\n\(violations.filter { $0.contains("ProbeExoticUnresolved") }.joined(separator: "\n"))"
+        )
+        #expect(
+            violations.contains { $0.contains("unexpected declaration: VVTermTests/ProbeVTDecl.swift:1 declares `func repositoryRoot(`") },
+            "U+000B code whitespace must not count as a line before the line-1 declaration (`declarationLineNumbers`); got:\n\(violations.filter { $0.contains("ProbeVTDecl") }.joined(separator: "\n"))"
+        )
+        #expect(
+            violations.contains { $0.contains("unexpected hook use: VVTermTests/ProbeLSStringHook.swift:2 reads") },
+            "a U+2028 inside a single-line string must not count as a line before the line-2 hook (`lines(of:)`); got:\n\(violations.filter { $0.contains("ProbeLSStringHook") }.joined(separator: "\n"))"
         )
     }
 
