@@ -12,7 +12,9 @@
 //
 //  The `maskCode*` tests below pin `PinScanCensus.maskedCode`'s string- and
 //  comment-aware semantics and its fail-closed unterminated-construct report
-//  (fold round 3, CR-1/CR-2/CR-3).
+//  (fold round 3, CR-1/CR-2/CR-3; fold round 4, F1/F2/F4: CRLF newlines,
+//  comments inside interpolation bodies, raw-string interpolation and
+//  multi-hash closing).
 
 import Foundation
 import Testing
@@ -28,33 +30,93 @@ struct PinScanCensusPinsTests {
         )
     }
 
-    /// The mask's permanent semantic contract (fold round 3). CR-1's `/*` in a
-    /// raw string, CR-2's `//` in a string, CR-3's multiline-literal tokens and
-    /// the interpolation boundary are all pinned here, so the census cannot
-    /// silently regress to the comment-only scanner that hid
+    /// The mask's permanent semantic contract (fold rounds 3-4). CR-1's `/*` in
+    /// a raw string, CR-2's `//` in a string, CR-3's multiline-literal tokens,
+    /// the interpolation boundary, CRLF line endings (F1), comments inside an
+    /// interpolation body (F2/F4) and the raw-string `\#(`/multi-hash closing
+    /// semantics (F3) are all pinned here, so the census cannot silently
+    /// regress to the comment-only scanner that hid
     /// `WorkflowPrepareXcodeBuildPinsTests.swift` lines 351-479.
+    ///
+    /// A `(name, input, expectedMask)` case is resolved: the mask must equal
+    /// `expectedMask` with no unresolved offset. The fail-closed table below
+    /// carries the constructs that must instead report their opening offset and
+    /// restore the tail verbatim (an unterminated raw string, a backslash at
+    /// EOF and unterminated interpolation comments among them), so a disabled
+    /// fail-closed signal turns this test red too.
     @Test
     func maskCodeGoldenCorpus() {
-        let blanked: [(input: String, expected: String)] = [
-            ("let a = 1 // tail\nlet b = 2", "let a = 1        \nlet b = 2"),
-            ("let a = 1 /* block */ let b = 2", "let a = 1             let b = 2"),
-            ("/* a /* nested */ b */ let x = 1", "                       let x = 1"),
+        let resolved: [(name: String, input: String, expected: String)] = [
+            ("line-comment-lf", "let a = 1 // tail\nlet b = 2", "let a = 1        \nlet b = 2"),
+            ("line-comment-crlf", "let a = 1 // tail\r\nlet b = 2", "let a = 1        \r\nlet b = 2"),
+            ("block-comment-lf", "let a = 1 /* block */ let b = 2", "let a = 1             let b = 2"),
+            ("block-comment-crlf", "let a = 1 /* block */\r\nlet b = 2", "let a = 1            \r\nlet b = 2"),
+            ("nested-block", "/* a /* nested */ b */ let x = 1", "                       let x = 1"),
             // CR-2: a `//` inside a string does not blank the rest of the line.
-            ("let s = \"//\"; func repositoryRoot()", "let s =     ; func repositoryRoot()"),
+            ("slashslash-in-string", "let s = \"//\"; func repositoryRoot()", "let s =     ; func repositoryRoot()"),
             // CR-1: a `/*` inside a raw string does not open a block comment.
-            ("#\"a /* b \"#; let x = 1", "           ; let x = 1"),
+            ("blockopen-in-raw-string", "#\"a /* b \"#; let x = 1", "           ; let x = 1"),
             // An interpolation body is code; a nested string inside it is blanked.
-            ("let s = \"\\(d[\"k\"]) // c\"\nlet y = 1", "let s =    d[   ]       \nlet y = 1"),
+            ("interp-nested-string", "let s = \"\\(d[\"k\"]) // c\"\nlet y = 1", "let s =    d[   ]       \nlet y = 1"),
             // CR-3: a multiline literal's `func` / `repositoryRoot()` are blanked.
-            ("let s = \"\"\"\nfunc\nrepositoryRoot()\n\"\"\"\nlet x = 1", "let s =    \n    \n                \n   \nlet x = 1"),
+            ("multiline-literal-lf", "let s = \"\"\"\nfunc\nrepositoryRoot()\n\"\"\"\nlet x = 1", "let s =    \n    \n                \n   \nlet x = 1"),
+            // F1: a CRLF file keeps its newline graphemes in the mask.
+            ("multiline-literal-crlf", "let s = \"\"\"\r\nfunc\r\nrepositoryRoot()\r\n\"\"\"\r\nlet x = 1", "let s =    \r\n    \r\n                \r\n   \r\nlet x = 1"),
+            // `*/` before any `/*` is plain code; only the real block blanks.
+            ("stray-close-before-open", "*/ let a = 1 /* c */ let b = 2", "*/ let a = 1         let b = 2"),
+            ("stray-close-in-string", "let a = \"*/\"; /* c */ let b = 2", "let a =     ;         let b = 2"),
+            // An escaped quote does not close the literal.
+            ("escaped-quote", "let s = \"a \\\" b\"; let x = 1", "let s =         ; let x = 1"),
+            // F3/G2: a raw string's `\#( … )` body is code and stays visible.
+            ("raw-interp-hash1", "#\"a \\#(x) b\"#", "       x     "),
+            ("raw-interp-hash2", "##\"a \\##(x) b\"##", "         x      "),
+            // F3/G3: `##"…"##` may contain a `"#` sequence and closes on `"##`.
+            ("raw-hash2-closing", "##\"a \"# b\"##", "            "),
+            // F3: `#"""…"""#` is a raw multiline string.
+            ("raw-multiline", "let s = #\"\"\"\nfunc\nrepositoryRoot()\n\"\"\"#\nlet x = 1", "let s =     \n    \n                \n    \nlet x = 1"),
+            // F2/F4: comments inside an interpolation body are skipped by the
+            // close scan, so a `(`/`)` in the comment is not a bracket.
+            ("interp-block-comment-open-paren", "let s = \"\\(a /* ( */ + b)\"\nfunc repositoryRoot()", "let s =    a         + b  \nfunc repositoryRoot()"),
+            ("interp-block-comment-close-paren", "let s = \"\\(x /* ) */ + 2)\"", "let s =    x         + 2  "),
+            ("interp-line-comment-paren", "let s = \"\\(a // )\n + b)\"\nlet y = 1", "let s =    a     \n + b  \nlet y = 1"),
+            ("interp-nested-block-comment", "let s = \"\\(a /* ( /* ) */ */ + b)\"\nlet y = 1", "let s =    a                 + b  \nlet y = 1"),
         ]
-        for c in blanked {
+        for c in resolved {
             let mask = PinScanCensus.maskedCode(c.input, blankingStringContents: true)
             #expect(
                 mask.text == c.expected,
-                "maskedCode(\(c.input.debugDescription)) diverged: \(mask.text.debugDescription)"
+                "maskedCode(\(c.name)) diverged: \(mask.text.debugDescription)"
             )
-            #expect(mask.unresolvedOffset == nil)
+            #expect(
+                mask.unresolvedOffset == nil,
+                "maskedCode(\(c.name)) unexpectedly unresolved at offset \(mask.unresolvedOffset.map(String.init) ?? "nil")"
+            )
+        }
+
+        // Fail-closed constructs: the mask restores the tail verbatim and
+        // reports the opening character offset instead of blanking silently.
+        let unresolved: [(name: String, input: String, expected: String, offset: Int)] = [
+            ("unterminated-block", "let a = 1\n/* open\nlet b = 2", "let a = 1\n/* open\nlet b = 2", 10),
+            ("unterminated-string", "let a = 1\nlet s = \"open", "let a = 1\nlet s = \"open", 18),
+            // F3: an unterminated raw string and a backslash at EOF both fail closed.
+            ("unterminated-raw-string", "let a = 1\nlet s = #\"open", "let a = 1\nlet s = #\"open", 18),
+            ("backslash-at-eof", "let s = \"a\\", "let s = \"a\\", 8),
+            // The string before a stray `*/` is blanked, then `/* open` is the opener.
+            ("stray-close-then-open-unclosed", "let a = \"*/\"; /* open\nlet b = 2", "let a =     ; /* open\nlet b = 2", 14),
+            // F2: an unterminated comment inside an interpolation cannot resolve.
+            ("interp-block-comment-unterminated", "let s = \"\\(1 /* open", "let s = \"\\(1 /* open", 8),
+            ("interp-line-comment-unterminated", "let s = \"\\(1 // open", "let s = \"\\(1 // open", 8),
+        ]
+        for c in unresolved {
+            let mask = PinScanCensus.maskedCode(c.input, blankingStringContents: true)
+            #expect(
+                mask.text == c.expected,
+                "maskedCode(\(c.name)) tail diverged: \(mask.text.debugDescription)"
+            )
+            #expect(
+                mask.unresolvedOffset == c.offset,
+                "maskedCode(\(c.name)) unresolved offset \(mask.unresolvedOffset.map(String.init) ?? "nil") != \(c.offset)"
+            )
         }
         // The blanking mask hides the hook needle in a key literal...
         #expect(
@@ -70,7 +132,9 @@ struct PinScanCensusPinsTests {
     }
 
     /// Fail-closed: an unresolvable construct is reported by offset and the tail
-    /// is restored verbatim, never silently blanked.
+    /// is restored verbatim, never silently blanked. The golden corpus pins the
+    /// wider fail-closed set (raw string, backslash at EOF, interpolation
+    /// comments); these two stay as the canonical CR-1-era pair.
     @Test
     func maskCodeFailsClosedOnUnterminatedConstructs() {
         let block = PinScanCensus.maskedCode("let a = 1\n/* open\nlet b = 2", blankingStringContents: true)
