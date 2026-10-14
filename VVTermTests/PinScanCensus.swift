@@ -49,6 +49,16 @@
 //    semantics. The golden lexer corpus is the semantic contract.
 //  - The cohort list is a deliberate record: `PinScanCensusPinsTests` asserts
 //    its size and digest, so editing `expectedCohort` is not a silent defeat.
+//  - The call-site clause binds **per-file totals**, not per-site identity: a
+//    count-neutral paired swap (one R1 site → R2 *and* one R2 site → R1, so
+//    the 5/6 totals hold) passes both surfaces. It needs two coordinated
+//    edits; recorded as a residual rather than claiming the clause is
+//    per-site (impl lens 2 L2-1, measured).
+//  - `censusFiles` is an unpinned exemption route: a file added there leaves
+//    the declaration scan while `pinScanAllowlistIsEmpty` stays green (impl
+//    lens 2 L2-3, measured).
+//  - `expectedCallSites` keys are never checked to resolve to a scanned file,
+//    so a phantom key is silent (impl lens 2 L2-4, measured).
 
 import Foundation
 

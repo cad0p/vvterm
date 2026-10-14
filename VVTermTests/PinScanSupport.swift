@@ -17,7 +17,7 @@
 //
 //  Scanner selection (callers → semantics → known limits). Pick deliberately:
 //
-//  - `strippingComments(_:)` — the canonical hash-unaware scanner (86 call
+//  - `strippingComments(_:)` — the canonical hash-unaware scanner (85 call
 //    sites); it covers `"…"`, `"""…"""` and `\` escapes, but not raw
 //    strings (`#"…"#`) or interpolations: a raw string with an embedded
 //    quote desynchronizes it, and a `//` inside an interpolation is not a
