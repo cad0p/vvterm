@@ -9779,4 +9779,15 @@ CASES = [
             "reject-overrefusal-runner-path-directory-listing.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job references the runner's env file (line 17) without an extractable write (refusing rather than guessing)",
         ]
     },
+    {
+        "id": "reject-overrefusal-runner-path-setenv-collision",
+        "files": [
+            "reject-overrefusal-runner-path-setenv-collision.yml"
+        ],
+        "exit": 1,
+        "base_exit": 0,
+        "diagnostics": [
+            "reject-overrefusal-runner-path-setenv-collision.yml:22: run-id: '${{ env.SOURCE_RUN_ID }}' cannot be proven — a preceding step in this job writes to the runner's env file (line 17) with a payload the gate cannot extract (refusing rather than guessing)",
+        ]
+    },
 ]
