@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Fixture: over-refusal boundary: a read-only mention of the runner path with no extractable write
+# Fixture: NOFLIP cost — over-refusal boundary: a read-only mention of the runner path with no extractable write
 jobs:
   build:
     runs-on: ubuntu-latest

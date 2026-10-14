@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Fixture: over-refusal boundary: listing the runner command directory (the cost of the directory widening)
+# Fixture: NOFLIP cost — over-refusal boundary: listing the runner command directory (the cost of the directory widening)
 jobs:
   build:
     runs-on: ubuntu-latest
