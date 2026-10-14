@@ -260,4 +260,478 @@ enum PinScan {
     static func isInside(_ block: Range<String.Index>, _ index: String.Index) -> Bool {
         block.lowerBound < index && index < block.upperBound
     }
+
+    /// A comment-stripped copy of `source` that keeps string-literal contents
+    /// verbatim: characters inside `//` line comments and nested `/* … */`
+    /// block comments become spaces, while string contents — including raw
+    /// strings (`#"…"#`, any hash count) and interpolations — are copied with
+    /// the literal, so a `//` inside a string is not read as a comment. LF
+    /// characters are preserved so slice anchors resolve. This is R1, the
+    /// scanner behind the login-token scan in `SSH/SSHProbeShellPinsTests`.
+    ///
+    /// Known limits (measured and pinned by `PinScanSupportGoldenTests`, not
+    /// fixed by the #453 move — the fix is tracked in issue #455): the
+    /// interpolation close search is comment-blind, so a `(` inside an
+    /// interpolation comment inflates the bracket depth and the tail is copied
+    /// verbatim (a following `//` stays as code — under-strip); and a `\r\n`
+    /// inside a `//` comment is blanked as one `Character`, so the line break
+    /// disappears from the output.
+    static func strippingCommentsKeepingLiterals(_ source: String) -> String {
+        scanning(source, blankingStringContents: false)
+    }
+
+    /// A comment-stripped copy of `source` whose string-literal *contents* are
+    /// blanked (delimiters and LF characters kept): R2, the scanner behind the
+    /// call-form scans in `SSH/SSHProbeShellPinsTests`, so a call-form literal
+    /// such as `"wrapPOSIXShellCommand("` cannot satisfy a call pin. It
+    /// recognizes one-line, multi-line and raw strings (hash count matched)
+    /// and keeps interpolation bodies (`\( … )`, `\#( … )`) as code by
+    /// scanning them recursively.
+    ///
+    /// Known limits (measured and pinned by `PinScanSupportGoldenTests`, not
+    /// fixed by the #453 move — the fix is tracked in issue #455): the same
+    /// comment-blind interpolation close desynchronizes the scan, and the tail
+    /// — with its newlines — is dropped, so the output can shrink; a `\r\n`
+    /// inside a `//` comment is blanked as one `Character` like R1.
+    static func strippingCommentsAndStrings(_ source: String) -> String {
+        Self.scanning(source, blankingStringContents: true)
+    }
+
+    /// The single worker behind `strippingCommentsKeepingLiterals` and
+    /// `strippingCommentsAndStrings`. Comments become spaces in both; LF
+    /// characters are preserved so slice anchors and range arithmetic resolve.
+    /// When blanking string contents, an interpolation (`\( … )`) is kept as
+    /// code — its body is scanned recursively, because a real call inside an
+    /// interpolation is not a string decoy. When copying strings verbatim the
+    /// whole literal, interpolation included, is kept as text, so the
+    /// login-token scan keeps seeing tokens inside interpolated literals.
+    static func scanning(
+        _ source: String,
+        blankingStringContents: Bool
+    ) -> String {
+        let characters = Array(source)
+        var result: [Character] = []
+        result.reserveCapacity(characters.count)
+        result.append(contentsOf: scan(
+            characters,
+            from: 0,
+            to: characters.count,
+            blankingStringContents: blankingStringContents
+        ))
+        return String(result)
+    }
+
+    /// The recursive worker behind `scanning(_:blankingStringContents:)`.
+    static func scan(
+        _ characters: [Character],
+        from start: Int,
+        to end: Int,
+        blankingStringContents: Bool
+    ) -> [Character] {
+        var result: [Character] = []
+        result.reserveCapacity(end - start)
+        var index = start
+        var blockCommentDepth = 0
+        var inLineComment = false
+        while index < end {
+            let character = characters[index]
+            if inLineComment {
+                if character == "\n" {
+                    inLineComment = false
+                    result.append("\n")
+                } else {
+                    result.append(" ")
+                }
+                index += 1
+                continue
+            }
+            if blockCommentDepth > 0 {
+                if character == "/", index + 1 < end, characters[index + 1] == "*" {
+                    blockCommentDepth += 1
+                    result.append(contentsOf: "  ")
+                    index += 2
+                } else if character == "*", index + 1 < end, characters[index + 1] == "/" {
+                    blockCommentDepth -= 1
+                    result.append(contentsOf: "  ")
+                    index += 2
+                } else {
+                    result.append(character == "\n" ? "\n" : " ")
+                    index += 1
+                }
+                continue
+            }
+            if character == "/", index + 1 < end, characters[index + 1] == "/" {
+                inLineComment = true
+                result.append(contentsOf: "  ")
+                index += 2
+                continue
+            }
+            if character == "/", index + 1 < end, characters[index + 1] == "*" {
+                blockCommentDepth = 1
+                result.append(contentsOf: "  ")
+                index += 2
+                continue
+            }
+            if let delimiter = Self.stringDelimiter(at: index, in: characters, to: end) {
+                if blankingStringContents {
+                    let scanned = Self.scannedString(
+                        characters,
+                        openingAt: index,
+                        delimiter: delimiter
+                    )
+                    result.append(contentsOf: scanned.characters)
+                    index = scanned.afterDelimiter
+                } else {
+                    let close = Self.stringEnd(from: index, delimiter: delimiter, in: characters)
+                    result.append(contentsOf: characters[index..<close.index])
+                    index = close.index
+                }
+                continue
+            }
+            result.append(character)
+            index += 1
+        }
+        return result
+    }
+
+    /// The string-delimiter sequence beginning at `start` (`"`, `"""`, `#"`,
+    /// `##"`, …), or nil when the characters there do not open a string.
+    static func stringDelimiter(
+        at start: Int,
+        in characters: [Character],
+        to end: Int
+    ) -> String? {
+        var cursor = start
+        while cursor < end, characters[cursor] == "#" {
+            cursor += 1
+        }
+        guard cursor < end, characters[cursor] == "\"" else { return nil }
+        let hashes = String(repeating: "#", count: cursor - start)
+        if cursor + 2 < end, characters[cursor + 1] == "\"", characters[cursor + 2] == "\"" {
+            return hashes + "\"\"\""
+        }
+        return hashes + "\""
+    }
+
+    /// A copy of the string literal that opens at `start`: the content is
+    /// blanked while interpolation bodies are scanned recursively so their
+    /// calls stay visible — `\( … )` for the quoted strings and `\#( … )`
+    /// (the delimiter's hash count) for raw strings — and the closing
+    /// delimiter is preserved. Returns the copy and the index just past the
+    /// literal.
+    static func scannedString(
+        _ characters: [Character],
+        openingAt start: Int,
+        delimiter: String
+    ) -> (characters: [Character], afterDelimiter: Int) {
+        var result: [Character] = []
+        result.append(contentsOf: characters[start..<(start + delimiter.count)])
+        let contentStart = start + delimiter.count
+        let close = Self.stringEnd(from: start, delimiter: delimiter, in: characters)
+        var cursor = contentStart
+        // Raw-string delimiters are hash-*prefixed* (`#"`, `##"`, `#"""`),
+        // so raw-ness is `hasPrefix`, not `hasSuffix`.
+        let isRaw = delimiter.hasPrefix("#")
+        let hashCount = delimiter.filter { $0 == "#" }.count
+        while cursor < close.contentEnd {
+            let character = characters[cursor]
+            if character == "\\" {
+                var escapeIndex = cursor + 1
+                if isRaw {
+                    var hashes = 0
+                    while escapeIndex < close.contentEnd, characters[escapeIndex] == "#" {
+                        hashes += 1
+                        escapeIndex += 1
+                    }
+                    guard hashes == hashCount else {
+                        // Fewer/more hashes than the delimiter: literal text,
+                        // blanked with the rest of the content.
+                        result.append(" ")
+                        cursor += 1
+                        continue
+                    }
+                }
+                if escapeIndex < close.contentEnd, characters[escapeIndex] == "(" {
+                    let interpolation = Self.interpolationEnd(
+                        in: characters,
+                        from: escapeIndex + 1,
+                        to: close.contentEnd
+                    )
+                    result.append(contentsOf: characters[cursor...escapeIndex])
+                    result.append(contentsOf: scan(
+                        characters,
+                        from: interpolation.openDepth,
+                        to: interpolation.closeDepth,
+                        blankingStringContents: true
+                    ))
+                    result.append(")")
+                    cursor = interpolation.closeDepth + 1
+                    continue
+                }
+                if !isRaw, cursor + 1 < close.contentEnd {
+                    result.append(character)
+                    result.append(contentsOf: Self.blanked(characters, from: cursor + 1, to: min(cursor + 2, close.contentEnd)))
+                    cursor += 2
+                    continue
+                }
+            }
+            result.append(character == "\n" ? "\n" : " ")
+            cursor += 1
+        }
+        result.append(contentsOf: characters[close.contentEnd..<close.index])
+        return (result, close.index)
+    }
+
+    /// The end of an interpolation whose body starts at `start`: the body
+    /// (returned as `openDepth..<closeDepth`) ends at the matching `)` at
+    /// bracket depth zero; a `)` inside a string literal inside the body does
+    /// not close it, and a nested interpolation is skipped along with its own
+    /// string. A body that never closes runs to `end` and returns an empty
+    /// span (fail-closed: nothing is executed, the text stays blanked).
+    static func interpolationEnd(
+        in characters: [Character],
+        from start: Int,
+        to end: Int
+    ) -> (openDepth: Int, closeDepth: Int) {
+        var cursor = start
+        var depth = 0
+        while cursor < end {
+            let character = characters[cursor]
+            if character == "(" || character == "[" || character == "{" {
+                depth += 1
+                cursor += 1
+            } else if character == ")" {
+                if depth == 0 {
+                    return (start, cursor)
+                }
+                depth -= 1
+                cursor += 1
+            } else if character == "]" || character == "}" {
+                if depth > 0 { depth -= 1 }
+                cursor += 1
+            } else if let delimiter = Self.stringDelimiter(at: cursor, in: characters, to: end) {
+                cursor = Self.stringEnd(from: cursor, delimiter: delimiter, in: characters).index
+            } else {
+                cursor += 1
+            }
+        }
+        return (end, end)
+    }
+
+    /// The end of the string literal that opens at `start`, where the opening
+    /// delimiter is `delimiter` (one quote plus its hash prefix, three quotes,
+    /// or one quote). `contentEnd` is the index just past the content (where
+    /// the closing sequence begins); `closing` is that sequence (the quote or
+    /// `"""` suffix); `index` is the first character after it. A raw string
+    /// has no escapes; a non-raw one treats a backslash as escaping the next
+    /// character — including `\(`, whose interpolation contents are scanned
+    /// with a bracket stack (and any string inside them skipped) so a `"` or
+    /// `)` inside an interpolation cannot terminate the outer literal.
+    static func stringEnd(
+        from start: Int,
+        delimiter: String,
+        in characters: [Character]
+    ) -> (contentEnd: Int, closing: [Character], index: Int) {
+        let isRaw = delimiter.hasPrefix("#")
+        let quoteCount = delimiter.filter { $0 == "\"" }.count
+        let hashes = delimiter.filter { $0 == "#" }.count
+        var cursor = start + delimiter.count
+        var bracketStack: [Character] = []
+        while cursor < characters.count {
+            if isRaw {
+                let closingLength = quoteCount + hashes
+                if cursor + closingLength <= characters.count,
+                   Array(characters[cursor..<(cursor + closingLength)])
+                    == Array(repeating: "\"", count: quoteCount)
+                        + Array(repeating: "#", count: hashes) {
+                    return (cursor, Array(characters[cursor..<(cursor + closingLength)]), cursor + closingLength)
+                }
+                cursor += 1
+            } else if quoteCount == 3 {
+                if cursor + 3 <= characters.count,
+                   characters[cursor] == "\"",
+                   characters[cursor + 1] == "\"",
+                   characters[cursor + 2] == "\"" {
+                    return (cursor, Array("\"\"\""), cursor + 3)
+                }
+                cursor += 1
+            } else if characters[cursor] == "\\" {
+                if cursor + 1 < characters.count, characters[cursor + 1] == "(" {
+                    cursor = Self.interpolationEnd(in: characters, from: cursor + 2, to: characters.count).closeDepth + 1
+                } else {
+                    cursor += 2
+                }
+            } else if characters[cursor] == "\"" {
+                return (cursor, Array("\""), cursor + 1)
+            } else if bracketStack.isEmpty {
+                cursor += 1
+            } else {
+                let character = characters[cursor]
+                if character == "(" || character == "[" || character == "{" {
+                    bracketStack.append(character)
+                } else if character == ")" || character == "]" || character == "}" {
+                    if Self.matches(closing: character, opening: bracketStack.last) {
+                        bracketStack.removeLast()
+                    }
+                }
+                cursor += 1
+            }
+        }
+        return (characters.count, [], characters.count)
+    }
+
+    /// Whether a closing bracket matches the current top of the interpolation
+    /// bracket stack.
+    static func matches(closing: Character, opening: Character?) -> Bool {
+        switch closing {
+        case ")": return opening == "("
+        case "]": return opening == "["
+        case "}": return opening == "{"
+        default: return false
+        }
+    }
+
+    /// `characters[from..<to]` with every non-newline character replaced by a
+    /// space (LF characters are preserved so the scan keeps line structure).
+    static func blanked(
+        _ characters: [Character],
+        from: Int,
+        to: Int
+    ) -> [Character] {
+        guard from < to else { return [] }
+        return characters[from..<to].map { $0 == "\n" ? "\n" : " " }
+    }
+
+    /// Blanks `//` and nested `/* */` comments plus string interiors while
+    /// preserving the UTF-16 length (LF units are kept), so UTF-16 regex match
+    /// offsets and line numbers stay aligned with the source. Hash-prefix
+    /// aware: `#"…"#`, `##"…"##`, … close only on `"` + the same number of
+    /// `#`. This is R3, the scanner behind the declared-test attribution walk
+    /// in `WorkflowShardSplitPinsTests`, whose consumers index the result with
+    /// `NSRange`/UTF-16 offsets.
+    ///
+    /// Known limit (measured and pinned by `PinScanSupportGoldenTests`, not
+    /// fixed by the #453 move — the fix is tracked in issue #455): a nested
+    /// `"` inside an interpolation body exits the literal early (nested-quote
+    /// desync), leaking the inner token into code; the output's UTF-16 length
+    /// still matches the input's.
+    static func strippingCommentsAndStringsPreservingUTF16(_ source: String) -> String {
+        let units = Array(source.utf16)
+        let slash: UInt16 = 0x2F
+        let star: UInt16 = 0x2A
+        let newline: UInt16 = 0x0A
+        let space: UInt16 = 0x20
+        var result: [UInt16] = []
+        result.reserveCapacity(units.count)
+        var index = 0
+        var inLineComment = false
+        var blockDepth = 0
+        while index < units.count {
+            let unit = units[index]
+            if inLineComment {
+                if unit == newline {
+                    inLineComment = false
+                    result.append(unit)
+                } else {
+                    result.append(space)
+                }
+                index += 1
+                continue
+            }
+            if blockDepth > 0 {
+                if unit == slash, index + 1 < units.count, units[index + 1] == star {
+                    blockDepth += 1
+                    result.append(space)
+                    result.append(space)
+                    index += 2
+                } else if unit == star, index + 1 < units.count, units[index + 1] == slash {
+                    blockDepth -= 1
+                    result.append(space)
+                    result.append(space)
+                    index += 2
+                } else {
+                    result.append(unit == newline ? newline : space)
+                    index += 1
+                }
+                continue
+            }
+            if unit == slash, index + 1 < units.count, units[index + 1] == slash {
+                inLineComment = true
+                result.append(space)
+                result.append(space)
+                index += 2
+                continue
+            }
+            if unit == slash, index + 1 < units.count, units[index + 1] == star {
+                blockDepth = 1
+                result.append(space)
+                result.append(space)
+                index += 2
+                continue
+            }
+            if unit == 0x22 || unit == 0x23 {
+                if let end = stringLiteralEnd(in: units, at: index) {
+                    var cursor = index
+                    while cursor < end {
+                        result.append(units[cursor] == newline ? newline : space)
+                        cursor += 1
+                    }
+                    index = end
+                    continue
+                }
+            }
+            result.append(unit)
+            index += 1
+        }
+        return String(decoding: result, as: UTF16.self)
+    }
+
+    /// End (exclusive UTF-16 offset) of the string literal opening at `start`
+    /// (a `"` or the first `#` of a raw prefix), or nil when `start` opens no
+    /// literal. Unterminated literals run to EOF, which fails the count closed.
+    static func stringLiteralEnd(in units: [UInt16], at start: Int) -> Int? {
+        let hash: UInt16 = 0x23
+        let quote: UInt16 = 0x22
+        let backslash: UInt16 = 0x5C
+        var cursor = start
+        var hashes = 0
+        while cursor < units.count, units[cursor] == hash {
+            hashes += 1
+            cursor += 1
+        }
+        guard cursor < units.count, units[cursor] == quote else { return nil }
+        let triple = cursor + 2 < units.count
+            && units[cursor + 1] == quote
+            && units[cursor + 2] == quote
+        var index = cursor + (triple ? 3 : 1)
+        while index < units.count {
+            if hashes == 0, units[index] == backslash {
+                index += 2
+                continue
+            }
+            if units[index] == quote {
+                if triple {
+                    if index + 2 < units.count,
+                       units[index + 1] == quote,
+                       units[index + 2] == quote,
+                       matchesHashSuffix(units, at: index + 3, count: hashes) {
+                        return index + 3 + hashes
+                    }
+                } else if matchesHashSuffix(units, at: index + 1, count: hashes) {
+                    return index + 1 + hashes
+                }
+            }
+            index += 1
+        }
+        return units.count
+    }
+
+    static func matchesHashSuffix(_ units: [UInt16], at index: Int, count: Int) -> Bool {
+        guard count > 0 else { return true }
+        guard index + count <= units.count else { return false }
+        for offset in 0..<count where units[index + offset] != 0x23 {
+            return false
+        }
+        return true
+    }
 }

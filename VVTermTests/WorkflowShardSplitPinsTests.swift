@@ -692,7 +692,7 @@ struct WorkflowShardSplitPinsTests {
             } catch {
                 throw PinFailure("could not read \(file.path): \(error) — re-derive this pin (issue #362)")
             }
-            let blanked = strippingCommentsAndStrings(source)
+            let blanked = PinScan.strippingCommentsAndStringsPreservingUTF16(source)
             blankedByFile[file.path] = blanked
             let declarations = typeDeclarations(in: blanked)
             declarationsByFile[file.path] = declarations
@@ -904,132 +904,6 @@ struct WorkflowShardSplitPinsTests {
             cursor = found.location + found.length
         }
         return line
-    }
-
-    /// Blanks `//` and nested `/* */` comments plus string interiors while
-    /// preserving the UTF-16 length (newlines are kept), so regex match
-    /// offsets and line numbers stay aligned with the source. Hash-prefix
-    /// aware: `#"…"#`, `##"…"##`, … close only on `"` + the same number of
-    /// `#` (re-lens-1 MINOR-2). Scanner-local by design; the existing
-    /// `strippingComments` (string contents kept) is untouched for assertion 3.
-    private static func strippingCommentsAndStrings(_ source: String) -> String {
-        let units = Array(source.utf16)
-        let slash: UInt16 = 0x2F
-        let star: UInt16 = 0x2A
-        let newline: UInt16 = 0x0A
-        let space: UInt16 = 0x20
-        var result: [UInt16] = []
-        result.reserveCapacity(units.count)
-        var index = 0
-        var inLineComment = false
-        var blockDepth = 0
-        while index < units.count {
-            let unit = units[index]
-            if inLineComment {
-                if unit == newline {
-                    inLineComment = false
-                    result.append(unit)
-                } else {
-                    result.append(space)
-                }
-                index += 1
-                continue
-            }
-            if blockDepth > 0 {
-                if unit == slash, index + 1 < units.count, units[index + 1] == star {
-                    blockDepth += 1
-                    result.append(space)
-                    result.append(space)
-                    index += 2
-                } else if unit == star, index + 1 < units.count, units[index + 1] == slash {
-                    blockDepth -= 1
-                    result.append(space)
-                    result.append(space)
-                    index += 2
-                } else {
-                    result.append(unit == newline ? newline : space)
-                    index += 1
-                }
-                continue
-            }
-            if unit == slash, index + 1 < units.count, units[index + 1] == slash {
-                inLineComment = true
-                result.append(space)
-                result.append(space)
-                index += 2
-                continue
-            }
-            if unit == slash, index + 1 < units.count, units[index + 1] == star {
-                blockDepth = 1
-                result.append(space)
-                result.append(space)
-                index += 2
-                continue
-            }
-            if unit == 0x22 || unit == 0x23 {
-                if let end = stringLiteralEnd(in: units, at: index) {
-                    var cursor = index
-                    while cursor < end {
-                        result.append(units[cursor] == newline ? newline : space)
-                        cursor += 1
-                    }
-                    index = end
-                    continue
-                }
-            }
-            result.append(unit)
-            index += 1
-        }
-        return String(decoding: result, as: UTF16.self)
-    }
-
-    /// End (exclusive UTF-16 offset) of the string literal opening at `start`
-    /// (a `"` or the first `#` of a raw prefix), or nil when `start` opens no
-    /// literal. Unterminated literals run to EOF, which fails the count closed.
-    private static func stringLiteralEnd(in units: [UInt16], at start: Int) -> Int? {
-        let hash: UInt16 = 0x23
-        let quote: UInt16 = 0x22
-        let backslash: UInt16 = 0x5C
-        var cursor = start
-        var hashes = 0
-        while cursor < units.count, units[cursor] == hash {
-            hashes += 1
-            cursor += 1
-        }
-        guard cursor < units.count, units[cursor] == quote else { return nil }
-        let triple = cursor + 2 < units.count
-            && units[cursor + 1] == quote
-            && units[cursor + 2] == quote
-        var index = cursor + (triple ? 3 : 1)
-        while index < units.count {
-            if hashes == 0, units[index] == backslash {
-                index += 2
-                continue
-            }
-            if units[index] == quote {
-                if triple {
-                    if index + 2 < units.count,
-                       units[index + 1] == quote,
-                       units[index + 2] == quote,
-                       matchesHashSuffix(units, at: index + 3, count: hashes) {
-                        return index + 3 + hashes
-                    }
-                } else if matchesHashSuffix(units, at: index + 1, count: hashes) {
-                    return index + 1 + hashes
-                }
-            }
-            index += 1
-        }
-        return units.count
-    }
-
-    private static func matchesHashSuffix(_ units: [UInt16], at index: Int, count: Int) -> Bool {
-        guard count > 0 else { return true }
-        guard index + count <= units.count else { return false }
-        for offset in 0..<count where units[index + offset] != 0x23 {
-            return false
-        }
-        return true
     }
 
     private static func allowlistFixture() throws -> AllowlistFixture {
