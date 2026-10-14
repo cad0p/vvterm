@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 1013
-    private static let expectedBaseVerdictCases = 570
+    private static let expectedManifestCases = 1027
+    private static let expectedBaseVerdictCases = 584
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -101,6 +101,20 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// refusal controls). The manifest must reference each one, and each file
     /// must exist, so deleting a fixture (or its case) is visible here.
     private static let requiredFixtures: [String] = [
+        "accept-runid-github-env-write-runner-path-benign-mention.yml",
+        "accept-runid-github-env-write-runner-path-literal-crossrun-echo.yml",
+        "reject-runid-github-env-write-runner-path-setenv-glob.yml",
+        "reject-runid-github-env-write-runner-path-dir-glob.yml",
+        "reject-runid-github-env-write-runner-path-find-split.yml",
+        "reject-runid-github-env-write-runner-path-substitution.yml",
+        "reject-runid-github-env-write-runner-path-literal-glob.yml",
+        "reject-runid-github-env-write-runner-path-literal-exact.yml",
+        "reject-runid-github-env-write-runner-path-literal-var-dir.yml",
+        "reject-runid-github-env-write-runner-path-bash-c.yml",
+        "reject-overrefusal-runner-path-explicit-literal.yml",
+        "reject-overrefusal-runner-path-var-literal.yml",
+        "reject-overrefusal-runner-path-mention-without-write.yml",
+        "reject-overrefusal-runner-path-directory-listing.yml",
         "accept-runid-github-env-write-sed-escaped-slash-benign-w-target.yml",
         "reject-runid-github-env-write-mention-window-brace-backtick-close.yml",
         "reject-runid-github-env-write-mention-window-brace-cmdsub-close.yml",
