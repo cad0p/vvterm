@@ -31,8 +31,10 @@
 //    left on purpose: Swift regex literals are not modeled — neither bare
 //    `/…/` nor *extended* `#/…/#` (the latter needs no escaping, so a `/*`
 //    inside it opens a block comment that a later string's `*/` "closes",
-//    hiding a declaration with `unresolved == nil`; pre-existing and silent,
-//    not fail-closed, with no occurrence in `VVTermTests`) — and the check is
+//    hiding a declaration with `unresolved == nil`; pre-existing, and that
+//    divergence can be silent when the stray `*/` resynchronizes the scan
+//    while some arrangements of the same construct instead fail closed with
+//    `cannot analyze`; no occurrence in `VVTermTests`) — and the check is
 //    still lexical, not semantic.
 //  - It cannot see the pre-existing inline depth-based root resolvers that
 //    never declared a migrated name and never read the hook
