@@ -193,19 +193,6 @@ struct SSHProbeShellPinsTests {
 
     // MARK: - String-aware scanning
 
-    /// A copy of `source` whose string-literal *contents* are blanked out
-    /// (delimiters and newlines kept), on top of the comment stripping. The
-    /// scan reads this so a string literal — including a call-form literal
-    /// such as `"wrapPOSIXShellCommand("` — cannot satisfy pin B/C/E's
-    /// call-form assertions. The blanker recognizes one-line, multi-line and
-    /// raw strings, and keeps interpolation bodies as code by scanning them
-    /// recursively — `\( … )` for the quoted strings and `\#( … )` (hash
-    /// count matched) for raw strings — so a call interpolated into a command
-    /// string is still counted.
-    private static func strippingCommentsAndStrings(_ source: String) -> String {
-        Self.scanning(source, blankingStringContents: true)
-    }
-
     /// Every `.swift` file under every app-target source root (see
     /// `appTargetSourceRoots()`), as repository-relative paths, recursively,
     /// plus the target's non-synchronized `Sources`-phase Swift references
@@ -637,7 +624,7 @@ struct SSHProbeShellPinsTests {
         // The recursive, fail-closed sweep: a new file (or a new literal in an
         // existing file) cannot adopt login semantics silently.
         for file in files {
-            let text = Self.strippingComments(try PinScan.source(file.path))
+            let text = PinScan.strippingCommentsKeepingLiterals(try PinScan.source(file.path))
             let tokenCount = Self.shFamilyLoginTokenCount(in: text)
             if tokenCount > 0 {
                 #expect(
@@ -657,7 +644,7 @@ struct SSHProbeShellPinsTests {
         // The sh-family file allowlist is exact: the enumerated functions, the
         // in-body occurrence count, and the whole-file count must all hold.
         for (path, allowed) in Self.expectedLoginShellSites {
-            let text = Self.strippingComments(try PinScan.source(path))
+            let text = PinScan.strippingCommentsKeepingLiterals(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -696,7 +683,7 @@ struct SSHProbeShellPinsTests {
         // declaration-only allowance (the `defaultLoginShellCommand`
         // declaration is the one emitter reference outside a func body).
         for (path, allowed) in Self.expectedLoginShellEmitterSites {
-            let text = Self.strippingComments(try PinScan.source(path))
+            let text = PinScan.strippingCommentsKeepingLiterals(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -763,7 +750,7 @@ struct SSHProbeShellPinsTests {
         )
 
         for file in files {
-            let text = Self.strippingCommentsAndStrings(try PinScan.source(file.path))
+            let text = PinScan.strippingCommentsAndStrings(try PinScan.source(file.path))
             if Self.loginWrapperCallCount(in: text) > 0 {
                 #expect(
                     Self.expectedLoginWrapperSites[file.path] != nil,
@@ -773,7 +760,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedLoginWrapperSites {
-            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
+            let text = PinScan.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -822,7 +809,7 @@ struct SSHProbeShellPinsTests {
     @Test
     func testConvertedProbeFilesUseTheNonLoginWrapperAtEverySite() throws {
         for (path, expected) in Self.expectedProbeWrapperOccurrences {
-            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
+            let text = PinScan.strippingCommentsAndStrings(try PinScan.source(path))
             let probeCount = Self.occurrences(of: "wrapPOSIXProbeCommand(", in: text).count
             #expect(
                 probeCount == expected,
@@ -835,7 +822,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for builder in Self.probeBuilders {
-            let text = Self.strippingCommentsAndStrings(try PinScan.source(builder.path))
+            let text = PinScan.strippingCommentsAndStrings(try PinScan.source(builder.path))
             let bodies = try Self.functionBodies(in: text)
             let matches = bodies.filter { $0.name == builder.function }
             #expect(
@@ -865,7 +852,7 @@ struct SSHProbeShellPinsTests {
         #expect(command.contains(RemoteTerminalBootstrap.shellSystemPathExport()))
         #expect(!command.contains("$HOME/.local/bin"))
 
-        let text = Self.strippingComments(try PinScan.source(path))
+        let text = PinScan.strippingCommentsKeepingLiterals(try PinScan.source(path))
         let bodies = try Self.functionBodies(in: text)
         let matches = bodies.filter { $0.name == "wrapPOSIXProbeCommand" }
         #expect(
@@ -910,11 +897,11 @@ struct SSHProbeShellPinsTests {
             // the reference count reads the string-blanked copy; the
             // `$HOME/.local/bin` literal can only live inside a string, so its
             // sweep reads the comment-stripped, string-verbatim copy.
-            let text = Self.strippingCommentsAndStrings(fileText)
+            let text = PinScan.strippingCommentsAndStrings(fileText)
             let references = Self.occurrences(of: "shellPathExport(", in: text).count
             let handRolled = Self.occurrences(
                 of: "$HOME/.local/bin",
-                in: Self.strippingComments(fileText)
+                in: PinScan.strippingCommentsKeepingLiterals(fileText)
             ).count
             if references > 0 || handRolled > 0 {
                 #expect(
@@ -925,7 +912,7 @@ struct SSHProbeShellPinsTests {
         }
 
         for (path, allowed) in Self.expectedShellPathExportSites {
-            let text = Self.strippingCommentsAndStrings(try PinScan.source(path))
+            let text = PinScan.strippingCommentsAndStrings(try PinScan.source(path))
             let bodies = try Self.functionBodies(in: text)
 
             for name in allowed {
@@ -962,328 +949,6 @@ struct SSHProbeShellPinsTests {
     }
 
     // MARK: - Source helpers
-
-    /// A comment-stripped copy of `source` for the token scans: characters
-    /// inside `//` line comments and nested `/* … */` block comments become
-    /// spaces; newlines are preserved, so slice anchors still resolve. String
-    /// contents are copied verbatim (so a `//` inside a literal is not read as
-    /// a comment); the scanner covers `"…"` (with `\` escapes), `"""…"""`,
-    /// raw strings (`#"…"#`, any hash count) and interpolation brackets. A
-    /// comment that sits inside an interpolation is preserved along with the
-    /// rest of the interpolation; the call-form scan
-    /// (`strippingCommentsAndStrings`) is the one that strips it.
-    private static func strippingComments(_ source: String) -> String {
-        scanning(source, blankingStringContents: false)
-    }
-
-    /// The single scanner behind the two views of a source file:
-    /// `strippingComments` (strings verbatim, for the login-token scan) and
-    /// `strippingCommentsAndStrings` (string contents blanked, for the
-    /// call-form scans). Comments become spaces in both; newlines are
-    /// preserved, so slice anchors and range arithmetic still resolve.
-    ///
-    /// When blanking string contents, an interpolation (`\( … )`) is kept as
-    /// code — its body is scanned recursively, because a real call inside an
-    /// interpolation (the production pattern: `"\(RemoteTerminalBootstrap
-    /// .shellPathExport()); …"`) is not a string decoy. When copying strings
-    /// verbatim the whole literal, interpolation included, is kept as text, so
-    /// the login-token scan keeps seeing tokens inside interpolated literals.
-    private static func scanning(
-        _ source: String,
-        blankingStringContents: Bool
-    ) -> String {
-        let characters = Array(source)
-        var result: [Character] = []
-        result.reserveCapacity(characters.count)
-        result.append(contentsOf: scan(
-            characters,
-            from: 0,
-            to: characters.count,
-            blankingStringContents: blankingStringContents
-        ))
-        return String(result)
-    }
-
-    /// The recursive worker behind `scanning(_:blankingStringContents:)`.
-    private static func scan(
-        _ characters: [Character],
-        from start: Int,
-        to end: Int,
-        blankingStringContents: Bool
-    ) -> [Character] {
-        var result: [Character] = []
-        result.reserveCapacity(end - start)
-        var index = start
-        var blockCommentDepth = 0
-        var inLineComment = false
-        while index < end {
-            let character = characters[index]
-            if inLineComment {
-                if character == "\n" {
-                    inLineComment = false
-                    result.append("\n")
-                } else {
-                    result.append(" ")
-                }
-                index += 1
-                continue
-            }
-            if blockCommentDepth > 0 {
-                if character == "/", index + 1 < end, characters[index + 1] == "*" {
-                    blockCommentDepth += 1
-                    result.append(contentsOf: "  ")
-                    index += 2
-                } else if character == "*", index + 1 < end, characters[index + 1] == "/" {
-                    blockCommentDepth -= 1
-                    result.append(contentsOf: "  ")
-                    index += 2
-                } else {
-                    result.append(character == "\n" ? "\n" : " ")
-                    index += 1
-                }
-                continue
-            }
-            if character == "/", index + 1 < end, characters[index + 1] == "/" {
-                inLineComment = true
-                result.append(contentsOf: "  ")
-                index += 2
-                continue
-            }
-            if character == "/", index + 1 < end, characters[index + 1] == "*" {
-                blockCommentDepth = 1
-                result.append(contentsOf: "  ")
-                index += 2
-                continue
-            }
-            if let delimiter = Self.stringDelimiter(at: index, in: characters, to: end) {
-                if blankingStringContents {
-                    let scanned = Self.scannedString(
-                        characters,
-                        openingAt: index,
-                        delimiter: delimiter
-                    )
-                    result.append(contentsOf: scanned.characters)
-                    index = scanned.afterDelimiter
-                } else {
-                    let close = Self.stringEnd(from: index, delimiter: delimiter, in: characters)
-                    result.append(contentsOf: characters[index..<close.index])
-                    index = close.index
-                }
-                continue
-            }
-            result.append(character)
-            index += 1
-        }
-        return result
-    }
-
-    /// The string-delimiter sequence beginning at `start` (`"`, `"""`, `#"`,
-    /// `##"`, …), or nil when the characters there do not open a string.
-    private static func stringDelimiter(
-        at start: Int,
-        in characters: [Character],
-        to end: Int
-    ) -> String? {
-        var cursor = start
-        while cursor < end, characters[cursor] == "#" {
-            cursor += 1
-        }
-        guard cursor < end, characters[cursor] == "\"" else { return nil }
-        let hashes = String(repeating: "#", count: cursor - start)
-        if cursor + 2 < end, characters[cursor + 1] == "\"", characters[cursor + 2] == "\"" {
-            return hashes + "\"\"\""
-        }
-        return hashes + "\""
-    }
-
-    /// A copy of the string literal that opens at `start`: the content is
-    /// blanked while interpolation bodies are scanned recursively so their
-    /// calls stay visible — `\( … )` for the quoted strings and `\#( … )`
-    /// (the delimiter's hash count) for raw strings — and the closing
-    /// delimiter is preserved. Returns the copy and the index just past the
-    /// literal.
-    private static func scannedString(
-        _ characters: [Character],
-        openingAt start: Int,
-        delimiter: String
-    ) -> (characters: [Character], afterDelimiter: Int) {
-        var result: [Character] = []
-        result.append(contentsOf: characters[start..<(start + delimiter.count)])
-        let contentStart = start + delimiter.count
-        let close = Self.stringEnd(from: start, delimiter: delimiter, in: characters)
-        var cursor = contentStart
-        // Raw-string delimiters are hash-*prefixed* (`#"`, `##"`, `#"""`),
-        // so raw-ness is `hasPrefix`, not `hasSuffix`.
-        let isRaw = delimiter.hasPrefix("#")
-        let hashCount = delimiter.filter { $0 == "#" }.count
-        while cursor < close.contentEnd {
-            let character = characters[cursor]
-            if character == "\\" {
-                var escapeIndex = cursor + 1
-                if isRaw {
-                    var hashes = 0
-                    while escapeIndex < close.contentEnd, characters[escapeIndex] == "#" {
-                        hashes += 1
-                        escapeIndex += 1
-                    }
-                    guard hashes == hashCount else {
-                        // Fewer/more hashes than the delimiter: literal text,
-                        // blanked with the rest of the content.
-                        result.append(" ")
-                        cursor += 1
-                        continue
-                    }
-                }
-                if escapeIndex < close.contentEnd, characters[escapeIndex] == "(" {
-                    let interpolation = Self.interpolationEnd(
-                        in: characters,
-                        from: escapeIndex + 1,
-                        to: close.contentEnd
-                    )
-                    result.append(contentsOf: characters[cursor...escapeIndex])
-                    result.append(contentsOf: scan(
-                        characters,
-                        from: interpolation.openDepth,
-                        to: interpolation.closeDepth,
-                        blankingStringContents: true
-                    ))
-                    result.append(")")
-                    cursor = interpolation.closeDepth + 1
-                    continue
-                }
-                if !isRaw, cursor + 1 < close.contentEnd {
-                    result.append(character)
-                    result.append(contentsOf: Self.blanked(characters, from: cursor + 1, to: min(cursor + 2, close.contentEnd)))
-                    cursor += 2
-                    continue
-                }
-            }
-            result.append(character == "\n" ? "\n" : " ")
-            cursor += 1
-        }
-        result.append(contentsOf: characters[close.contentEnd..<close.index])
-        return (result, close.index)
-    }
-
-    /// The end of an interpolation whose body starts at `start`: the body
-    /// (returned as `openDepth..<closeDepth`) ends at the matching `)` at
-    /// bracket depth zero; a `)` inside a string literal inside the body does
-    /// not close it, and a nested interpolation is skipped along with its own
-    /// string. A body that never closes runs to `end` and returns an empty
-    /// span (fail-closed: nothing is executed, the text stays blanked).
-    private static func interpolationEnd(
-        in characters: [Character],
-        from start: Int,
-        to end: Int
-    ) -> (openDepth: Int, closeDepth: Int) {
-        var cursor = start
-        var depth = 0
-        while cursor < end {
-            let character = characters[cursor]
-            if character == "(" || character == "[" || character == "{" {
-                depth += 1
-                cursor += 1
-            } else if character == ")" {
-                if depth == 0 {
-                    return (start, cursor)
-                }
-                depth -= 1
-                cursor += 1
-            } else if character == "]" || character == "}" {
-                if depth > 0 { depth -= 1 }
-                cursor += 1
-            } else if let delimiter = Self.stringDelimiter(at: cursor, in: characters, to: end) {
-                cursor = Self.stringEnd(from: cursor, delimiter: delimiter, in: characters).index
-            } else {
-                cursor += 1
-            }
-        }
-        return (end, end)
-    }
-
-    /// The end of the string literal that opens at `start`, where the opening
-    /// delimiter is `delimiter` (one quote plus its hash prefix, three quotes,
-    /// or one quote). `contentEnd` is the index just past the content (where
-    /// the closing sequence begins); `closing` is that sequence (the quote or
-    /// `"""` suffix); `index` is the first character after it. A raw string
-    /// has no escapes; a non-raw one treats a backslash as escaping the next
-    /// character — including `\(`, whose interpolation contents are scanned
-    /// with a bracket stack (and any string inside them skipped) so a `"` or
-    /// `)` inside an interpolation cannot terminate the outer literal.
-    private static func stringEnd(
-        from start: Int,
-        delimiter: String,
-        in characters: [Character]
-    ) -> (contentEnd: Int, closing: [Character], index: Int) {
-        let isRaw = delimiter.hasPrefix("#")
-        let quoteCount = delimiter.filter { $0 == "\"" }.count
-        let hashes = delimiter.filter { $0 == "#" }.count
-        var cursor = start + delimiter.count
-        var bracketStack: [Character] = []
-        while cursor < characters.count {
-            if isRaw {
-                let closingLength = quoteCount + hashes
-                if cursor + closingLength <= characters.count,
-                   Array(characters[cursor..<(cursor + closingLength)])
-                    == Array(repeating: "\"", count: quoteCount)
-                        + Array(repeating: "#", count: hashes) {
-                    return (cursor, Array(characters[cursor..<(cursor + closingLength)]), cursor + closingLength)
-                }
-                cursor += 1
-            } else if quoteCount == 3 {
-                if cursor + 3 <= characters.count,
-                   characters[cursor] == "\"",
-                   characters[cursor + 1] == "\"",
-                   characters[cursor + 2] == "\"" {
-                    return (cursor, Array("\"\"\""), cursor + 3)
-                }
-                cursor += 1
-            } else if characters[cursor] == "\\" {
-                if cursor + 1 < characters.count, characters[cursor + 1] == "(" {
-                    cursor = Self.interpolationEnd(in: characters, from: cursor + 2, to: characters.count).closeDepth + 1
-                } else {
-                    cursor += 2
-                }
-            } else if characters[cursor] == "\"" {
-                return (cursor, Array("\""), cursor + 1)
-            } else if bracketStack.isEmpty {
-                cursor += 1
-            } else {
-                let character = characters[cursor]
-                if character == "(" || character == "[" || character == "{" {
-                    bracketStack.append(character)
-                } else if character == ")" || character == "]" || character == "}" {
-                    if Self.matches(closing: character, opening: bracketStack.last) {
-                        bracketStack.removeLast()
-                    }
-                }
-                cursor += 1
-            }
-        }
-        return (characters.count, [], characters.count)
-    }
-
-    /// Whether a closing bracket matches the current top of the interpolation
-    /// bracket stack.
-    private static func matches(closing: Character, opening: Character?) -> Bool {
-        switch closing {
-        case ")": return opening == "("
-        case "]": return opening == "["
-        case "}": return opening == "{"
-        default: return false
-        }
-    }
-
-    /// `characters[from..<to]` with every non-newline character replaced by a
-    /// space (newlines are preserved so the scan keeps line structure).
-    private static func blanked(
-        _ characters: [Character],
-        from: Int,
-        to: Int
-    ) -> [Character] {
-        guard from < to else { return [] }
-        return characters[from..<to].map { $0 == "\n" ? "\n" : " " }
-    }
 
     /// The login-token pattern: a shell name — or a `$SHELL` / `${SHELL}`
     /// parameter expansion — followed by a login flag, either a short-flag

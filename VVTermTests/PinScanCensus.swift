@@ -7,7 +7,11 @@
 //
 //  Defeat list (what this check does NOT prove):
 //  - It is name-based. A residual copy that renames its helper (`func repoRoot`,
-//    `func scan`) or inlines a lexer body passes.
+//    `func stripComment`) or inlines a lexer body passes. The migrated workers
+//    (`scan`, `scanning`, `stringEnd`, `matches`, `blanked`, …) are
+//    deliberately NOT tracked: their names are generic, a declaration in
+//    another file would false-positive, and a renamed worker copy is part of
+//    this same documented defeat.
 //  - The mask is the compact scanner below, not a Swift parser. It models the
 //    string and comment forms the corpus uses — `//`, nested `/* … */`, `"…"`,
 //    `"""…"""`, raw strings (`#"…"#`, `##"…"##`, `#"""…"""#`) and
@@ -45,6 +49,16 @@
 //    semantics. The golden lexer corpus is the semantic contract.
 //  - The cohort list is a deliberate record: `PinScanCensusPinsTests` asserts
 //    its size and digest, so editing `expectedCohort` is not a silent defeat.
+//  - The call-site clause binds **per-file totals**, not per-site identity: a
+//    count-neutral paired swap (one R1 site → R2 *and* one R2 site → R1, so
+//    the 5/6 totals hold) passes both surfaces. It needs two coordinated
+//    edits; recorded as a residual rather than claiming the clause is
+//    per-site (impl lens 2 L2-1, measured).
+//  - `censusFiles` is an unpinned exemption route: a file added there leaves
+//    the declaration scan while `pinScanAllowlistIsEmpty` stays green (impl
+//    lens 2 L2-3, measured).
+//  - `expectedCallSites` keys are never checked to resolve to a scanned file,
+//    so a phantom key is silent (impl lens 2 L2-4, measured).
 
 import Foundation
 
@@ -102,12 +116,18 @@ enum PinScanCensus {
     static let sharedHelpers = [
         "repositoryRoot", "source", "strippingComments",
         "strippingYAMLComments", "normalizedWhitespace", "isInside",
+        "strippingCommentsKeepingLiterals", "strippingCommentsAndStrings",
+        "strippingCommentsAndStringsPreservingUTF16",
     ]
 
     /// Names that must not be redeclared locally but have no shared
-    /// replacement to migrate to: `workflowSource` becomes `PinScan.source(_:)`
-    /// and the two `strippingCommentsAndStrings` scanners stay per-suite.
-    static let localOnlyHelpers = ["workflowSource", "strippingCommentsAndStrings"]
+    /// replacement to migrate to: `workflowSource` maps to
+    /// `PinScan.source(_:)`. This is a **ban list**, not an exemption: a name
+    /// here is still forbidden everywhere outside `supportFile`. The #453
+    /// migration moved `strippingCommentsAndStrings` out of it and into
+    /// `sharedHelpers`, so the two lists must stay disjoint (asserted by
+    /// `pinScanHelperListsAreRecorded`).
+    static let localOnlyHelpers = ["workflowSource"]
 
     /// Every name the scan forbids outside `supportFile`.
     static var migratedHelpers: [String] { sharedHelpers + localOnlyHelpers }
@@ -120,6 +140,34 @@ enum PinScanCensus {
     /// list. A change-detector: any edit to `expectedCohort` must update this
     /// value deliberately, so dropping a cohort file cannot pass silently.
     static let expectedCohortDigest = "bdc45b4f51478bbe"
+
+    /// The recorded `sharedHelpers` / `localOnlyHelpers` literals (issue
+    /// #453). The two lists have different semantics — only `sharedHelpers`
+    /// get the `func <name>(` existence check — so a boundary-preserving move
+    /// between them is invisible to the cohort digest and must be caught here.
+    static let expectedSharedHelpers = [
+        "repositoryRoot", "source", "strippingComments",
+        "strippingYAMLComments", "normalizedWhitespace", "isInside",
+        "strippingCommentsKeepingLiterals", "strippingCommentsAndStrings",
+        "strippingCommentsAndStringsPreservingUTF16",
+    ]
+    static let expectedLocalOnlyHelpers = ["workflowSource"]
+
+    /// The recorded call-site counts for the files the #453 migration rewrote.
+    /// Counts, not presence: a partial swap that moves some of a scanner's
+    /// calls to its same-signature sibling still reds. The needle is
+    /// `"PinScan." + name + "("` over the string-blanked `codeMask`, and the
+    /// open paren is part of it so the shorter and longer names cannot
+    /// cross-match. A `func` declaration (not a call) is not counted.
+    static let expectedCallSites: [String: [String: Int]] = [
+        "VVTermTests/SSH/SSHProbeShellPinsTests.swift": [
+            "strippingCommentsKeepingLiterals": 5,
+            "strippingCommentsAndStrings": 6,
+        ],
+        "VVTermTests/WorkflowShardSplitPinsTests.swift": [
+            "strippingCommentsAndStringsPreservingUTF16": 1,
+        ],
+    ]
 
     /// The fingerprint of the current `expectedCohort` (FNV-1a 64 over the
     /// sorted, newline-joined paths, as 16-digit lowercase hex). The `"\n"`
@@ -142,17 +190,12 @@ enum PinScanCensus {
         let reason: String
     }
 
-    /// Non-empty by design: the hash/interpolation-aware scanners stay local.
-    static let allowlist: [String: AllowlistEntry] = [
-        "VVTermTests/SSH/SSHProbeShellPinsTests.swift": AllowlistEntry(
-            helpers: ["strippingComments", "strippingCommentsAndStrings"],
-            reason: "its hash/interpolation-aware `strippingComments` is provably not equivalent to the canonical `PinScan.strippingComments` (the raw-string cases in the differential and the golden corpus), and its `strippingCommentsAndStrings` call-form scanner is a genuinely different per-suite lexer"
-        ),
-        "VVTermTests/WorkflowShardSplitPinsTests.swift": AllowlistEntry(
-            helpers: ["strippingCommentsAndStrings"],
-            reason: "its `strippingCommentsAndStrings` call-form scanner is a genuinely different per-suite lexer that the canonical `PinScan.strippingComments` does not replace"
-        ),
-    ]
+    /// Empty by design, pinned by `pinScanAllowlistIsEmpty`. A genuinely
+    /// different local scanner has two honest routes: become a shared
+    /// declaration (`supportFile` body + `sharedHelpers` + a golden row) or be
+    /// renamed (the documented name-based defeat). The third, deliberate route
+    /// is an `AllowlistEntry` row here plus the pin update in the same commit.
+    static let allowlist: [String: AllowlistEntry] = [:]
 
     static func violations(repositoryRoot: URL) throws -> [String] {
         var failures: [String] = []
@@ -213,6 +256,21 @@ enum PinScanCensus {
                     )
                 }
             }
+            // The #453 call-site counts: a variant swap between the two
+            // same-signature scanners (or a partial rewrite) reds here, because
+            // the clause is per file and per name and count-shaped, not a
+            // presence check. The count reads the string-blanked mask, so a
+            // call spelled inside a literal is invisible.
+            if let expected = expectedCallSites[relative] {
+                for (name, expectedCount) in expected.sorted(by: { $0.key < $1.key }) {
+                    let found = occurrences(of: "PinScan." + name + "(", in: codeMask.text)
+                    if found != expectedCount {
+                        failures.append(
+                            "call-site count: \(relative): expected \(expectedCount) call(s) to `PinScan.\(name)(`, found \(found). If the scanner choice changed deliberately, update `expectedCallSites` in the same commit."
+                        )
+                    }
+                }
+            }
             for (lineNumber, line) in lines(of: codeMask.text) {
                 if line.range(of: "struct\\s+PinFailure\\b", options: .regularExpression) != nil {
                     failures.append(
@@ -252,18 +310,19 @@ enum PinScanCensus {
         return failures
     }
 
-    /// The migration remedy for a redeclared helper, plus (for a genuinely
-    /// local scanner) the reason its existing allowlisted copy stays local.
-    /// `workflowSource` points at `PinScan.source(_:)` because there is no
-    /// `PinScan.workflowSource` to migrate to.
+    /// The migration remedy for a redeclared helper. `sharedHelpers` names
+    /// point at their shared declaration; the terminal branch (`workflowSource`)
+    /// has no shared replacement. A genuinely different local scanner's honest
+    /// routes are a new shared declaration (`supportFile` body +
+    /// `sharedHelpers` + a golden row) or a rename (the documented name-based
+    /// defeat); the deliberate third route is an allowlist row plus the
+    /// `pinScanAllowlistIsEmpty` update in the same commit.
     private static func remedy(for helper: String) -> String {
         let migration: String
         if sharedHelpers.contains(helper) {
             migration = "Migrate it to `PinScan.\(helper)`"
-        } else if helper == "workflowSource" {
-            migration = "Migrate it to `PinScan.source(_:)` (there is no `PinScan.workflowSource`)"
         } else {
-            migration = "Keep it only if it is a genuinely different scanner"
+            migration = "Migrate it to `PinScan.source(_:)` (there is no `PinScan.workflowSource`)"
         }
         let existing = allowlist
             .filter { $0.value.helpers.contains(helper) }
@@ -271,7 +330,7 @@ enum PinScanCensus {
             .sorted()
             .first
         let note = existing.map { " The existing copy in \($0)." } ?? ""
-        return "\(migration).\(note) Otherwise allowlist this file with a reason."
+        return "\(migration).\(note) Otherwise record an `AllowlistEntry` here with a reason and update `pinScanAllowlistIsEmpty` in the same commit."
     }
 
     /// The 1-based line numbers in `code` where `pattern` matches. The caller
@@ -293,6 +352,21 @@ enum PinScanCensus {
             searchStart = match.upperBound
         }
         return lineNumbers
+    }
+
+    /// The non-overlapping occurrences of `needle` in `text` (a literal
+    /// search, not a regex). Used by the #453 call-site count clause; the
+    /// needle carries its open paren, so the shorter and longer scanner names
+    /// cannot cross-match.
+    private static func occurrences(of needle: String, in text: String) -> Int {
+        var count = 0
+        var searchStart = text.startIndex
+        while searchStart < text.endIndex,
+              let match = text.range(of: needle, range: searchStart..<text.endIndex) {
+            count += 1
+            searchStart = match.upperBound
+        }
+        return count
     }
 
     /// The `(1-based line, text)` pairs of `text`, for the per-line scans.

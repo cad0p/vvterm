@@ -6,9 +6,14 @@
 //  `PinScan.`, and the counterfactual hook is centralized. See
 //  `PinScanCensus.swift` for the scan and its honest defeat list.
 //
-//  A failure message names the file:line and the exact remedy. Allowlisted
-//  exceptions are non-empty by design (`SSHProbeShellPinsTests.strippingComments`
-//  is the hash/interpolation-aware scanner that must stay local).
+//  A failure message names the file:line and the exact remedy. The #453
+//  migration emptied the allowlist; `pinScanAllowlistIsEmpty` is the runnable
+//  proof, so re-adding an exemption is a deliberate change that must update
+//  the pin in the same commit. The recorded `expectedSharedHelpers` /
+//  `expectedLocalOnlyHelpers` arrays catch a boundary-preserving move between
+//  the two helper lists (only `sharedHelpers` get the existence check), and
+//  the count-shaped `expectedCallSites` clause catches a partial call-site
+//  swap between the same-signature scanners (issues #450/#453).
 //
 //  The `maskCode*` tests below pin `PinScanCensus.maskedCode`'s string- and
 //  comment-aware semantics and its fail-closed unterminated-construct report
@@ -30,7 +35,48 @@ struct PinScanCensusPinsTests {
         let violations = try PinScanCensus.violations(repositoryRoot: root)
         #expect(
             violations.isEmpty,
-            "the #450 pin-scan census found local copies or a stray hook use:\n\(violations.joined(separator: "\n"))"
+            "the pin-scan census found local copies, a stray hook use, or a call-site count mismatch:\n\(violations.joined(separator: "\n"))"
+        )
+    }
+
+    /// The #453 acceptance: the residual allowlist ended up empty. This is the
+    /// runnable proof, so re-adding an exemption is a deliberate, visible
+    /// change — it must update this pin in the same commit. A genuinely
+    /// different local scanner must become a shared declaration or be renamed;
+    /// the third, deliberate route is an `AllowlistEntry` row here.
+    @Test
+    func pinScanAllowlistIsEmpty() {
+        #expect(
+            PinScanCensus.allowlist.isEmpty,
+            "the #453 census allowlist must stay empty; found \(PinScanCensus.allowlist.count) entr(y|ies): \(PinScanCensus.allowlist.keys.sorted()). A genuinely different local scanner must become a shared declaration or be renamed; the deliberate third route is an `AllowlistEntry` row plus this pin's update in the same commit."
+        )
+    }
+
+    /// The two helper lists have different semantics — only `sharedHelpers`
+    /// get the `func <name>(` existence check — so a boundary-preserving move
+    /// between them is invisible to the cohort digest; the recorded literals
+    /// catch it. The lists must also stay disjoint, or the same name is both
+    /// an existence check and a ban (and a redeclaration emits duplicate
+    /// diagnostics). The `expectedCallSites` record must stay non-empty, or the
+    /// count clause would be silently disabled.
+    @Test
+    func pinScanHelperListsAreRecorded() {
+        #expect(
+            PinScanCensus.sharedHelpers == PinScanCensus.expectedSharedHelpers,
+            "the #453 shared-helper list changed (\(PinScanCensus.sharedHelpers) != \(PinScanCensus.expectedSharedHelpers)); update expectedSharedHelpers deliberately"
+        )
+        #expect(
+            PinScanCensus.localOnlyHelpers == PinScanCensus.expectedLocalOnlyHelpers,
+            "the #453 local-only helper list changed (\(PinScanCensus.localOnlyHelpers) != \(PinScanCensus.expectedLocalOnlyHelpers)); update expectedLocalOnlyHelpers deliberately"
+        )
+        let overlap = Set(PinScanCensus.sharedHelpers).intersection(PinScanCensus.localOnlyHelpers)
+        #expect(
+            overlap.isEmpty,
+            "sharedHelpers and localOnlyHelpers must be disjoint; overlapping names: \(overlap.sorted())"
+        )
+        #expect(
+            !PinScanCensus.expectedCallSites.isEmpty,
+            "expectedCallSites must stay non-empty; an emptied record silently disables the #453 count clause"
         )
     }
 
