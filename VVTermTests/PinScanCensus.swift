@@ -117,7 +117,7 @@ enum PinScanCensus {
         "repositoryRoot", "source", "strippingComments",
         "strippingYAMLComments", "normalizedWhitespace", "isInside",
         "strippingCommentsKeepingLiterals", "strippingCommentsAndStrings",
-        "strippingCommentsAndStringsPreservingUTF16",
+        "strippingCommentsAndStringsPreservingUTF16", "isSwiftLineTerminator",
     ]
 
     /// Names that must not be redeclared locally but have no shared
@@ -149,7 +149,7 @@ enum PinScanCensus {
         "repositoryRoot", "source", "strippingComments",
         "strippingYAMLComments", "normalizedWhitespace", "isInside",
         "strippingCommentsKeepingLiterals", "strippingCommentsAndStrings",
-        "strippingCommentsAndStringsPreservingUTF16",
+        "strippingCommentsAndStringsPreservingUTF16", "isSwiftLineTerminator",
     ]
     static let expectedLocalOnlyHelpers = ["workflowSource"]
 
@@ -346,7 +346,7 @@ enum PinScanCensus {
         while searchStart < code.endIndex,
               let match = code.range(of: pattern, options: .regularExpression, range: searchStart..<code.endIndex) {
             let lineNumber = code[..<match.lowerBound].reduce(into: 1) { count, character in
-                if isSwiftLineTerminator(character) { count += 1 }
+                if PinScan.isSwiftLineTerminator(character) { count += 1 }
             }
             lineNumbers.append(lineNumber)
             searchStart = match.upperBound
@@ -374,7 +374,7 @@ enum PinScanCensus {
     /// separates lines, and empty lines are kept, so a CRLF file yields the
     /// same numbering its bytes imply (fold rounds 4-5, F1/N1).
     private static func lines(of text: String) -> [(Int, String)] {
-        text.split(omittingEmptySubsequences: false, whereSeparator: { isSwiftLineTerminator($0) })
+        text.split(omittingEmptySubsequences: false, whereSeparator: { PinScan.isSwiftLineTerminator($0) })
             .enumerated()
             .map { ($0.offset + 1, String($0.element)) }
     }
@@ -393,19 +393,10 @@ enum PinScanCensus {
         var index = 0
         for character in content {
             if index >= offset { break }
-            if isSwiftLineTerminator(character) { line += 1 }
+            if PinScan.isSwiftLineTerminator(character) { line += 1 }
             index += 1
         }
         return line
-    }
-
-    /// Swift source line terminators: LF, CRLF (one Character), CR.
-    /// Deliberately NOT `Character.isNewline`: Swift keeps a `//` comment open
-    /// through U+000B/U+000C/U+0085/U+2028/U+2029, and treating those as
-    /// terminators let a comment end early and a following quote swallow real
-    /// code with no `unresolved` signal (fold round 5, M1).
-    private static func isSwiftLineTerminator(_ character: Character) -> Bool {
-        character == "\n" || character == "\r\n" || character == "\r"
     }
 
     /// The string-and-comment-aware mask over `content`, with fail-closed
@@ -467,7 +458,7 @@ enum PinScanCensus {
         while index < end {
             let character = characters[index]
             if inLineComment {
-                if isSwiftLineTerminator(character) {
+                if PinScan.isSwiftLineTerminator(character) {
                     // Preserve the terminator grapheme verbatim: a CRLF is one
                     // Character and must keep both of its bytes. The exotic
                     // `Character.isNewline` characters are comment content
@@ -496,7 +487,7 @@ enum PinScanCensus {
                     if blockDepth == 0 { blockOpen = -1 }
                     continue
                 }
-                out.append(isSwiftLineTerminator(character) ? character : " ")
+                out.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
                 index += 1
                 continue
             }
@@ -689,7 +680,7 @@ enum PinScanCensus {
             let character = characters[index]
             if character == "/", index + 1 < end, characters[index + 1] == "/" {
                 index += 2
-                while index < end, !isSwiftLineTerminator(characters[index]) { index += 1 }
+                while index < end, !PinScan.isSwiftLineTerminator(characters[index]) { index += 1 }
                 continue
             }
             if character == "/", index + 1 < end, characters[index + 1] == "*" {
@@ -794,7 +785,7 @@ enum PinScanCensus {
         for offset in 0..<count {
             let character = characters[start + offset]
             if blanking {
-                out.append(isSwiftLineTerminator(character) ? character : " ")
+                out.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
             } else {
                 out.append(character)
             }

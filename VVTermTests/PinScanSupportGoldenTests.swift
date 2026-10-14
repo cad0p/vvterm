@@ -30,8 +30,7 @@ struct PinScanSupportGoldenTests {
             // Nested block comments are tracked by depth.
             ("/* a /* nested */ b */ let x = 1", "                       let x = 1"),
             // A `//` inside a string literal is not a comment.
-            ("let s = \"a // b\"", "let s = \"a // b\""),
-            // A `/*` inside a string literal is not a comment.
+            ("let s = \"a // b\"", "let s = \"a // b\""),            // A `/*` inside a string literal is not a comment.
             ("let s = \"/*\"", "let s = \"/*\""),
             // An escaped quote does not close the string.
             ("let s = \"a\\\"b\" // c", "let s = \"a\\\"b\"     "),
@@ -58,6 +57,10 @@ struct PinScanSupportGoldenTests {
             ("let s = #\"\"\"a // b\"\"\"#", "let s = #\"\"\"a // b\"\"\"#"),
             // A trailing comment after a triple-quoted raw string still blanks.
             ("let s = #\"\"\"a \"b\" // c\"\"\"# // tail", "let s = #\"\"\"a \"b\" // c\"\"\"#        "),
+            // Swift line terminators: a `//` comment ends on CRLF (one
+            // Character) or CR, and the terminator is preserved verbatim.
+            ("let a = 1 // tail\r\nlet b = 2", "let a = 1        \r\nlet b = 2"),
+            ("let a = 1 // tail\rlet b = 2", "let a = 1        \rlet b = 2"),
         ]
         for c in cases {
             #expect(
@@ -118,11 +121,10 @@ struct PinScanSupportGoldenTests {
 
     /// R1 (`PinScan.strippingCommentsKeepingLiterals`, the login-token scan's
     /// view): comments blank, string-literal contents — raw strings and
-    /// interpolations included — verbatim. The `under-strip-interp-comment`
-    /// row pins the measured fail-open desync (the tail is copied verbatim, so
-    /// the trailing `//` stays as code), and the two CRLF/lone-CR rows pin the
-    /// swallowed terminator; both are documented defeats tracked by issue #455
-    /// and were preserved verbatim by the #453 migration.
+    /// interpolations included — verbatim. The #453 defeat rows are fixed
+    /// output assertions (issue #455): a comment in an interpolation body no
+    /// longer inflates the bracket depth, and Swift line terminators (LF,
+    /// CRLF, CR) end a `//` comment with the terminator kept verbatim.
     @Test
     func strippingCommentsKeepingLiteralsGoldenCorpus() {
         let cases: [(name: String, input: String, expected: String)] = [
@@ -132,14 +134,19 @@ struct PinScanSupportGoldenTests {
             ("raw-string-hash2", "##\"a#\"#b\"## // tail", "##\"a#\"#b\"##        "),
             ("interpolation-verbatim", "let s = \"\\(x) // c\"", "let s = \"\\(x) // c\""),
             ("raw-interpolation-verbatim", "let s = #\"\\#(x) // c\"#", "let s = #\"\\#(x) // c\"#"),
-            // Defeat (#455): the comment-blind interpolation close desynchronizes;
-            // the tail (including `// tail`) is copied verbatim.
-            ("under-strip-interp-comment", "let s = \"\\(a /* ( */ + b)\" // tail\nlet y = 1", "let s = \"\\(a /* ( */ + b)\" // tail\nlet y = 1"),
+            // The #453 under-strip: a `(` in an interpolation block comment no
+            // longer inflates the depth; the real close is found and the tail
+            // blanks.
+            ("under-strip-interp-comment", "let s = \"\\(a /* ( */ + b)\" // tail\nlet y = 1", "let s = \"\\(a /* ( */ + b)\"        \nlet y = 1"),
+            // A `(` in an interpolation line comment is comment content too.
+            ("interp-line-comment-open-paren", "let s = \"\\(a // (\n + b)\" // tail\nlet y = 1", "let s = \"\\(a // (\n + b)\"        \nlet y = 1"),
+            // A `)` in an interpolation line comment does not close it early.
+            ("interp-line-comment-close-paren", "let s = \"\\(a // )\n + b)\" // tail\nlet y = 1", "let s = \"\\(a // )\n + b)\"        \nlet y = 1"),
             ("unterminated-string", "let s = \"open", "let s = \"open"),
-            // Defeat (#455): a CRLF (or lone CR) is one Character (!= "\n"), so
-            // the `//` arm blanks the terminator and the next line too.
-            ("crlf-in-comment", "let a = 1 // tail\r\nlet b = 2", "let a = 1                  "),
-            ("lone-cr-in-comment", "let a = 1 // tail\rlet b = 2", "let a = 1                  "),
+            // A CRLF (or lone CR) ends the comment and is kept verbatim; the
+            // next line stays visible.
+            ("crlf-in-comment", "let a = 1 // tail\r\nlet b = 2", "let a = 1        \r\nlet b = 2"),
+            ("lone-cr-in-comment", "let a = 1 // tail\rlet b = 2", "let a = 1        \rlet b = 2"),
             ("multiline-literal", "let s = \"\"\"\nfunc\n\"\"\" // tail\nlet x = 1", "let s = \"\"\"\nfunc\n\"\"\"        \nlet x = 1"),
             ("hash-not-quote", "let x = 1 # 2 // c", "let x = 1 # 2     "),
         ]
@@ -154,9 +161,8 @@ struct PinScanSupportGoldenTests {
 
     /// R2 (`PinScan.strippingCommentsAndStrings`, the SSH call-form scans):
     /// comments blank, string interiors blanked, interpolation bodies are code.
-    /// The `shrink-interp-comment` row pins the measured shrink (the same
-    /// desync drops the tail and its newlines), the `crlf-in-comment` row the
-    /// swallowed terminator; both are documented defeats tracked by issue #455.
+    /// The #453 shrink and CRLF-swallow rows are fixed output assertions
+    /// (issue #455), joined by the CRLF-inside-a-block-comment/string rows.
     @Test
     func strippingCommentsAndStringsGoldenCorpus() {
         let cases: [(name: String, input: String, expected: String)] = [
@@ -164,13 +170,21 @@ struct PinScanSupportGoldenTests {
             ("string-decoy", "let s = \"a // b\"\nlet x = 1", "let s = \"      \"\nlet x = 1"),
             ("interpolation-as-code", "let s = \"\\(x) // c\"", "let s = \"\\(x)     \""),
             ("comment-in-interpolation", "let s = \"\\(a /* x */ + b)\"", "let s = \"\\(a         + b)\""),
-            // Defeat (#455): the desync drops the tail with its newline — the
-            // 48-Character input yields a 12-Character output.
-            ("shrink-interp-comment", "let s = \"\\(a /* ( */ + b)\"\nfunc repositoryRoot()", "let s = \"\\()"),
+            // The #453 shrink: the interpolation close resolves and the tail
+            // survives — 48 -> 48, not the fabricated `let s = "\()`.
+            ("shrink-interp-comment", "let s = \"\\(a /* ( */ + b)\"\nfunc repositoryRoot()", "let s = \"\\(a         + b)\"\nfunc repositoryRoot()"),
+            // A `(`/`)` in an interpolation line comment is comment content;
+            // the comment blanks and the body code stays.
+            ("interp-line-comment-open-paren", "let s = \"\\(a // (\n + b)\" // tail\nlet y = 1", "let s = \"\\(a     \n + b)\"        \nlet y = 1"),
+            ("interp-line-comment-close-paren", "let s = \"\\(a // )\n + b)\" // tail\nlet y = 1", "let s = \"\\(a     \n + b)\"        \nlet y = 1"),
             ("raw-interpolation-as-code", "let s = #\"\\#(x) // c\"#", "let s = #\"\\#(x)     \"#"),
             ("unterminated-string", "let s = \"open", "let s = \"    "),
-            // Defeat (#455): CRLF swallowed like R1.
-            ("crlf-in-comment", "let a = 1 // tail\r\nlet b = 2", "let a = 1                  "),
+            // A CRLF ends the comment and is kept verbatim; the next line stays.
+            ("crlf-in-comment", "let a = 1 // tail\r\nlet b = 2", "let a = 1        \r\nlet b = 2"),
+            // A CRLF inside a block comment (or a blanked string) keeps its two
+            // UTF-16 units instead of collapsing to one space.
+            ("crlf-in-block-comment", "let a = 1 /* x\r\ny */ let b = 2\r\n", "let a = 1     \r\n     let b = 2\r\n"),
+            ("crlf-in-string", "let s = \"a\r\nb\" // c\nlet x = 1", "let s = \" \r\n \"     \nlet x = 1"),
             ("non-ascii", "let s = \"é😀\" // c\nlet x = 1", "let s = \"  \"     \nlet x = 1"),
         ]
         for c in cases {

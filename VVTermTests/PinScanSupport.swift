@@ -41,8 +41,9 @@
 //    — the small shared helpers used by the census and whitespace pins.
 //
 //  All four scanners are fail-open lexers (the census's `maskedCode` is the
-//  fail-closed one); the measured defects above are pinned by
-//  `PinScanSupportGoldenTests` and tracked in issue #455. Migrating a scanner
+//  fail-closed one); their line-comment terminator handling, interpolation
+//  close and R3 literal end are shared with the census's predicate
+//  (`PinScan.isSwiftLineTerminator`) — see issue #455. Migrating a scanner
 //  is a behavior change: the census's `sharedHelpers` list and the golden rows
 //  must move with it.
 
@@ -117,9 +118,9 @@ enum PinScan {
         while index < characters.count {
             let character = characters[index]
             if inLineComment {
-                if character == "\n" {
+                if PinScan.isSwiftLineTerminator(character) {
                     inLineComment = false
-                    result.append("\n")
+                    result.append(character)
                 } else {
                     result.append(" ")
                 }
@@ -250,14 +251,14 @@ enum PinScan {
                 continue
             }
             if character == "#", atLineStart || previousWasWhitespace {
-                while index < characters.count, characters[index] != "\n" {
+                while index < characters.count, !PinScan.isSwiftLineTerminator(characters[index]) {
                     result.append(" ")
                     index += 1
                 }
                 continue
             }
-            if character == "\n" {
-                result.append("\n")
+            if PinScan.isSwiftLineTerminator(character) {
+                result.append(character)
                 index += 1
                 atLineStart = true
                 previousWasWhitespace = true
@@ -361,9 +362,9 @@ enum PinScan {
         while index < end {
             let character = characters[index]
             if inLineComment {
-                if character == "\n" {
+                if PinScan.isSwiftLineTerminator(character) {
                     inLineComment = false
-                    result.append("\n")
+                    result.append(character)
                 } else {
                     result.append(" ")
                 }
@@ -380,7 +381,7 @@ enum PinScan {
                     result.append(contentsOf: "  ")
                     index += 2
                 } else {
-                    result.append(character == "\n" ? "\n" : " ")
+                    result.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
                     index += 1
                 }
                 continue
@@ -417,6 +418,17 @@ enum PinScan {
             index += 1
         }
         return result
+    }
+
+    /// Whether `character` is one of Swift's own line terminators: LF, CRLF
+    /// (one `Character`) or CR. Deliberately NOT `Character.isNewline`:
+    /// Swift keeps a `//` comment open through U+000B/U+000C/U+0085/U+2028/
+    /// U+2029, and treating those as terminators would let a comment end
+    /// early and a following quote swallow real code. This is the scanners'
+    /// single home for the predicate; `PinScanCensus` delegates here so the
+    /// scanners and the census cannot drift apart (issue #455).
+    static func isSwiftLineTerminator(_ character: Character) -> Bool {
+        character == "\n" || character == "\r\n" || character == "\r"
     }
 
     /// The string-delimiter sequence beginning at `start` (`"`, `"""`, `#"`,
@@ -500,7 +512,7 @@ enum PinScan {
                     continue
                 }
             }
-            result.append(character == "\n" ? "\n" : " ")
+            result.append(PinScan.isSwiftLineTerminator(character) ? character : " ")
             cursor += 1
         }
         result.append(contentsOf: characters[close.contentEnd..<close.index])
@@ -510,9 +522,12 @@ enum PinScan {
     /// The end of an interpolation whose body starts at `start`: the body
     /// (returned as `openDepth..<closeDepth`) ends at the matching `)` at
     /// bracket depth zero; a `)` inside a string literal inside the body does
-    /// not close it, and a nested interpolation is skipped along with its own
-    /// string. A body that never closes runs to `end` and returns an empty
-    /// span (fail-closed: nothing is executed, the text stays blanked).
+    /// not close it, a nested interpolation is skipped along with its own
+    /// string, and a `//` or nested `/* … */` comment inside the body is
+    /// skipped so a `(` or `)` in comment text is never a bracket. A body
+    /// that never closes (including an unterminated block comment) runs to
+    /// `end` and returns an empty span (fail-open: nothing is executed, the
+    /// text stays blanked).
     static func interpolationEnd(
         in characters: [Character],
         from start: Int,
@@ -522,6 +537,30 @@ enum PinScan {
         var depth = 0
         while cursor < end {
             let character = characters[cursor]
+            if character == "/", cursor + 1 < end, characters[cursor + 1] == "/" {
+                cursor += 2
+                while cursor < end, !PinScan.isSwiftLineTerminator(characters[cursor]) {
+                    cursor += 1
+                }
+                continue
+            }
+            if character == "/", cursor + 1 < end, characters[cursor + 1] == "*" {
+                var blockDepth = 1
+                cursor += 2
+                while cursor < end, blockDepth > 0 {
+                    if characters[cursor] == "/", cursor + 1 < end, characters[cursor + 1] == "*" {
+                        blockDepth += 1
+                        cursor += 2
+                    } else if characters[cursor] == "*", cursor + 1 < end, characters[cursor + 1] == "/" {
+                        blockDepth -= 1
+                        cursor += 2
+                    } else {
+                        cursor += 1
+                    }
+                }
+                if blockDepth > 0 { return (end, end) }
+                continue
+            }
             if character == "(" || character == "[" || character == "{" {
                 depth += 1
                 cursor += 1
@@ -616,15 +655,16 @@ enum PinScan {
         }
     }
 
-    /// `characters[from..<to]` with every non-newline character replaced by a
-    /// space (LF characters are preserved so the scan keeps line structure).
+    /// `characters[from..<to]` with every character that is not a Swift line
+    /// terminator replaced by a space (LF, CRLF and CR are preserved verbatim
+    /// so the scan keeps the input's line structure).
     static func blanked(
         _ characters: [Character],
         from: Int,
         to: Int
     ) -> [Character] {
         guard from < to else { return [] }
-        return characters[from..<to].map { $0 == "\n" ? "\n" : " " }
+        return characters[from..<to].map { PinScan.isSwiftLineTerminator($0) ? $0 : " " }
     }
 
     /// Blanks `//` and nested `/* */` comments plus string interiors while
@@ -645,6 +685,7 @@ enum PinScan {
         let slash: UInt16 = 0x2F
         let star: UInt16 = 0x2A
         let newline: UInt16 = 0x0A
+        let carriageReturn: UInt16 = 0x0D
         let space: UInt16 = 0x20
         var result: [UInt16] = []
         result.reserveCapacity(units.count)
@@ -657,6 +698,11 @@ enum PinScan {
                 if unit == newline {
                     inLineComment = false
                     result.append(unit)
+                } else if unit == carriageReturn {
+                    // A lone CR ends the comment like LF does; Swift keeps a
+                    // comment open through U+2028/U+2029 but not through CR.
+                    inLineComment = false
+                    result.append(space)
                 } else {
                     result.append(space)
                 }
