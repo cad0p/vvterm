@@ -44,14 +44,12 @@ struct PinScanSupportGoldenTests {
             // scanner does not descend into `\( … )`).
             ("let s = \"\\(x) // c\"", "let s = \"\\(x) // c\""),
             ("let s = #\"\\#(x) // c\"#", "let s = #\"\\#(x) // c\"#"),
-            // Divergent raw-string cases (issue #450 fold F2): the canonical
-            // scanner desynchronizes after a raw string with an embedded
-            // quote, so the trailing `//` is kept as code. The shared
-            // hash-aware wrapper (`strippingCommentsKeepingLiterals`) blanks
-            // the comment instead, so these cases fail if the wrapper is ever
-            // substituted for the canonical lexer.
-            ("#\"a \"b\"# // tail", "#\"a \"b\"# // tail"),
-            ("##\"a#\"#b\"## // tail", "##\"a#\"#b\"## // tail"),
+            // Divergent raw-string cases, fixed by issue #455: the canonical
+            // scanner is now hash-aware (the shared worker's string handling),
+            // so the embedded quote no longer desynchronizes it and the
+            // trailing comment blanks.
+            ("#\"a \"b\"# // tail", "#\"a \"b\"#        "),
+            ("##\"a#\"#b\"## // tail", "##\"a#\"#b\"##        "),
             // Triple-quoted raw string with a `//` inside: the literal is
             // copied verbatim and a `//` inside it is not a comment.
             ("let s = #\"\"\"a // b\"\"\"#", "let s = #\"\"\"a // b\"\"\"#"),
@@ -199,25 +197,39 @@ struct PinScanSupportGoldenTests {
     /// R3 (`PinScan.strippingCommentsAndStringsPreservingUTF16`, the shard
     /// declared-test walk): comments and string interiors blank, UTF-16 units
     /// preserved (the walk's consumers index the result with `NSRange`). The
-    /// `nested-quote-leak` row pins the measured desync (the inner `"` exits
-    /// the literal early and the token `k` leaks into code) — a documented
-    /// defeat tracked by issue #455 — and the `non-bmp` row makes the UTF-16
-    /// length assertion non-vacuous (19 Characters / 20 UTF-16 units in,
-    /// 20/20 out).
+    /// #453 nested-quote leak is a fixed-output assertion (issue #455): the
+    /// interpolation body is skipped with a bracket stack that looks through
+    /// nested literals and comments, so the inner `"` cannot exit the literal
+    /// early. The `non-bmp` row makes the UTF-16 length assertion non-vacuous
+    /// (19 Characters / 20 UTF-16 units in, 20/20 out).
     @Test
     func strippingCommentsAndStringsPreservingUTF16GoldenCorpus() {
         let cases: [(name: String, input: String, expected: String)] = [
             ("line-comment-lf", "let a = 1 // tail\nlet b = 2", "let a = 1        \nlet b = 2"),
             ("interpolation-as-content", "let s = \"\\(x) // c\"\nlet y = 1", "let s =            \nlet y = 1"),
-            // Defeat (#455): the nested `"` exits the literal early, so `k`
-            // leaks into code; the UTF-16 length still matches.
-            ("nested-quote-leak", "let s = \"\\(d[\"k\"]) // c\"\nlet y = 1", "let s =       k         \nlet y = 1"),
+            // The #453 nested-quote leak, fixed: the whole literal blanks and
+            // the `k` no longer leaks into code; the UTF-16 length matches.
+            ("nested-quote-leak", "let s = \"\\(d[\"k\"]) // c\"\nlet y = 1", "let s =                 \nlet y = 1"),
             ("hash-prefix-close", "##\"a \"## b\"## // tail", "         b           "),
             ("multiline-literal", "let s = \"\"\"\nfunc\n\"\"\" // tail\nlet x = 1", "let s =    \n    \n           \nlet x = 1"),
-            // The LF unit is kept and the CR blanked (UTF-16 unit fidelity).
+            // The LF unit is kept and the CR blanked (UTF-16 unit fidelity);
+            // a lone CR now also ends the comment (issue #455).
             ("crlf-in-comment", "let a = 1 // tail\r\nlet b = 2", "let a = 1         \nlet b = 2"),
+            ("lone-cr-in-comment", "let a = 1 // tail\rlet b = 2", "let a = 1         let b = 2"),
             ("unterminated-string", "let s = \"open", "let s =      "),
             ("non-bmp", "let s = \"😀\" // tail", "let s =             "),
+            // Raw `\#(` with a `"#`-in-body: the exact hash count and the
+            // bracket-stack skip keep the literal one span.
+            ("raw-interp-hash1", "let s = #\"\\#(d[\"#\"]) // c\"#", "let s =                    "),
+            // Nested interpolation inside an interpolation string.
+            ("nested-interpolation", "let s = \"\\(d[\"\\(x)\"])\"\nlet y = 1", "let s =               \nlet y = 1"),
+            // A `"` inside an interpolation block comment is comment content.
+            ("interp-block-comment-quote", "let s = \"\\(a /* \" */ + b)\"\nlet y = 1", "let s =                   \nlet y = 1"),
+            // A `"` inside an interpolation line comment is comment content
+            // too; the comment ends at the terminator and the body resolves.
+            ("interp-line-comment-quote", "let s = \"\\(x // \" )\n + 2)\"\nlet y = 1", "let s =            \n      \nlet y = 1"),
+            ("interp-line-comment-close-paren", "let s = \"\\(a // )\n + b)\" // tail\nlet y = 1", "let s =          \n              \nlet y = 1"),
+            ("crlf-in-string", "let s = \"a\r\nb\" // c\nlet x = 1", "let s =    \n       \nlet x = 1"),
         ]
         for c in cases {
             let output = PinScan.strippingCommentsAndStringsPreservingUTF16(c.input)
