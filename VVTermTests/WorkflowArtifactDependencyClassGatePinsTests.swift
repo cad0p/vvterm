@@ -1667,7 +1667,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "cannot be proven non-empty at runtime",
             "with a value that is not provably cross-run",
             "with a payload the gate cannot extract",
-            "writes an unextractable name to `$GITHUB_ENV`",
+            // #458 fold round 1: the name refusal now composes its target
+            // through `_env_file_refusal_target(body)` (the body may spell
+            // the runner path, not `$GITHUB_ENV`), so the pinned fragment is
+            // the code shape; the `$GITHUB_ENV` spelling is pinned by the
+            // manifest's dynamic-name case via `--selftest`.
+            "writes an unextractable name to {_env_file_refusal_target(body)}",
             "without an extractable write",
             // #342 fold round 4: the R1 short-circuit, R2 `<>`, R3
             // continuation and R4 unmodelled-mechanism refusals, plus the
