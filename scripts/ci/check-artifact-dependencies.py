@@ -614,7 +614,13 @@ text is
 always walked, so every base mention is kept (the elided-only walk
 lost nine measured strings and reopened four runtime-proven flips,
 pinned by
-`reject-runid-github-env-write-mention-window-split-spelling`).
+`reject-runid-github-env-write-mention-window-split-spelling`). The
+runner's own path spelling is closed in the same gate by the
+case-insensitive `_RUNNER_ENV_FILE_SPELLING_RE` substring
+(`_runner_file_commands` directory or `set_env_` basename prefix), and the
+two target classifiers classify a target carrying it as `"env"` so the
+payload classifier decides; a target that spells neither literal marker
+stays a named residual (see Named residuals below).
 Measured at the fold: `--selftest` 551/551; `--root .` byte-identical
 green; the 26-shape #346/#347 battery keeps the 20-closed / 6-residual
 split; 45 falsifying mutants red each mechanism's own fixtures and no
@@ -629,6 +635,27 @@ lens-3 new-verb witnesses (`cp`/`mv`/`install`/`touch`/`truncate`/`sed
 containing a `$(`; `eval` arithmetic `$((`; the ANSI-C quoted form in a
 double-quoted operand; and a bare `$GITHUB` name the elided walk keeps.
 The floor is at least 46 + 16 = 62 measured benign shapes at A12. The
+runner-path widening adds its own measured benign classes over the same
+fail-closed floor, most pinned by a `reject-overrefusal-*` fixture: a
+read-only mention of the runner path (`echo "$RUNNER_TEMP/
+_runner_file_commands/set_env_x"`, `[ -f … ]`, `ls "<dir>" > /tmp/files.txt`)
+refuses through the "references the env file without an extractable
+write" rule; a fabricated-literal write (`…/set_env_1234`, directly or
+through a variable) refuses; a harmless write behind an unresolvable
+substitution refuses; the case-insensitive `set_env_` collision class
+(`RESET_ENV_DIR`, `UNSET_ENV_HELPER`, `/tmp/set_env_notes.txt`) refuses
+and the same substring collision applies to the `_runner_file_commands`
+directory arm (`/tmp/old_runner_file_commands_backup`); a write with an
+unextractable payload to a sibling command file (`set_output`,
+`add_path`, `add_matcher`) refuses — an accepted over-refusal of the
+directory marker — while an extractable benign payload stays accepted,
+exactly `$GITHUB_ENV`-symmetric. The model is the POSIX spelling; the
+Windows form (`%RUNNER_TEMP%\\_runner_file_commands\\set_env_<guid>`) is
+caught only through the same `_runner_file_commands`/`set_env_`
+substrings, with no Windows-specific arm. Corpus occurrences of either
+spelling: 0 in the scanned real tree (`.github/` and `scripts/ci/*.sh`) —
+the 15 fixture files added this round are the only corpus occurrences —
+so the real tree stays green. The
 fold does not close: `-f` script bodies, interpreters outside the inline-program table
 (`lua -e`, `tclsh`) and script files / `-m module` / stdin-fed programs
 / process-substitution script operands, the xargs spellings the carrier table does not
@@ -684,8 +711,12 @@ Named residuals (re-filed in #350): a caller (`workflow_call`) or dispatcher
 (`workflow_dispatch`) can pass its own `github.run_id` as an `inputs.*`
 value (no `workflow_call` exists in this repo, and trigger parsing is
 deliberately not modelled); a `$GITHUB_ENV` write whose name pieces never
-appear in the body text (`$RUNNER_TEMP/_runner_file_commands/set_env_*`)
-is not detected, the inherited text-detector boundary (the padded
+appear in the body text — the runner's own path spelling (`_runner_file_
+commands`, `set_env_`) is now walked, so this residual is a marker-evading
+or marker-free `$RUNNER_TEMP` enumeration (`"$RUNNER_TEMP"/*/set?env_*`,
+`set_{env_,output}*`, `"$RUNNER_TEMP"/*/*`), a fully assembled marker, or
+a `$PREFIX`-assembled spelling — is not detected, the inherited
+text-detector boundary (the padded
 64-character-window class — including any balanced `${…}`/`$(…)` pad the
 scanner or the bounded regex fixpoint removes (a comment, a quoted or
 escaped parenthesis or quote, a subshell, a process substitution, a `}`
@@ -1418,7 +1449,7 @@ MANIFEST_PATH = FIXTURES_DIR / "manifest.py"
 # The stated manifest-length constant. `--selftest` fails if the manifest
 # length differs, so deleting a fixture (or its case) without updating this
 # constant and the Swift pin is a red selftest, never a silent pass.
-EXPECTED_MANIFEST_CASES = 1013
+EXPECTED_MANIFEST_CASES = 1028
 
 # The scan floor. A typo'd `--root` (or a truncated checkout) must not look
 # like a pass; update this constant only when workflows are intentionally
@@ -1443,7 +1474,7 @@ MIN_SCANNED_DELEGATED_SCRIPTS = 6
 # passes; the field is reviewable data backed by the measured
 # counterfactual evidence, not a re-measurement (fold round 3 lens-2
 # MINOR-3, documented not overclaimed).
-EXPECTED_BASE_VERDICT_CASES = 570
+EXPECTED_BASE_VERDICT_CASES = 585
 # #350d: the fold is not refusal-monotone. The old ANSI-C swallow produced
 # a spurious base refusal for `… $'a\'' ; printf 'NAME=1\n' >>
 # "$GITHUB_ENV"`-shaped bodies; the fixed lexer accepts the modelled benign
@@ -3367,16 +3398,16 @@ def _mention_candidates(text: str) -> set[str] | None:
     return seen
 
 
-def _mentions_github_env(text: str) -> bool:
-    """The #339 mention test for one decoded `run:` scalar or block body.
-    The case-insensitive `github_env` substring closes `$GITHUB_ENV`,
+def _mentions_github_env_name(text: str) -> bool:
+    """Whether the text spells the POSIX env-file name (`$GITHUB_ENV` /
+    `github_env`) — the pre-widening #339 mention test, kept separate so a
+    refusal message can name the target truthfully: a body walked only
+    through the runner's own path spelling never spells `$GITHUB_ENV`. The
+    case-insensitive `github_env` substring closes `$GITHUB_ENV`,
     `${GITHUB_ENV}`, a Windows `%github_env%` and every spelling whose text
     carries the joined name; the case-sensitive `GITHUB`/`ENV` conjunction
     inside a 64-character window closes shell-level name assembly
-    (`n="GITHUB_""ENV"`, `bash -c ... "GITHUB_""ENV"`). A name whose pieces
-    are not both present in the text (base64/hex-encoded, read from a file,
-    or produced by a called script) is the documented boundary of a
-    text-based detector."""
+    (`n="GITHUB_""ENV"`, `bash -c ... "GITHUB_""ENV"`)."""
     if "github_env" in text.lower():
         return True
     # Monotonicity: the raw-text walk is the base behaviour and must stay.
@@ -3395,6 +3426,20 @@ def _mentions_github_env(text: str) -> bool:
                 return True
             start = candidate.find("GITHUB", start + 1)
     return False
+
+
+def _mentions_github_env(text: str) -> bool:
+    """The #339 mention test for one decoded `run:` scalar or block body —
+    the canonical gate for the env-file spelling. The POSIX name spelling
+    (`_mentions_github_env_name`) and the runner's own file-command path
+    (`_RUNNER_ENV_FILE_SPELLING_RE`: the `_runner_file_commands` directory
+    or the `set_env_` basename prefix) both count. A name whose pieces are
+    not both present in the text (base64/hex-encoded, read from a file,
+    produced by a called script, or assembled without either literal
+    marker) is the documented boundary of a text-based detector."""
+    if _mentions_github_env_name(text):
+        return True
+    return bool(_RUNNER_ENV_FILE_SPELLING_RE.search(text))
 
 
 # Plain YAML null spellings (YAML 1.2 core schema: `null`, `Null`, `NULL`,
@@ -3919,7 +3964,8 @@ def _refuse_github_env_token_mention(job: Job, step: ArtifactStep) -> None:
     job's environment before a later step's `with:` is evaluated — so the
     cross-run exclusion cannot be proven and the download is refused. The
     detector (`_mentions_github_env`) is the decoded run text's
-    case-insensitive `github_env` substring plus a case-sensitive
+    case-insensitive `github_env` substring, the runner's own
+    `_runner_file_commands`/`set_env_` path spelling, plus a case-sensitive
     `GITHUB`/`ENV` conjunction inside a 64-character window, not a name
     extraction (measured leaky: single `>`, `tee`, heredocs, indirect
     names, a YAML-escaped or shell-assembled name): a
@@ -4004,6 +4050,16 @@ _HEREDOC_RE = re.compile(
 # variable (`$GITHUB_ENV_X`) out.
 _ENV_FILE_SPELLING_RE = re.compile(
     r"\$(?:\{GITHUB_ENV\}|GITHUB_ENV\b)|%GITHUB_ENV%", re.IGNORECASE
+)
+# The runner's own file-command spellings (issue #350 round: env-file
+# directory spelling): the directory and the basename prefix. The mention
+# test (`_mentions_github_env`) uses this as its canonical substring test,
+# and the two target classifiers use it with `.search`, never `fullmatch` —
+# a target carries the spelling plus a glob/suffix — so a target that names
+# either literal marker classifies as the env file and the payload
+# classifier decides.
+_RUNNER_ENV_FILE_SPELLING_RE = re.compile(
+    r"_runner_file_commands|set_env_", re.IGNORECASE
 )
 # Characters that make an alias assignment's right-hand side a command (or a
 # redirection, or a compound statement) rather than a pure env-file
@@ -5132,8 +5188,10 @@ def _env_file_target_name_kind(
     path, so the reaching assignment — the last one STRICTLY before the
     write's expansion position (a command-prefix assignment in the write's
     own segment is expanded with the previous value, so it is not reaching)
-    — is resolved instead. Only a provably non-env literal is `"other"` (a
-    plain word, or an env-file spelling plus extra literal text —
+    — is resolved instead. A value carrying the runner's own path spelling
+    (`_runner_file_commands` / `set_env_`, case-insensitively) is the env
+    file too, not `"other"`; only a provably non-env literal is `"other"`
+    (a plain word, or an env-file name spelling plus extra literal text —
     `$GITHUB_ENV.bak` is a different file); an unassigned name is
     `"unknown"` even when it extends the spelling (`GITHUB_ENV_X`), because
     a preceding step can publish the env path under that name, and indirect,
@@ -5162,6 +5220,8 @@ def _env_file_target_name_kind(
         return "unknown"
     value = chosen.value
     if _ENV_FILE_SPELLING_RE.fullmatch(value):
+        return "env"
+    if _RUNNER_ENV_FILE_SPELLING_RE.search(value):
         return "env"
     if "$(" in value or "`" in value or "${!" in value:
         return "unknown"
@@ -5294,14 +5354,19 @@ def _env_file_target_kind(
     """Classify one redirect target: `"env"` when it provably names the env
     file, `"other"` when it provably does not, `"unknown"` when the
     extractor cannot resolve it (an assembled/indirect env-file target is
-    not provably harmless, so the caller refuses). The env-file spelling is
-    exact (`$GITHUB_ENV` / `${GITHUB_ENV}` / `%GITHUB_ENV%`, case
-    insensitively): `$GITHUB_ENV.bak` names a different file and must not
-    count (issue #342, MINOR-1/F3)."""
+    not provably harmless, so the caller refuses). The `$GITHUB_ENV` name
+    spelling is exact (`$GITHUB_ENV` / `${GITHUB_ENV}` / `%GITHUB_ENV%`,
+    case insensitively): `$GITHUB_ENV.bak` names a different file and must
+    not count (issue #342, MINOR-1/F3). A target carrying the runner's own
+    path spelling (`_runner_file_commands` / `set_env_`, case-insensitively,
+    `.search` — the target may glob or suffix it) is the env file too, so
+    the payload classifier decides."""
     text = target.strip()
     if not text or text.startswith("&"):
         return "other"
     if _ENV_FILE_SPELLING_RE.fullmatch(text):
+        return "env"
+    if _RUNNER_ENV_FILE_SPELLING_RE.search(text):
         return "env"
     if (
         text.endswith(")")
@@ -6976,13 +7041,24 @@ def _flip_target_match(step: ArtifactStep, name: str, flip_targets: set[str]) ->
     return None
 
 
+def _env_file_refusal_target(body: RunBody) -> str:
+    """Name the env file in a run-id refusal message the way the body spells
+    it: `$GITHUB_ENV` when the body carries that name, else the runner's env
+    file — a body walked only through `_RUNNER_ENV_FILE_SPELLING_RE` never
+    spells `$GITHUB_ENV`, so claiming it does would mis-triage the
+    refusal."""
+    if _mentions_github_env_name(body.body_text):
+        return "`$GITHUB_ENV`"
+    return "the runner's env file"
+
+
 def _run_id_value_refusal(
     step: ArtifactStep, head: str, body: RunBody, name: str
 ) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' resolves through `env.{head}`, and a preceding step in "
-        f"this job writes `{name}` to `$GITHUB_ENV` (line {body.line}) "
+        f"this job writes `{name}` to {_env_file_refusal_target(body)} (line {body.line}) "
         "with a value that is not provably cross-run — that write can change the value at "
         "runtime, so the cross-run exclusion cannot be proven (refusing rather than guessing)",
     )
@@ -6992,7 +7068,7 @@ def _run_id_payload_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job writes "
-        f"to `$GITHUB_ENV` (line {body.line}) with a payload the gate cannot extract "
+        f"to {_env_file_refusal_target(body)} (line {body.line}) with a payload the gate cannot extract "
         "(refusing rather than guessing)",
     )
 
@@ -7001,7 +7077,7 @@ def _run_id_name_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job "
-        f"writes an unextractable name to `$GITHUB_ENV` (line {body.line}) "
+        f"writes an unextractable name to {_env_file_refusal_target(body)} (line {body.line}) "
         "(refusing rather than guessing)",
     )
 
@@ -7010,8 +7086,8 @@ def _run_id_reference_refusal(step: ArtifactStep, body: RunBody) -> Refusal:
     return Refusal(
         step.run_id_line or step.uses_line,
         f"run-id: '{step.run_id}' cannot be proven — a preceding step in this job references "
-        f"`$GITHUB_ENV` (line {body.line}) without an extractable write (refusing rather "
-        "than guessing)",
+        f"{_env_file_refusal_target(body)} (line {body.line}) without an extractable write "
+        "(refusing rather than guessing)",
     )
 
 
@@ -8787,8 +8863,10 @@ def _refuse_github_env_run_id_write(
     static_env: dict[str, list[tuple[str, int]]],
     scoped_env: dict[str, list[tuple[str, int]]],
 ) -> None:
-    """#342: a preceding same-job `run:` step that mentions `$GITHUB_ENV`
-    and writes a name an env-resolved `run-id:` resolves through can flip the
+    """#342: a preceding same-job `run:` step that mentions the env file
+    (`_mentions_github_env`: the `$GITHUB_ENV` name or the runner's own
+    `_runner_file_commands`/`set_env_` path spelling) and writes a name
+    an env-resolved `run-id:` resolves through can flip the
     runtime value to the current run's id, so the cross-run exclusion cannot
     be proven unless every such write's value classifies cross-run. Gated on
     `_env_reference(step.run_id)`: a direct expression cannot be affected by

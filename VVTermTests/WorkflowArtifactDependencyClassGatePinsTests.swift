@@ -76,8 +76,8 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// the scanned-workflow floor, and the number of A12 fixtures that
     /// declare their measured pre-fold base verdict. A stale constant must
     /// red the pin, not only the build-time `--selftest`/scan.
-    private static let expectedManifestCases = 1013
-    private static let expectedBaseVerdictCases = 570
+    private static let expectedManifestCases = 1028
+    private static let expectedBaseVerdictCases = 585
     private static let expectedWorkflowFloor = 12
     /// Issue #399: the distinct-canonical-path floor for the delegated
     /// `scripts/ci/*.sh` scripts resolved from workflow run bodies
@@ -101,6 +101,21 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
     /// refusal controls). The manifest must reference each one, and each file
     /// must exist, so deleting a fixture (or its case) is visible here.
     private static let requiredFixtures: [String] = [
+        "accept-runid-github-env-write-runner-path-benign-mention.yml",
+        "accept-runid-github-env-write-runner-path-literal-crossrun-echo.yml",
+        "reject-runid-github-env-write-runner-path-setenv-glob.yml",
+        "reject-runid-github-env-write-runner-path-dir-glob.yml",
+        "reject-runid-github-env-write-runner-path-find-split.yml",
+        "reject-runid-github-env-write-runner-path-substitution.yml",
+        "reject-runid-github-env-write-runner-path-literal-glob.yml",
+        "reject-runid-github-env-write-runner-path-literal-exact.yml",
+        "reject-runid-github-env-write-runner-path-literal-var-dir.yml",
+        "reject-runid-github-env-write-runner-path-bash-c.yml",
+        "reject-overrefusal-runner-path-explicit-literal.yml",
+        "reject-overrefusal-runner-path-var-literal.yml",
+        "reject-overrefusal-runner-path-mention-without-write.yml",
+        "reject-overrefusal-runner-path-directory-listing.yml",
+        "reject-overrefusal-runner-path-setenv-collision.yml",
         "accept-runid-github-env-write-sed-escaped-slash-benign-w-target.yml",
         "reject-runid-github-env-write-mention-window-brace-backtick-close.yml",
         "reject-runid-github-env-write-mention-window-brace-cmdsub-close.yml",
@@ -1652,7 +1667,12 @@ struct WorkflowArtifactDependencyClassGatePinsTests {
             "cannot be proven non-empty at runtime",
             "with a value that is not provably cross-run",
             "with a payload the gate cannot extract",
-            "writes an unextractable name to `$GITHUB_ENV`",
+            // #458 fold round 1: the name refusal now composes its target
+            // through `_env_file_refusal_target(body)` (the body may spell
+            // the runner path, not `$GITHUB_ENV`), so the pinned fragment is
+            // the code shape; the `$GITHUB_ENV` spelling is pinned by the
+            // manifest's dynamic-name case via `--selftest`.
+            "writes an unextractable name to {_env_file_refusal_target(body)}",
             "without an extractable write",
             // #342 fold round 4: the R1 short-circuit, R2 `<>`, R3
             // continuation and R4 unmodelled-mechanism refusals, plus the

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Fixture: the contiguous set_env_* glob; base ACCEPT -> head REFUSE, runtime FLIP
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+      - name: flip
+        run: |
+          for f in "$RUNNER_TEMP/_runner_file_commands/set_env_"*; do printf 'SOURCE_RUN_ID=%s\n' "${{ github.run_id }}" >> "$f"; done
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

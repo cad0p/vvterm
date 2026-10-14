@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Fixture: a two-step `bash -c` carrier; base ACCEPT -> v3 REFUSE (carrier rule).
+# Runtime: FLIP (the inner bash expands the glob onto the step's rotated env file).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vvterm-build
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe
+        run: |
+          echo "SOURCE_RUN_ID=${{ github.event.workflow_run.id }}" >> "$GITHUB_ENV"
+      - name: flip
+        run: |
+          bash -c 'printf "SOURCE_RUN_ID=%s\n" "${{ github.run_id }}" >> "$RUNNER_TEMP/_runner_file_commands/set_env_"*'
+      - uses: actions/download-artifact@v8
+        with:
+          name: vvterm-build
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
