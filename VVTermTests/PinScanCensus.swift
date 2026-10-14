@@ -11,16 +11,21 @@
 //  - The mask is the compact scanner below, not a Swift parser. It models the
 //    string and comment forms the corpus uses — `//`, nested `/* … */`, `"…"`,
 //    `"""…"""`, raw strings (`#"…"#`, `##"…"##`, `#"""…"""#`) and
-//    interpolations (`\( … )`, `\#( … )`) — and fails closed on anything it
-//    cannot resolve: an unterminated block comment, string or interpolation
-//    records a `cannot analyze` violation naming the file and opening line and
-//    restores the tail verbatim. This closes CR-1 (the 120-line blind region
-//    where a `/*` in a raw string was "closed" by a `*/` in another string) and
-//    CR-2 (a `//` inside a string blanking a same-line declaration); the
-//    joined-text declaration scan (CL-3) runs over the masked text, so CR-3's
-//    cross-line literal false positive is gone too. Residual left on purpose:
-//    a bare Swift regex literal (`/…/`) is not modeled, and the check is still
-//    lexical, not semantic.
+//    interpolations (`\( … )`, `\#( … )`, including `//` and nested
+//    `/* … */` comments inside an interpolation body) — and fails closed on
+//    anything it cannot resolve: an unterminated block comment, string or
+//    interpolation records a `cannot analyze` violation naming the file and
+//    opening line and restores the tail verbatim. Newline handling is
+//    grapheme-correct (`Character.isNewline`), and newline graphemes —
+//    including CRLF — are preserved verbatim, so a `//` comment can never
+//    blank past its terminator in a CRLF file (fold round 4, F1). This closes
+//    CR-1 (the 120-line blind region where a `/*` in a raw string was
+//    "closed" by a `*/` in another string), CR-2 (a `//` inside a string
+//    blanking a same-line declaration) and the fold-round-4 F2/F4
+//    interpolation-comment desync; the joined-text declaration scan (CL-3)
+//    runs over the masked text, so CR-3's cross-line literal false positive is
+//    gone too. Residual left on purpose: a bare Swift regex literal (`/…/`)
+//    is not modeled, and the check is still lexical, not semantic.
 //  - It cannot see the pre-existing inline depth-based root resolvers that
 //    never declared a migrated name and never read the hook
 //    (`TeleportLoginClientErrorShapeTests`, `StartupDeadlineTests`,
@@ -260,14 +265,16 @@ enum PinScanCensus {
     /// passes the joined, string-and-comment-masked text (`PinScanCensus.maskedCode`),
     /// so a `func` keyword and its name split across a line break are still
     /// caught (fold round 2, CL-3) while the same tokens inside a literal are
-    /// invisible (fold round 3, CR-3).
+    /// invisible (fold round 3, CR-3). Newlines are counted grapheme-correctly,
+    /// so a CRLF line break counts once and matches the input's line numbers
+    /// (fold round 4, F1).
     private static func declarationLineNumbers(in code: String, pattern: String) -> [Int] {
         var lineNumbers: [Int] = []
         var searchStart = code.startIndex
         while searchStart < code.endIndex,
               let match = code.range(of: pattern, options: .regularExpression, range: searchStart..<code.endIndex) {
             let lineNumber = code[..<match.lowerBound].reduce(into: 1) { count, character in
-                if character == "\n" { count += 1 }
+                if character.isNewline { count += 1 }
             }
             lineNumbers.append(lineNumber)
             searchStart = match.upperBound
@@ -276,8 +283,13 @@ enum PinScanCensus {
     }
 
     /// The `(1-based line, text)` pairs of `text`, for the per-line scans.
+    /// Every newline grapheme (LF, CR, CRLF) separates lines, and empty lines
+    /// are kept, so a CRLF file yields the same numbering its bytes imply
+    /// (fold round 4, F1).
     private static func lines(of text: String) -> [(Int, String)] {
-        text.components(separatedBy: "\n").enumerated().map { ($0.offset + 1, $0.element) }
+        text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .enumerated()
+            .map { ($0.offset + 1, String($0.element)) }
     }
 
     /// The fail-closed diagnostic for an input the mask could not resolve.
@@ -291,7 +303,7 @@ enum PinScanCensus {
         var index = 0
         for character in content {
             if index >= offset { break }
-            if character == "\n" { line += 1 }
+            if character.isNewline { line += 1 }
             index += 1
         }
         return line
@@ -302,8 +314,9 @@ enum PinScanCensus {
     /// and (when true) string-literal interiors; the other mode keeps string
     /// interiors — including an interpolation body — verbatim so the
     /// `VVTERM_PINS_SOURCE_ROOT` key literal in a stray copy stays visible,
-    /// while still blanking comments string-awarely. Newlines are always
-    /// preserved, so line numbers and offsets stay aligned with the input.
+    /// while still blanking comments string-awarely. Newline graphemes are
+    /// always preserved verbatim (LF and CRLF alike), so line numbers and
+    /// offsets stay aligned with the input (fold round 4, F1).
     ///
     /// A construct the scanner cannot resolve (an unterminated block comment,
     /// string, raw string or interpolation at end-of-input) sets
@@ -355,8 +368,10 @@ enum PinScanCensus {
         while index < end {
             let character = characters[index]
             if inLineComment {
-                if character == "\n" {
-                    out.append("\n")
+                if character.isNewline {
+                    // Preserve the terminator grapheme verbatim: a CRLF is one
+                    // Character and must keep both of its bytes.
+                    out.append(character)
                     inLineComment = false
                 } else {
                     out.append(" ")
@@ -380,7 +395,7 @@ enum PinScanCensus {
                     if blockDepth == 0 { blockOpen = -1 }
                     continue
                 }
-                out.append(character == "\n" ? "\n" : " ")
+                out.append(character.isNewline ? character : " ")
                 index += 1
                 continue
             }
@@ -557,9 +572,11 @@ enum PinScanCensus {
     }
 
     /// The index of the `)` matching the interpolation whose body starts at
-    /// `start`, or nil when it never closes. Strings inside the body are
-    /// skipped so a `"` or `)` in a nested literal cannot close the outer
-    /// interpolation.
+    /// `start`, or nil when it never closes. Strings and comments inside the
+    /// body are skipped so a `"`, `(` or `)` in a nested literal or comment
+    /// cannot close the outer interpolation (fold round 4, F2/F4), and an
+    /// unterminated block comment or line comment returns nil (fail closed,
+    /// like the rest of the mask).
     private static func interpolationClose(
         _ characters: [Character],
         from start: Int,
@@ -569,6 +586,28 @@ enum PinScanCensus {
         var index = start
         while index < end {
             let character = characters[index]
+            if character == "/", index + 1 < end, characters[index + 1] == "/" {
+                index += 2
+                while index < end, !characters[index].isNewline { index += 1 }
+                continue
+            }
+            if character == "/", index + 1 < end, characters[index + 1] == "*" {
+                var blockDepth = 1
+                index += 2
+                while index < end, blockDepth > 0 {
+                    if characters[index] == "/", index + 1 < end, characters[index + 1] == "*" {
+                        blockDepth += 1
+                        index += 2
+                    } else if characters[index] == "*", index + 1 < end, characters[index + 1] == "/" {
+                        blockDepth -= 1
+                        index += 2
+                    } else {
+                        index += 1
+                    }
+                }
+                if blockDepth > 0 { return nil }
+                continue
+            }
             if character == "(" || character == "[" || character == "{" {
                 depth += 1
                 index += 1
@@ -639,7 +678,9 @@ enum PinScanCensus {
     }
 
     /// Appends `count` characters from `start`, blanking every non-newline one
-    /// when `blanking` is set and copying them verbatim otherwise.
+    /// when `blanking` is set and copying them verbatim otherwise. Newline
+    /// graphemes (including CRLF) are copied verbatim even when blanking, so
+    /// the mask keeps the input's newline structure (fold round 4, F1).
     private static func appendMasked(
         _ count: Int,
         _ blanking: Bool,
@@ -651,7 +692,7 @@ enum PinScanCensus {
         for offset in 0..<count {
             let character = characters[start + offset]
             if blanking {
-                out.append(character == "\n" ? "\n" : " ")
+                out.append(character.isNewline ? character : " ")
             } else {
                 out.append(character)
             }
